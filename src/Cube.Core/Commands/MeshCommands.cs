@@ -12,6 +12,7 @@ namespace Cube.Core.Commands;
 public abstract class MeshEditCommand : ICommand
 {
     protected readonly NodeId NodeId;
+    public NodeId NodeIdPublic => NodeId;
     private PolyMesh? _before, _after;
     private SelectionSnapshot? _selBefore, _selAfter;
 
@@ -28,6 +29,8 @@ public abstract class MeshEditCommand : ICommand
         var mesh = node.Mesh ?? throw new InvalidOperationException("node has no mesh");
         if (_after != null)
         {
+            // 위상이 바뀌는 동안 선택이 옛 ID를 가리키지 않도록 먼저 비운다(조용히), 통지 후 복원
+            doc.Selection.GetComponents(NodeId).ClearAll();
             mesh.CopyFrom(_after);
             doc.Notify(new DocChange(ChangeKind.MeshTopology, NodeId));
             if (_selAfter != null) doc.Selection.Restore(_selAfter);
@@ -40,8 +43,11 @@ public abstract class MeshEditCommand : ICommand
         MeshNormals.Recompute(mesh);
         mesh.BumpTopology();
         _after = mesh.Clone();
-        doc.Notify(new DocChange(ChangeKind.MeshTopology, NodeId));
         _selAfter = doc.Selection.Capture();
+        // 통지 중에는 선택을 비워 두었다가(옛/새 ID 혼동 방지) 뷰가 재빌드된 뒤 복원
+        doc.Selection.GetComponents(NodeId).ClearAll();
+        doc.Notify(new DocChange(ChangeKind.MeshTopology, NodeId));
+        doc.Selection.Restore(_selAfter);
     }
 
     public bool DidChange => _after != null;
@@ -50,6 +56,7 @@ public abstract class MeshEditCommand : ICommand
     {
         if (_before == null) return;
         var mesh = doc.Get(NodeId).Mesh!;
+        doc.Selection.GetComponents(NodeId).ClearAll();
         mesh.CopyFrom(_before);
         doc.Notify(new DocChange(ChangeKind.MeshTopology, NodeId));
         if (_selBefore != null) doc.Selection.Restore(_selBefore);

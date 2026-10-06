@@ -102,6 +102,12 @@ public abstract class TransformToolBase : SelectTool
                     if (node != null) return DragMath.OrthonormalAxes(node.WorldMatrix);
                     break;
                 }
+            case AxisOrientation.Normal when sel.Mode == SelectMode.Object:
+                {
+                    var node = doc.Find(sel.ActiveObject);
+                    if (node != null) return DragMath.OrthonormalAxes(node.WorldMatrix);
+                    break;
+                }
             case AxisOrientation.Normal:
                 {
                     var normal = NVec3.Zero;

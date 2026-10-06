@@ -63,10 +63,17 @@ public partial class Shell
         Actions.Register("create.plane", "Polygon Plane", () => doc.Undo.Push(CreatePrimitiveCommand.Plane(doc)), repeatable: true);
         Actions.Register("create.torus", "Polygon Torus", () => doc.Undo.Push(CreatePrimitiveCommand.Torus(doc)), repeatable: true);
 
-        // --- 메시 (이후 단계에서 구현; 지금은 비활성)
-        foreach (var (id, label) in new[] { ("mesh.extrude", "Extrude"), ("mesh.merge", "Merge Vertices"), ("mesh.combine", "Combine"), ("mesh.separate", "Separate"),
-                                             ("mesh.soften", "Soften Edge"), ("mesh.harden", "Harden Edge"), ("mesh.bevel", "Bevel"), ("mesh.bridge", "Bridge"),
-                                             ("mesh.insertLoop", "Insert Edge Loop"), ("mesh.multiCut", "Multi-Cut"), ("mesh.deleteComponents", "Delete Edge/Vertex") })
+        // --- 메시 편집
+        Actions.Register("mesh.extrude", "Extrude", ExtrudeSelection, canExecute: () => sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
+        Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        Actions.Register("mesh.merge", "Merge Vertices...", ShowMergeDialog, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any());
+        Actions.Register("mesh.mergeApply", "Merge Vertices", MergeSelectedVertices, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        Actions.Register("mesh.combine", "Combine", CombineSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count(id => doc.Find(id)?.Mesh != null) >= 2);
+        Actions.Register("mesh.separate", "Separate", SeparateSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count == 1);
+        Actions.Register("mesh.soften", "Soften Edge", () => SetEdgesHard(false), canExecute: () => HasEdgeTargets(), repeatable: true);
+        Actions.Register("mesh.harden", "Harden Edge", () => SetEdgesHard(true), canExecute: () => HasEdgeTargets(), repeatable: true);
+        Actions.Register("mesh.reverse", "Reverse", ReverseSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
+        foreach (var (id, label) in new[] { ("mesh.bevel", "Bevel"), ("mesh.bridge", "Bridge"), ("mesh.insertLoop", "Insert Edge Loop"), ("mesh.multiCut", "Multi-Cut") })
             Actions.Register(id, label, () => { }, canExecute: () => false);
 
         // --- 파일 (이후 단계)
@@ -164,11 +171,155 @@ public partial class Shell
             var cmd = new DeleteNodesCommand(Document, sel.Objects);
             if (!cmd.IsEmpty) Document.Undo.Push(cmd);
         }
-        else
+        else Actions.Invoke("mesh.deleteComponents");
+    }
+
+    // ---------------------------------------------------------------- 폴리 편집
+
+    /// <summary>현재 모드의 컴포넌트가 있는 노드마다 명령을 만들어 한 Undo 스텝으로 실행한다.</summary>
+    private void ForEachComponentNode(string groupName, SelectMode mode, Func<NodeId, ComponentSet, ICommand?> make)
+    {
+        var doc = Document;
+        var targets = doc.Selection.NodesWithComponents(mode).ToArray();
+        if (targets.Length == 0) return;
+        using (doc.Undo.BeginGroup(groupName))
         {
-            // 컴포넌트 삭제는 폴리 편집 단계에서 구현
-            Actions.Invoke("mesh.deleteComponents");
+            foreach (var id in targets)
+            {
+                var cmd = make(id, doc.Selection.GetComponents(id).Clone());
+                if (cmd != null) doc.Undo.Push(cmd);
+            }
         }
+    }
+
+    private void ExtrudeSelection()
+    {
+        var doc = Document;
+        var newSel = new Dictionary<NodeId, List<int>>();
+        ForEachComponentNode("Extrude", SelectMode.Face, (id, comps) =>
+        {
+            var cmd = new ExtrudeFacesCommand(id, comps.Faces);
+            return cmd;
+        });
+        // 그룹 안의 각 명령이 자기 노드의 새 면을 선택했으므로, 마지막 명령만 남은 선택을 합친다
+        var merged = new Dictionary<NodeId, HashSet<int>>();
+        if (doc.Undo.LastCommand is CompoundCommand cc)
+            foreach (var c in cc.Items.OfType<ExtrudeFacesCommand>()) merged[c.NodeIdPublic] = new HashSet<int>(c.NewFaces);
+        else if (doc.Undo.LastCommand is ExtrudeFacesCommand single) merged[single.NodeIdPublic] = new HashSet<int>(single.NewFaces);
+        if (merged.Count > 0)
+        {
+            bool first = true;
+            foreach (var (id, faces) in merged) { doc.Selection.SelectComponents(id, SelectMode.Face, faces, replace: first); first = false; }
+        }
+        // Maya 압출 조작기 간이판: 법선 방향 Move 툴로 전환
+        ToolContext.AxisOrientation = AxisOrientation.Normal;
+        _axisOrientation.Selected = (int)AxisOrientation.Normal;
+        Tools.SetTool("move");
+        HelpLine.Text = "Extrude: drag the manipulator to offset the new faces.";
+    }
+
+    private void DeleteComponents()
+    {
+        var mode = Document.Selection.Mode;
+        ForEachComponentNode("Delete", mode, (id, comps) => new DeleteComponentsCommand(id, mode, comps.Get(mode)));
+    }
+
+    private float _mergeThreshold = 0.001f;
+    private ConfirmationDialog? _mergeDialog;
+    private SpinBox? _mergeSpin;
+
+    private void ShowMergeDialog()
+    {
+        if (_mergeDialog == null)
+        {
+            _mergeDialog = new ConfirmationDialog { Title = "Merge Vertices", OkButtonText = "Merge" };
+            var row = new HBoxContainer();
+            row.AddChild(new Label { Text = "Threshold" });
+            _mergeSpin = new SpinBox { MinValue = 0, MaxValue = 1000, Step = 0.0001, Value = _mergeThreshold, CustomMinimumSize = new Vector2(120, 0) };
+            row.AddChild(_mergeSpin);
+            _mergeDialog.AddChild(row);
+            _mergeDialog.Confirmed += () => { _mergeThreshold = (float)_mergeSpin.Value; Actions.Invoke("mesh.mergeApply"); };
+            AddChild(_mergeDialog);
+        }
+        _mergeSpin!.Value = _mergeThreshold;
+        _mergeDialog.PopupCentered();
+    }
+
+    private void MergeSelectedVertices()
+    {
+        var sel = Document.Selection;
+        var mode = sel.Mode;
+        int total = 0;
+        ForEachComponentNode("Merge Vertices", mode, (id, comps) =>
+        {
+            var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
+            var verts = mode == SelectMode.Vertex ? comps.Verts : SelectionOps.Convert(mesh, comps, mode, SelectMode.Vertex);
+            var cmd = new MergeVerticesCommand(id, verts, _mergeThreshold);
+            return cmd;
+        });
+        if (Document.Undo.LastCommand is CompoundCommand cc) total = cc.Items.OfType<MergeVerticesCommand>().Sum(c => c.MergedCount);
+        else if (Document.Undo.LastCommand is MergeVerticesCommand m) total = m.MergedCount;
+        HelpLine.Text = total > 0 ? $"Merged {total} vertex pair(s)." : "No vertices within threshold.";
+    }
+
+    private void CombineSelection()
+    {
+        var ids = Document.Selection.Objects.Where(id => Document.Find(id)?.Mesh != null).ToArray();
+        if (ids.Length < 2) return;
+        Document.Undo.Push(new CombineCommand(ids));
+    }
+
+    private void SeparateSelection()
+    {
+        var id = Document.Selection.ActiveObject;
+        var cmd = new SeparateCommand(id);
+        if (!cmd.Prepare(Document)) { HelpLine.Text = "Separate: the mesh has only one piece."; return; }
+        Document.Undo.Push(cmd);
+    }
+
+    private bool HasEdgeTargets()
+    {
+        var sel = Document.Selection;
+        return sel.Mode == SelectMode.Object ? sel.Objects.Any(id => Document.Find(id)?.Mesh != null) : sel.NodesWithComponents(sel.Mode).Any();
+    }
+
+    private void SetEdgesHard(bool hard)
+    {
+        var doc = Document; var sel = doc.Selection;
+        string name = hard ? "Harden Edge" : "Soften Edge";
+        if (sel.Mode == SelectMode.Object)
+        {
+            using (doc.Undo.BeginGroup(name))
+                foreach (var id in sel.Objects.ToArray())
+                {
+                    var mesh = doc.Find(id)?.Mesh; if (mesh == null) continue;
+                    doc.Undo.Push(new SetEdgesHardCommand(id, Enumerable.Range(0, mesh.EdgeCount).Where(e => mesh.Edges[e].Alive), hard));
+                }
+            return;
+        }
+        var mode = sel.Mode;
+        ForEachComponentNode(name, mode, (id, comps) =>
+        {
+            var mesh = doc.Find(id)?.Mesh; if (mesh == null) return null;
+            var edges = mode == SelectMode.Edge ? comps.Edges : SelectionOps.Convert(mesh, comps, mode, SelectMode.Edge);
+            return new SetEdgesHardCommand(id, edges, hard);
+        });
+    }
+
+    private void ReverseSelection()
+    {
+        var doc = Document; var sel = doc.Selection;
+        if (sel.Mode == SelectMode.Object)
+        {
+            using (doc.Undo.BeginGroup("Reverse"))
+                foreach (var id in sel.Objects.ToArray())
+                {
+                    var mesh = doc.Find(id)?.Mesh; if (mesh == null) continue;
+                    doc.Undo.Push(new ReverseFacesCommand(id, Enumerable.Range(0, mesh.FaceCount).Where(f => mesh.Faces[f].Alive)));
+                }
+            return;
+        }
+        ForEachComponentNode("Reverse", SelectMode.Face, (id, comps) => new ReverseFacesCommand(id, comps.Faces));
     }
 
     private void DuplicateSelection()
@@ -228,7 +379,7 @@ public partial class Shell
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
 
         Menus.Build(Add("Mesh"))
-            .Item("mesh.combine").Item("mesh.separate").Separator().Item("mesh.soften").Item("mesh.harden");
+            .Item("mesh.combine").Item("mesh.separate").Separator().Item("mesh.soften").Item("mesh.harden").Item("mesh.reverse");
 
         Menus.Build(Add("Edit Mesh"))
             .Item("mesh.extrude").Item("mesh.merge").Item("mesh.bevel").Item("mesh.bridge").Separator().Item("mesh.deleteComponents");

@@ -101,6 +101,7 @@ public sealed class SelectionState
     /// <summary>컴포넌트가 선택된 노드들(현재 모드 기준, 비어 있지 않은 것만).</summary>
     public IEnumerable<NodeId> NodesWithComponents(SelectMode mode)
     {
+        if (mode == SelectMode.Object) yield break;
         foreach (var (id, c) in _components) if (c.Get(mode).Count > 0) yield return id;
     }
 
