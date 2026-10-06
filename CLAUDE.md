@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 개요
 
-Godot 4.7 기반 3D 프로젝트 "Cube". 아직 씬(`.tscn`)과 스크립트가 없는 초기 템플릿 상태이며, `project.godot`만 설정되어 있다.
+Godot 4.7 기반 3D 프로젝트 "Cube". 메인 씬은 `scenes/Main.tscn`(Node3D 루트 + Camera3D, DirectionalLight3D, BoxMesh 큐브)이며 `run/main_scene`으로 지정되어 있다. 스크립트는 아직 없다.
 
 `project.godot`에 고정된 주요 설정:
 - 렌더러: Forward Plus, Windows 렌더링 드라이버 `d3d12`
@@ -54,7 +54,9 @@ dotnet build
 `godot` MCP 서버(`@coding-solo/godot-mcp`)가 user 스코프(`~/.claude.json`)에 등록되어 있다. 에디터 애드온 없이 `GODOT_PATH`로 지정된 4.7.2 콘솔 실행 파일을 직접 구동한다.
 
 - 주요 도구: `launch_editor`, `run_project`, `get_debug_output`, `stop_project`, `get_project_info`, `create_scene`, `add_node`, `save_scene`, `get_uid`, `update_project_uids`
-- 프로젝트 실행 후 런타임 에러를 확인할 때는 `run_project` → `get_debug_output` 순으로 쓴다.
+- 프로젝트 실행 후 런타임 에러를 확인할 때는 `run_project` → `get_debug_output` → `stop_project` 순으로 쓴다.
+- `add_node`의 `properties`(position, rotation_degrees 등)는 `.tscn`에 저장되지 않는다(4.7.2에서 확인). 변환값·메시·머티리얼 같은 속성은 `.tscn`을 직접 편집한다. `create_scene`의 루트 노드 이름도 `root`로 고정되므로 필요하면 파일에서 바꾼다.
+- 같은 `.tscn`에 대한 MCP 호출은 파일을 통째로 다시 쓰므로 병렬로 보내지 말고 순차 실행한다.
 - 서버가 보이지 않으면 `claude mcp get godot`으로 상태를 확인한다. 재등록 시 Git Bash에서는 `MSYS_NO_PATHCONV=1`을 켜야 `cmd /c`의 `/c`가 경로로 변환되지 않는다.
 
 ## 버전 및 릴리즈 워크플로
@@ -69,4 +71,4 @@ dotnet build
 - `.editorconfig`: 모든 파일 UTF-8.
 - `.gitattributes`: 텍스트 파일 줄바꿈은 LF로 정규화. Windows에서 작업하더라도 CRLF를 커밋하지 않는다.
 - `.gitignore`: `.godot/`(엔진 캐시)과 `/android/`는 추적하지 않는다. `.godot/`은 언제든 `--import`로 재생성 가능하므로 직접 수정하지 않는다.
-- git 저장소는 아직 초기화되지 않았다(`git init` 미실행).
+- 원격은 `origin` → https://github.com/80dots/Cube.git, 기본 브랜치 `main`.
