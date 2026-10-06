@@ -44,7 +44,8 @@ public sealed class NavigationHandler
 
             case InputEventMouseMotion mm when IsDragging:
                 {
-                    var d = mm.Position - _last;
+                    float sens = Math.Clamp(CubeApp.Instance.Settings.MouseSensitivityPercent, 10, 300) / 100f;
+                    var d = (mm.Position - _last) * sens;
                     _last = mm.Position;
                     float s = CubeApp.Instance.UiScale;
                     switch (_dragButton)

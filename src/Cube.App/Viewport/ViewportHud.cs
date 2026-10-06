@@ -6,13 +6,14 @@ using Godot;
 namespace Cube.App.Viewport;
 
 /// <summary>
-/// 뷰포트 우상단 HUD: 클릭 가능한 뷰 큐브, Persp/Ortho 토글, 표시 모드 버튼(Wireframe/Shaded/Textured/Lit/UV).
+/// 뷰포트 우상단 HUD: 클릭 가능한 뷰 큐브, 그 아래 가로 한 줄로 Persp/Ortho 토글 | 표시 모드(Wireframe/Shaded/Textured/Lit/UV) | 박스 선택 관통 토글.
 /// </summary>
 public partial class ViewportHud : VBoxContainer
 {
     private ViewportPanel _panel = null!;
     private ViewCube _cube = null!;
     private Button _proj = null!;
+    private Button _through = null!;
     private readonly Dictionary<ShadingMode, Button> _modeButtons = new();
 
     public void Setup(ViewportPanel panel)
@@ -24,15 +25,20 @@ public partial class ViewportHud : VBoxContainer
         Alignment = AlignmentMode.Begin;
         AddThemeConstantOverride("separation", (int)(4 * s));
 
+        var cubeRow = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End, MouseFilter = MouseFilterEnum.Pass };
         _cube = new ViewCube { CustomMinimumSize = new Vector2(84 * s, 84 * s) };
         _cube.Setup(panel);
-        AddChild(_cube);
+        cubeRow.AddChild(_cube);
+        AddChild(cubeRow);
+
+        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End, MouseFilter = MouseFilterEnum.Pass };
+        row.AddThemeConstantOverride("separation", (int)(2 * s));
 
         _proj = Icons.IconButton("persp", "Perspective / Orthographic", icon, toggle: false);
         _proj.Pressed += () => { panel.CameraController.ToggleOrtho(); Refresh(); };
-        AddChild(Center(_proj));
+        row.AddChild(_proj);
+        row.AddChild(new VSeparator());
 
-        AddChild(new HSeparator());
         foreach (var (mode, iconName, tip) in new[]
                  {
                      (ShadingMode.Wireframe, "view_wire", "Wireframe (4)"), (ShadingMode.Shaded, "view_shade", "Smooth Shade All (5)"),
@@ -44,18 +50,23 @@ public partial class ViewportHud : VBoxContainer
             var m = mode;
             b.Pressed += () => { panel.Display.SetMode(m); Refresh(); };
             _modeButtons[mode] = b;
-            AddChild(Center(b));
+            row.AddChild(b);
         }
+        row.AddChild(new VSeparator());
+
+        _through = Icons.IconButton("select_through", "Box Select Through: marquee also selects hidden components", icon, toggle: true);
+        _through.Pressed += () =>
+        {
+            CubeApp.Instance.Settings.MarqueeSelectThrough = _through.ButtonPressed;
+            CubeApp.Instance.Settings.Save();
+            foreach (var p in UI.Shell.Instance.Layout.Panels) p.Hud.Refresh();
+        };
+        row.AddChild(_through);
+        AddChild(row);
+
         panel.Display.ModeChanged += Refresh;
         panel.CameraController.Changed += Refresh;
         Refresh();
-    }
-
-    private static Control Center(Control c)
-    {
-        var box = new CenterContainer { MouseFilter = MouseFilterEnum.Pass };
-        box.AddChild(c);
-        return box;
     }
 
     public void Refresh()
@@ -65,6 +76,7 @@ public partial class ViewportHud : VBoxContainer
         bool ortho = _panel.CameraController.IsOrtho;
         _proj.Icon = Icons.Get(ortho ? "ortho" : "persp", (int)(18 * CubeApp.Instance.UiScale));
         _proj.TooltipText = ortho ? "Orthographic (click for Perspective)" : "Perspective (click for Orthographic)";
+        _through.SetPressedNoSignal(CubeApp.Instance.Settings.MarqueeSelectThrough);
         _cube.QueueRedraw();
     }
 }
@@ -105,7 +117,6 @@ public partial class ViewCube : Control
         _hit.Clear();
         var font = GetThemeDefaultFont();
         int fs = (int)(8 * s);
-        // 뒤→앞 순으로 그리기(앞면만 클릭 가능)
         var ordered = Faces.Select(f =>
         {
             var (u, v) = Perp(f.n);
@@ -115,7 +126,7 @@ public partial class ViewCube : Control
         foreach (var (f, corners, depth) in ordered)
         {
             var poly = corners.Select(P).ToArray();
-            bool front = depth < 0; // 카메라를 향함
+            bool front = depth < 0;
             float shade = front ? 0.55f + 0.35f * (-depth) : 0.25f;
             var col = new Color(shade, shade, shade, front ? 0.95f : 0.4f);
             DrawColoredPolygon(poly, col);
@@ -128,12 +139,8 @@ public partial class ViewCube : Control
                 _hit.Add((poly, f.kind));
             }
         }
-        // 축 표시
-        foreach (var (axis, color, name) in new[] { (Vector3.Right, GizmoRed, "x"), (Vector3.Up, GizmoGreen, "y"), (Vector3.Back, GizmoBlue, "z") })
-        {
-            var p = P(axis * 1.65f);
-            DrawCircle(p, 3 * s, color);
-        }
+        foreach (var (axis, color) in new[] { (Vector3.Right, GizmoRed), (Vector3.Up, GizmoGreen), (Vector3.Back, GizmoBlue) })
+            DrawCircle(P(axis * 1.65f), 3 * s, color);
     }
 
     private static readonly Color GizmoRed = MathConvert.Rgb(0xff2a2a), GizmoGreen = MathConvert.Rgb(0x5aff2a), GizmoBlue = MathConvert.Rgb(0x2a6aff);
@@ -149,7 +156,6 @@ public partial class ViewCube : Control
     {
         if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } mb)
         {
-            // 앞쪽(나중에 그린) 면부터 검사
             for (int i = _hit.Count - 1; i >= 0; i--)
                 if (Geometry2D.IsPointInPolygon(mb.Position, _hit[i].poly))
                 {

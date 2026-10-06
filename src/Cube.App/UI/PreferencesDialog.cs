@@ -8,6 +8,8 @@ public partial class PreferencesDialog : AcceptDialog
     private SpinBox _uiScale = null!;
     private CheckBox _wireOnShaded = null!;
     private CheckBox _cameraBased = null!;
+    private SpinBox _mouse = null!;
+    private CheckBox _selectThrough = null!;
 
     public override void _Ready()
     {
@@ -34,8 +36,21 @@ public partial class PreferencesDialog : AcceptDialog
         grid.AddChild(_wireOnShaded);
 
         grid.AddChild(new Label { Text = "Camera-based Selection" });
-        _cameraBased = new CheckBox { ButtonPressed = s.CameraBasedSelection };
+        _cameraBased = new CheckBox { ButtonPressed = s.CameraBasedSelection, TooltipText = "Click selection ignores occluded components" };
         grid.AddChild(_cameraBased);
+
+        grid.AddChild(new Label { Text = "Box Select Through" });
+        _selectThrough = new CheckBox { ButtonPressed = s.MarqueeSelectThrough, TooltipText = "Marquee (box) selection also selects hidden components" };
+        grid.AddChild(_selectThrough);
+
+        grid.AddChild(new Label { Text = "Mouse Sensitivity (%)" });
+        var mrow = new HBoxContainer();
+        _mouse = new SpinBox { MinValue = 10, MaxValue = 300, Step = 5, Value = s.MouseSensitivityPercent, Suffix = "%", CustomMinimumSize = new Vector2(110 * k, 0) };
+        mrow.AddChild(_mouse);
+        var mreset = new Button { Text = "Default (80%)", FocusMode = Control.FocusModeEnum.None };
+        mreset.Pressed += () => _mouse.Value = 80;
+        mrow.AddChild(mreset);
+        grid.AddChild(mrow);
 
         var box = new VBoxContainer();
         box.AddChild(grid);
@@ -55,6 +70,8 @@ public partial class PreferencesDialog : AcceptDialog
         s.UiScalePercent = percent;
         s.WireOnShaded = _wireOnShaded.ButtonPressed;
         s.CameraBasedSelection = _cameraBased.ButtonPressed;
+        s.MarqueeSelectThrough = _selectThrough.ButtonPressed;
+        s.MouseSensitivityPercent = (int)_mouse.Value;
         s.Save();
         if (scaleChanged) app.CallDeferred(nameof(CubeApp.ReloadShell));
         else
@@ -63,6 +80,7 @@ public partial class PreferencesDialog : AcceptDialog
             shell.Viewport.Display.WireOnShaded = s.WireOnShaded;
             shell.Viewport.Display.RefreshAll();
             shell.SyncStatusLine();
+            foreach (var p in shell.Layout.Panels) p.Hud.Refresh();
         }
     }
 }

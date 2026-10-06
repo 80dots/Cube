@@ -39,17 +39,19 @@ public sealed class ViewportDisplay
         RefreshAll();
     }
 
-    private static StandardMaterial3D? _uvGridMaterial;
+    private static ShaderMaterial? _uvGridMaterial;
 
-    /// <summary>UV 그리드 체커 머티리얼(assets/textures/uv_grid.png). 메시의 UV를 그대로 보여준다.</summary>
-    public static StandardMaterial3D UvGridMaterial
+    /// <summary>UV 그리드 체커 머티리얼(assets/textures/uv_grid.bin). 메시의 UV를 그대로 보여준다. 뒷면은 검정.</summary>
+    public static ShaderMaterial UvGridMaterial
     {
         get
         {
             if (_uvGridMaterial == null)
             {
                 var tex = UI.Icons.LoadPng("res://assets/textures/uv_grid.bin");
-                _uvGridMaterial = new StandardMaterial3D { AlbedoTexture = tex, Roughness = 1f, Metallic = 0f, TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic };
+                _uvGridMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://assets/shaders/surface.gdshader") };
+                _uvGridMaterial.SetShaderParameter("use_texture", tex != null);
+                if (tex != null) _uvGridMaterial.SetShaderParameter("albedo_tex", tex);
             }
             return _uvGridMaterial;
         }

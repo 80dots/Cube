@@ -22,7 +22,8 @@ public partial class MeshView : Node3D
     public static readonly Color FaceCenter = MathConvert.Rgb(0x5aa0ff);
 
     private static Shader? _wireShader, _pointsShader, _tintShader;
-    private static StandardMaterial3D? _shadedMat;
+    private static Shader? _surfaceShader;
+    private static ShaderMaterial? _shadedMat;
     private static QuadMesh? _quad;
 
     public SceneNode Node { get; }
@@ -67,13 +68,8 @@ public partial class MeshView : Node3D
         _wireShader ??= GD.Load<Shader>("res://assets/shaders/wire.gdshader");
         _pointsShader ??= GD.Load<Shader>("res://assets/shaders/points.gdshader");
         _tintShader ??= GD.Load<Shader>("res://assets/shaders/face_tint.gdshader");
-        _shadedMat ??= new StandardMaterial3D
-        {
-            AlbedoColor = new Color(0.5f, 0.5f, 0.5f),
-            Roughness = 1f,
-            Metallic = 0f,
-            CullMode = BaseMaterial3D.CullModeEnum.Back,
-        };
+        _surfaceShader ??= GD.Load<Shader>("res://assets/shaders/surface.gdshader");
+        _shadedMat ??= new ShaderMaterial { Shader = _surfaceShader };
         _quad ??= new QuadMesh { Size = new Vector2(1, 1) };
 
         _surface = new MeshInstance3D { Name = "Surface", Mesh = _surfaceMesh, MaterialOverride = _shadedMat, CastShadow = GeometryInstance3D.ShadowCastingSetting.On };

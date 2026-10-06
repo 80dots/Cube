@@ -104,8 +104,9 @@ public class SelectTool : ToolBase
     {
         var rect = RectFrom(_pressPos, px);
         Ctx.Viewport.Overlay.Marquee = null;
-        var items = Picker.Marquee(rect, Ctx.Sel.Mode, Ctx.CameraBasedSelection);
-        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] marquee {rect} mode={Ctx.Sel.Mode} cameraBased={Ctx.CameraBasedSelection} -> {items.Count} items: {string.Join(",", items.Select(i => i.Component))}");
+        // 박스 선택은 옵션(기본 on)에 따라 가려진 요소도 포함한다; 클릭 선택은 항상 보이는 것 우선
+        var items = Picker.Marquee(rect, Ctx.Sel.Mode, cameraBased: !Ctx.Settings.MarqueeSelectThrough);
+        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] marquee {rect} mode={Ctx.Sel.Mode} through={Ctx.Settings.MarqueeSelectThrough} -> {items.Count} items: {string.Join(",", items.Select(i => i.Component))}");
         if (items.Count == 0 && _modifier != SelectModifier.Replace) return;
         var mod = _modifier;
         UI.Shell.Instance.RecordSelection(s => s.Apply(items, mod));

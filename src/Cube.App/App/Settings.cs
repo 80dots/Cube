@@ -14,6 +14,10 @@ public sealed class Settings
     [JsonPropertyName("uiScalePercent")] public int UiScalePercent { get; set; } = 130;
     [JsonPropertyName("backgroundIndex")] public int BackgroundIndex { get; set; }
     [JsonPropertyName("cameraBasedSelection")] public bool CameraBasedSelection { get; set; } = true;
+    /// <summary>박스(마키) 선택 시 가려진 요소도 선택. 기본 on.</summary>
+    [JsonPropertyName("marqueeSelectThrough")] public bool MarqueeSelectThrough { get; set; } = true;
+    /// <summary>마우스 내비게이션 감도(%). 기본 80.</summary>
+    [JsonPropertyName("mouseSensitivityPercent")] public int MouseSensitivityPercent { get; set; } = 80;
     [JsonPropertyName("axisOrientation")] public string AxisOrientation { get; set; } = "World";
     [JsonPropertyName("wireOnShaded")] public bool WireOnShaded { get; set; } = true;
     [JsonPropertyName("showGrid")] public bool ShowGrid { get; set; } = true;
