@@ -40,6 +40,8 @@ public partial class ChannelBox : VBoxContainer
             {
                 var sb = new SpinBox { Step = 0.001, MinValue = -1e9, MaxValue = 1e9, AllowGreater = true, AllowLesser = true, CustomMinimumSize = new Vector2(64 * s, 0), UpdateOnTextChanged = false };
                 sb.GetLineEdit().ContextMenuEnabled = false;
+                // Enter로 확정하면 Maya처럼 포커스를 뷰포트로 돌린다
+                sb.GetLineEdit().TextSubmitted += _ => CallDeferred(nameof(ReturnFocus));
                 int idx = r * 3 + c;
                 sb.ValueChanged += v => OnValueChanged(idx, (float)v);
                 _fields[idx] = sb;
@@ -48,6 +50,8 @@ public partial class ChannelBox : VBoxContainer
         }
         AddChild(grid);
     }
+
+    private void ReturnFocus() => Shell.Instance?.Viewport.GrabFocus();
 
     private void Refresh()
     {
