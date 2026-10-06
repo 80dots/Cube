@@ -214,5 +214,8 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>핫키 "viewport" 컨텍스트: 마우스가 위에 있거나 포커스를 가진 경우.</summary>
     public bool IsViewportContext => IsMouseOver || HasFocus();
 
+    /// <summary>Maya J 홀드: 회전/스케일 증분 스냅.</summary>
+    public bool IsSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.J) ?? false;
+
     public override bool _PropagateInputEvent(InputEvent @event) => false;
 }
