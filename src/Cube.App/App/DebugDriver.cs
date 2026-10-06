@@ -124,6 +124,12 @@ public partial class DebugDriver : Node
             case "import":
                 GD.Print($"[Drive] import: {UI.Shell.Instance.Files.Import(p[1])}");
                 break;
+            case "save":
+                GD.Print($"[Drive] save: {UI.Shell.Instance.SceneFiles.Save(p[1])} title='{UI.Shell.Instance.SceneFiles.Title}'");
+                break;
+            case "open":
+                GD.Print($"[Drive] open: {UI.Shell.Instance.SceneFiles.Open(p[1])} title='{UI.Shell.Instance.SceneFiles.Title}'");
+                break;
             case "print":
                 {
                     var doc = CubeApp.Instance.Document;

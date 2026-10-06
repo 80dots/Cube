@@ -29,10 +29,7 @@ public partial class CubeApp : Node
         GD.Print($"[Cube] core={Core.CoreInfo.Name} uiScale={UiScale} nodes={Document.Nodes.Count}");
     }
 
-    public override void _Notification(int what)
-    {
-        if (what == NotificationWMCloseRequest) Settings.Save();
-    }
+    // 종료 확인과 설정 저장은 Shell이 처리한다(AutoAcceptQuit=false).
 
     // ---------------------------------------------------------------- 개발용 커맨드라인 인자
     // godot --path . -- --with-cube --screenshot=C:/tmp/shot.png --quit-after=10 --drive="..."
@@ -69,6 +66,6 @@ public partial class CubeApp : Node
             var err = img.SavePng(_screenshotPath);
             GD.Print($"[Cube] screenshot {_screenshotPath}: {err}");
         }
-        if (_frame >= _quitAfterFrames) { Settings.Save(); GetTree().Quit(0); }
+        if (_frame >= _quitAfterFrames) { Settings.Save(); GetTree().Quit(0); } // 디버그 종료는 확인 없이
     }
 }

@@ -78,9 +78,12 @@ public partial class Shell
 
         // --- 파일
         Files = new IO.FileActions(doc, Settings, this, msg => HelpLine.Text = msg);
-        Actions.Register("file.new", "New Scene", NewScene);
-        foreach (var (id, label) in new[] { ("file.open", "Open Scene..."), ("file.save", "Save Scene"), ("file.saveAs", "Save Scene As...") })
-            Actions.Register(id, label, () => { }, canExecute: () => false);
+        SceneFiles = new IO.SceneFileActions(doc, Settings, this, msg => HelpLine.Text = msg);
+        SceneFiles.FileChanged += () => { Viewport.CameraController.Home(); UpdateTitle(); };
+        Actions.Register("file.new", "New Scene", () => SceneFiles.NewWithConfirm());
+        Actions.Register("file.open", "Open Scene...", () => SceneFiles.ShowOpenDialog());
+        Actions.Register("file.save", "Save Scene", () => SceneFiles.SaveOrSaveAs());
+        Actions.Register("file.saveAs", "Save Scene As...", () => SceneFiles.ShowSaveAsDialog());
         Actions.Register("file.import", "Import...", () => Files.ShowImportDialog());
         Actions.Register("file.exportSelection", "Export Selection...", () => Files.ShowExportDialog(true), canExecute: () => sel.Objects.Count > 0);
         Actions.Register("file.exportAll", "Export All...", () => Files.ShowExportDialog(false), canExecute: () => doc.Root.Children.Count > 0);
@@ -347,10 +350,20 @@ public partial class Shell
         }
     }
 
-    private void NewScene()
+    public void UpdateTitle() => DisplayServer.WindowSetTitle(SceneFiles.Title);
+
+    private PopupMenu? _recentMenu;
+
+    private void RefreshRecentMenu()
     {
-        Document.Clear();
-        Viewport.CameraController.Home();
+        if (_recentMenu == null) return;
+        _recentMenu.Clear();
+        int i = 0;
+        foreach (var p in Settings.RecentFiles.Where(System.IO.File.Exists))
+        {
+            _recentMenu.AddItem(p, i++);
+        }
+        if (_recentMenu.ItemCount == 0) { _recentMenu.AddItem("(empty)", 0); _recentMenu.SetItemDisabled(0, true); }
     }
 
     // ---------------------------------------------------------------- 메뉴
@@ -365,8 +378,16 @@ public partial class Shell
             return pm;
         }
 
-        Menus.Build(Add("File"))
-            .Item("file.new").Item("file.open").Separator().Item("file.save").Item("file.saveAs").Separator()
+        var fileMenu = Add("File");
+        Menus.Build(fileMenu)
+            .Item("file.new").Item("file.open");
+        _recentMenu = new PopupMenu { Name = "OpenRecent" };
+        fileMenu.AddChild(_recentMenu);
+        fileMenu.AddSubmenuNodeItem("Open Recent", _recentMenu);
+        _recentMenu.IdPressed += id => { var p = _recentMenu.GetItemText((int)id); if (System.IO.File.Exists(p)) SceneFiles.OpenRecentWithConfirm(p); };
+        fileMenu.AboutToPopup += RefreshRecentMenu;
+        Menus.Build(fileMenu)
+            .Separator().Item("file.save").Item("file.saveAs").Separator()
             .Item("file.import").Item("file.exportSelection").Item("file.exportAll").Separator().Item("file.exit");
 
         Menus.Build(Add("Edit"))
