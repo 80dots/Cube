@@ -36,3 +36,7 @@ TestResults/
 
 # JetBrains Rider
 .idea/
+
+# Release artifacts
+build/
+dist/

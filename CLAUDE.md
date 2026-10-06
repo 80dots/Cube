@@ -76,6 +76,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 ## 버전 및 릴리즈 워크플로
 - 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.1`).
 - **수정 작업을 완료할 때마다** 버전을 그대로 둔 채 커밋 → `origin/main` 푸시 → 같은 버전의 드래프트 릴리즈 노트 갱신(`gh release edit v<ver> --draft --notes-file -`). 드래프트가 없으면 `gh release create v<ver> --draft --target main`. 버전은 사용자가 올리라고 할 때만 올린다.
+- **드래프트 릴리즈에는 빌드 산출물을 패키징해 첨부한다**: `.\tools\build-release.ps1 -Upload` 가 Release 빌드 → Godot Windows 내보내기(`export_presets.cfg`의 "Windows Desktop", `build/windows/`) → `dist/Cube-<ver>-win64.zip` + Inno Setup 인스톨러 `dist/Cube-<ver>-Setup.exe`(`installer/Cube.iss`) → `gh release upload --clobber` 까지 수행한다. 필요 도구: Godot 4.7.2 mono 내보내기 템플릿(`%APPDATA%\Godot\export_templates\4.7.2.stable.mono\`), Inno Setup 6(`winget install JRSoftware.InnoSetup`).
 - GitHub 작업은 항상 80dots 계정.
 
 ## 파일 규칙

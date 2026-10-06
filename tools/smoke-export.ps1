@@ -1,4 +1,4 @@
-# glTF 내보내기/가져오기 왕복 스모크 테스트 (헤드리스)
+﻿# glTF 내보내기/가져오기 왕복 스모크 테스트 (헤드리스)
 # 사용: .\tools\smoke-export.ps1 [-Out C:\tmp\smoke.glb]
 param(
     [string]$Out = (Join-Path $env:TEMP "cube_smoke.glb"),
