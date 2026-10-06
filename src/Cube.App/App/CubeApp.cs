@@ -45,9 +45,12 @@ public partial class CubeApp : Node
         {
             if (a.StartsWith("--screenshot=")) _screenshotPath = a["--screenshot=".Length..];
             else if (a.StartsWith("--quit-after=") && int.TryParse(a["--quit-after=".Length..], out int n)) _quitAfterFrames = n;
+            else if (a.StartsWith("--drive=")) CallDeferred(nameof(StartDriver), a["--drive=".Length..]);
         }
         if (_screenshotPath != null && _quitAfterFrames < 0) _quitAfterFrames = 8;
     }
+
+    private void StartDriver(string script) => AddChild(new DebugDriver(script));
 
     public override void _Process(double delta)
     {

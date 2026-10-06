@@ -1,4 +1,5 @@
 using Cube.App.Bridge;
+using Cube.Core.Camera;
 using Cube.Core.Scene;
 using Godot;
 
@@ -6,17 +7,22 @@ namespace Cube.App.Viewport;
 
 /// <summary>
 /// 3D 뷰포트 위젯. SubViewport에 자체 World3D를 두고 카메라·헤드라이트·그리드·SceneView를 담는다.
-/// 입력은 이 컨테이너의 _GuiInput에서만 받아 내비게이션 → 툴 순으로 넘긴다(다음 단계).
+/// 입력은 이 컨테이너의 _GuiInput에서만 받아 내비게이션 → 툴 순으로 넘긴다.
 /// </summary>
 public partial class ViewportPanel : SubViewportContainer
 {
     public SubViewport Viewport { get; private set; } = null!;
     public Camera3D Camera { get; private set; } = null!;
+    public ViewportCamera CameraController { get; private set; } = null!;
+    public NavigationHandler Navigation { get; private set; } = null!;
     public DirectionalLight3D HeadLight { get; private set; } = null!;
     public GridView Grid { get; private set; } = null!;
     public SceneView Scene { get; private set; } = null!;
     public ViewportOverlay Overlay { get; private set; } = null!;
     public Node3D GizmoRoot { get; private set; } = null!;
+
+    /// <summary>내비게이션이 소비하지 않은 이벤트를 받는다(툴 라우팅). true를 반환하면 소비.</summary>
+    public Func<InputEvent, bool>? ToolInput;
 
     private Document? _doc;
     private TextureRect _background = null!;
@@ -67,9 +73,8 @@ public partial class ViewportPanel : SubViewportContainer
 
         Camera = new Camera3D { Name = "Camera", Fov = 45, Near = 0.05f, Far = 10000f, Current = true };
         Viewport.AddChild(Camera);
-        // Maya 기본 persp 위치 (28, 21, 28) → 원점
-        Camera.Position = new Vector3(28, 21, 28);
-        Camera.LookAt(Vector3.Zero, Vector3.Up);
+        CameraController = new ViewportCamera(Camera);
+        Navigation = new NavigationHandler(this);
 
         HeadLight = new DirectionalLight3D { Name = "HeadLight", LightEnergy = 1.0f, ShadowEnabled = false };
         Camera.AddChild(HeadLight); // 카메라를 따라가는 헤드라이트(Maya 기본 라이팅)
@@ -85,6 +90,7 @@ public partial class ViewportPanel : SubViewportContainer
 
         Overlay = new ViewportOverlay { Name = "Overlay", Camera = Camera };
         AddChild(Overlay);
+        CameraController.Changed += () => Overlay.CameraLabel = CameraController.Label;
 
         if (_doc != null) Scene.Bind(_doc);
     }
@@ -93,6 +99,83 @@ public partial class ViewportPanel : SubViewportContainer
     {
         _doc = doc;
         if (Scene != null) Scene.Bind(doc);
+    }
+
+    public Document? Document => _doc;
+
+    public float Aspect => Size.Y > 0 ? Size.X / Size.Y : 1f;
+
+    public void SetView(ViewKind kind) => CameraController.SetView(kind);
+
+    /// <summary>F: 선택을 프레임, 선택이 없으면 전체(A).</summary>
+    public void FrameSelected()
+    {
+        if (_doc == null) return;
+        var ids = _doc.Selection.Objects.ToList();
+        if (_doc.Selection.IsComponentMode)
+            ids.AddRange(_doc.Selection.NodesWithComponents(_doc.Selection.Mode));
+        if (ids.Count == 0) { FrameAll(); return; }
+        Aabb? total = null;
+        foreach (var id in ids.Distinct())
+        {
+            var aabb = ComponentOrObjectAabb(id);
+            if (aabb == null) continue;
+            total = total == null ? aabb : total.Value.Merge(aabb.Value);
+        }
+        if (total == null) { FrameAll(); return; }
+        CameraController.Frame(total.Value, Aspect);
+    }
+
+    public void FrameAll()
+    {
+        if (_doc == null) return;
+        Aabb? total = null;
+        foreach (var n in _doc.MeshNodes())
+        {
+            var aabb = ObjectAabb(n.Id);
+            if (aabb == null) continue;
+            total = total == null ? aabb : total.Value.Merge(aabb.Value);
+        }
+        CameraController.Frame(total ?? new Aabb(new Vector3(-6, 0, -6), new Vector3(12, 0.01f, 12)), Aspect);
+    }
+
+    private Aabb? ObjectAabb(NodeId id)
+    {
+        var mv = Scene.GetMeshView(id);
+        if (mv == null || mv.Render.PointCount == 0) return null;
+        var xf = mv.GlobalTransform;
+        Aabb? box = null;
+        for (int i = 0; i < mv.Render.PointCount; i++)
+        {
+            var p = xf * mv.Render.PointPositions[i].ToGodot();
+            box = box == null ? new Aabb(p, Vector3.Zero) : box.Value.Expand(p);
+        }
+        return box;
+    }
+
+    private Aabb? ComponentOrObjectAabb(NodeId id)
+    {
+        if (_doc == null) return null;
+        var sel = _doc.Selection;
+        if (!sel.IsComponentMode || !sel.Components.TryGetValue(id, out var comps)) return ObjectAabb(id);
+        var mv = Scene.GetMeshView(id);
+        var node = _doc.Find(id);
+        if (mv == null || node?.Mesh == null) return null;
+        var mesh = node.Mesh;
+        var xf = mv.GlobalTransform;
+        var verts = new HashSet<int>();
+        var tmp = new List<int>();
+        foreach (int v in comps.Verts) verts.Add(v);
+        foreach (int e in comps.Edges) { var (a, b) = mesh.EdgeVertices(e); verts.Add(a); verts.Add(b); }
+        foreach (int f in comps.Faces) { mesh.GetFaceVertices(f, tmp); foreach (var v in tmp) verts.Add(v); }
+        if (verts.Count == 0) return ObjectAabb(id);
+        Aabb? box = null;
+        foreach (int v in verts)
+        {
+            var p = xf * mesh.Verts[v].Position.ToGodot();
+            box = box == null ? new Aabb(p, Vector3.Zero) : box.Value.Expand(p);
+        }
+        return box;
     }
 
     public void CycleBackground()
@@ -108,7 +191,25 @@ public partial class ViewportPanel : SubViewportContainer
     public override void _GuiInput(InputEvent e)
     {
         if (e is InputEventMouseButton { Pressed: true }) GrabFocus();
-        // 내비게이션/툴 라우팅은 다음 단계에서 추가
+        if (Navigation.Handle(e)) { AcceptEvent(); return; }
+        if (Navigation.IsDragging) { AcceptEvent(); return; }
+        if (ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
+        if (HandleViewKeys(e)) { AcceptEvent(); return; }
+    }
+
+    /// <summary>뷰포트 컨텍스트 키(F/A/Alt+Home). 전역 핫키 라우터가 생기면 그쪽으로 옮긴다.</summary>
+    public bool HandleViewKeys(InputEvent e)
+    {
+        if (e is not InputEventKey { Pressed: true, Echo: false } k) return false;
+        if (k.Keycode == Key.F && !k.CtrlPressed && !k.AltPressed) { FrameSelected(); return true; }
+        if (k.Keycode == Key.A && !k.CtrlPressed && !k.AltPressed) { FrameAll(); return true; }
+        if (k.Keycode == Key.Home && k.AltPressed) { CameraController.Home(); return true; }
+        return false;
+    }
+
+    public override void _Notification(int what)
+    {
+        if (what == NotificationApplicationFocusOut) Navigation.Cancel();
     }
 
     public override bool _PropagateInputEvent(InputEvent @event) => false;
