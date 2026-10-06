@@ -96,7 +96,8 @@ public sealed class ViewportDisplay
         else
         {
             var oc = s.ObjectWireColor;
-            bool hovered = hover is { } hv && hv.Item2 == SelectMode.Object;
+            // Maya: 프리셀렉션 하이라이트는 아직 선택되지 않은 오브젝트에만
+            bool hovered = !objSelected && hover is { } hv && hv.Item2 == SelectMode.Object;
             s.EdgeColor = e => hovered ? MeshView.Hover : (mesh != null && !mesh.Edges[e].Hard && !objSelected ? MeshView.WireSoft : oc);
             s.VertexColor = null;
             s.FaceSelected = null;

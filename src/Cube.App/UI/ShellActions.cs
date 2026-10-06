@@ -13,7 +13,7 @@ public partial class Shell
 {
     private void RegisterTools()
     {
-        Tools.Register(new PlaceholderTool("select", "Select Tool", "Select Tool: select objects or components."));
+        Tools.Register(new SelectTool());
         Tools.Register(new PlaceholderTool("move", "Move Tool", "Move Tool: drag the manipulator to move."));
         Tools.Register(new PlaceholderTool("rotate", "Rotate Tool", "Rotate Tool: drag the manipulator to rotate."));
         Tools.Register(new PlaceholderTool("scale", "Scale Tool", "Scale Tool: drag the manipulator to scale."));

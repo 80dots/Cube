@@ -22,6 +22,7 @@ public partial class Shell : Control
     public VBoxContainer ToolBox { get; private set; } = null!;
     public VBoxContainer OutlinerDock { get; private set; } = null!;
     public PanelContainer OutlinerBody { get; private set; } = null!;
+    public Docks.Outliner Outliner { get; private set; } = null!;
     public ViewportPanel Viewport { get; private set; } = null!;
     public VBoxContainer ChannelBoxDock { get; private set; } = null!;
     public PanelContainer ChannelBoxBody { get; private set; } = null!;
@@ -84,6 +85,8 @@ public partial class Shell : Control
         var leftRow = new HBoxContainer { Name = "Left", SizeFlagsVertical = SizeFlags.ExpandFill };
         leftRow.AddChild(Wrap(ToolBox, MayaTheme.PanelDark, expandH: false));
         (OutlinerDock, OutlinerBody) = MakeDock("Outliner", 200 * s);
+        Outliner = new Docks.Outliner { Name = "Outliner" };
+        OutlinerBody.AddChild(Outliner);
         leftRow.AddChild(OutlinerDock);
         _mainSplit.AddChild(leftRow);
 
@@ -103,6 +106,7 @@ public partial class Shell : Control
         _mainSplit.SplitOffsets = new[] { (int)(240 * s) };
 
         Viewport.Bind(Document);
+        Outliner.Bind(Document);
 
         // --- 서비스
         ToolContext = new ToolContext { Doc = Document, Viewport = Viewport, Settings = Settings, SetHelp = t => HelpLine.Text = t };

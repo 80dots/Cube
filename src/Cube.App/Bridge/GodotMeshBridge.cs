@@ -30,7 +30,11 @@ public sealed class GodotMeshBridge
             _nrm[i] = r.Normals[i].ToGodot();
             _uv[i] = new Vector2(r.Uvs[i].X, 1f - r.Uvs[i].Y); // Godot UV는 상단 원점
         }
-        Array.Copy(r.Indices, _idx, r.IndexCount);
+        // 코어는 반시계(CCW)가 앞면, Godot은 시계(CW)가 앞면 → 삼각형마다 1,2번 인덱스를 바꾼다
+        for (int t = 0; t < r.IndexCount; t += 3)
+        {
+            _idx[t] = r.Indices[t]; _idx[t + 1] = r.Indices[t + 2]; _idx[t + 2] = r.Indices[t + 1];
+        }
         var arrays = new GArray();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = _pos;
@@ -85,7 +89,7 @@ public sealed class GodotMeshBridge
         for (int t = 0; t < r.TriangleCount; t++)
         {
             if (!includeFace(r.TriToFace[t])) continue;
-            for (int j = 0; j < 3; j++) { _tintPos[k] = r.Positions[r.Indices[t * 3 + j]].ToGodot(); _tintIdx[k] = k; k++; }
+            foreach (int j in new[] { 0, 2, 1 }) { _tintPos[k] = r.Positions[r.Indices[t * 3 + j]].ToGodot(); _tintIdx[k] = k; k++; }
         }
         var arrays = new GArray();
         arrays.Resize((int)Mesh.ArrayType.Max);
