@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 "Cube"는 게임이 아니라 **게임 리소스 제작용 경량 DCC 툴**이다. Godot 4.7.2 mono(C#) 위에서 동작하며 Autodesk Maya의 인터페이스·조작법·단축키·기능 체계를 기준으로 한다. 집중 영역은 Low-poly 모델링, UV 편집(M2), 리깅/스키닝(M3, 바인드 포즈까지). 영상 렌더링과 키프레임 애니메이션은 범위 밖. glTF/FBX 가져오기·내보내기가 Unity/Godot에 바로 드롭인되는 것이 목표.
 
-현재 M1(뷰포트·Maya 내비게이션·선택·W/E/R 조작기·기본 폴리 편집·Undo·glTF·.cube 저장)이 구현되어 있다. 전체 계획과 M2~M4 범위는 `C:\Users\minkyu\.claude\plans\maya-adaptive-glade.md` 참고.
+현재 M1(뷰포트·Maya 내비게이션·선택·W/E/R 조작기·기본 폴리 편집·Undo·glTF·.cube 저장)과 M2(UV 편집기·UV 투영/Cut/Sew/Unfold/Layout·Insert Edge Loop·Bevel·Bridge·더블클릭 루프 선택·X/V 스냅·4분할 뷰·파이 메뉴)가 구현되어 있다. 전체 계획과 M2~M4 범위는 `C:\Users\minkyu\.claude\plans\maya-adaptive-glade.md` 참고.
 
 ## 엔진 및 도구 환경
 
@@ -36,7 +36,7 @@ GUI 동작은 입력 이벤트 주입 스크립트로 검증한다. 좌표는 �
 ```powershell
 & $godot --path . -- --with-cube "--drive=wait 6; move 100 100; press L; release L; key A; wait 2; key F11; wait 1; move 537 300; press L; release L; key E ctrl; wait 2; print; shot C:/tmp/a.png" --quit-after=100
 ```
-스텝: `wait N`, `move X Y`, `press L|M|R [alt|shift|ctrl]`, `release`, `drag X Y [mods]`, `wheel N`, `key NAME [mods]`(Godot Key 이름: `Key4`, `F9`, `Escape`...), `action <actionId>`, `export PATH [selection]`, `import PATH`, `save PATH`, `open PATH`, `print`(노드/선택/Undo/툴/활성 노드 트랜스폼·메시 Y 범위), `gizmo`(조작기 피벗/축), `panel N`(활성 뷰포트 선택: 0 top, 1 persp, 2 front, 3 side), `axisdrag X|Y|Z px` / `ringdrag X|Y|Z|S px` / `centerdrag dx dy`(조작기 핸들을 찾아 드래그; 뷰 각도 무관), `shot PATH`. 좌표는 `c+10`처럼 뷰포트 중심 기준도 된다. 주입된 입력은 다음 프레임에 처리되므로 입력 스텝 뒤에는 자동으로 한 프레임 쉰다. `--drive`가 있으면 핫키/메뉴 로그(`[Hotkey]`, `[Menu]`, `[Select]`)가 켜진다. `--screenshot=PATH --quit-after=N`만으로 정적 스크린샷도 가능.
+스텝: `wait N`, `move X Y`, `press L|M|R [alt|shift|ctrl]`, `dblclick L`(DoubleClick=true 프레스; 앞에 press/release로 첫 클릭을 보낼 것), `release`, `drag X Y [mods]`, `wheel N`, `key NAME [mods]`(Godot Key 이름: `Key4`, `F9`, `Escape`...), `action <actionId>`, `export PATH [selection]`, `import PATH`, `save PATH`, `open PATH`, `print`(노드/선택/Undo/툴/활성 노드 트랜스폼·메시 AABB·컴포넌트 수 v/e/f/u), `gizmo`(조작기 피벗/축), `panel N`(활성 뷰포트 선택: 0 top, 1 persp, 2 front, 3 side), `axisdrag X|Y|Z px` / `ringdrag X|Y|Z|S px` / `centerdrag dx dy`(조작기 핸들을 찾아 드래그; 뷰 각도 무관), `shot PATH`. 좌표는 `c+10`처럼 뷰포트 중심 기준도 된다. 주입된 입력은 다음 프레임에 처리되므로 입력 스텝 뒤에는 자동으로 한 프레임 쉰다. `--drive`가 있으면 핫키/메뉴 로그(`[Hotkey]`, `[Menu]`, `[Select]`)가 켜진다. `--screenshot=PATH --quit-after=N`만으로 정적 스크린샷도 가능.
 
 Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_output` → `stop_project`. `add_node`의 properties는 `.tscn`에 저장되지 않으므로 씬은 직접 편집한다.
 
@@ -48,6 +48,8 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - `Mesh/PolyMesh.cs`: 하프에지 폴리곤 메시. **ID = 슬롯 인덱스, 삭제는 `Alive=false`, 세션 중 재사용 없음**(선택·Undo 안정성). 코너 속성(UV/노멀)은 `HalfEdge`에. 비매니폴드(엣지에 3면, 같은 방향 중복)는 `AddFace`가 -1로 거부. `Compact()`는 저장/내보내기 직전에만.
 - `Mesh/MeshOps.cs`: Extrude(Keep Faces Together), DeleteFaces/Edges(면 병합+2가 정점 정리 = Maya Delete Edge/Vertex)/Vertices, MergeVertices, ReverseFaces(연결 요소 전체 뒤집음), Append/ExtractFaces/ConnectedComponents(Combine/Separate). `MeshNormals.Recompute`는 호출자(명령)가 한다. `MeshTessellator` → `RenderMeshData`(코너 언롤 삼각형, 선, 점, 면 중심 + TriToFace/LineToEdge/PointToVertex 매핑).
 - `Scene/Document.cs`: Maya DAG(`SceneNode` = transform, `MeshShape` = shape). Godot을 모르고 `Changed(DocChange)`만 발행. `Transform3`는 Maya 채널 박스와 같은 TRS(오일러 도, XYZ 순서, 행벡터 행렬 `S·Rx·Ry·Rz·T`).
+- `Mesh/MeshOps.*.cs`: `MeshOps`는 partial. `MeshOps.Loops.cs`(EdgeLoop/EdgeRing/InsertEdgeLoop), `MeshOps.Bevel.cs`(BevelEdges: 1세그먼트 챔퍼, 엣지 쿼드 + 정점 캡), `MeshOps.Bridge.cs`(BridgeEdges: 경계 엣지 체인 2개를 쿼드로 연결). 범용 위상 명령은 `Commands/MeshOpCommand.cs`(람다가 메시를 바꾸고 새 선택 컴포넌트를 돌려줌).
+- `Uv/UvOps.cs`: `UvTopology.Build`(심이 아닌 엣지에서 UV가 같은 코너를 합쳐 UV 점/셸을 만든다) + 투영(Planar/Cylindrical/Spherical, 경계와 UV 불연속 엣지를 심으로 표시)/CutEdges/SewEdges/UnfoldRelax/Layout/Flip. `Edge.Seam`이 UV 심이며 `.cube`에 `seams`로 저장된다. UV 편집 명령은 `Commands/UvCommands.cs`의 `UvEditCommand`(코너 UV + 심 스냅샷; 즉시형 또는 Capture/Commit 드래그형).
 - `Selection/SelectionState.cs`: 모드(Object/Vertex/Edge/Face/Uv) + 노드별 `ComponentSet`. 선택 변경은 `SelectionCommand`로 Undo 가능(Maya 동일). `SelectionOps`는 Grow/Shrink/Convert.
 - `Commands/`: 자체 `UndoStack`(Godot UndoRedo 미사용). 드래그는 문서를 직접 갱신(프리뷰)하고 놓을 때 `Push(cmd, alreadyApplied: true)`. `MeshEditCommand`는 전체 메시 스냅샷(before/after)이며 위상 변경 통지 동안 해당 노드의 컴포넌트 선택을 비웠다가 복원한다(옛 ID 참조 방지).
 - `Picking/`: `CameraProjection`(투영/역투영), `RayPicker`(면=레이, 엣지/정점=화면 거리 임계, camera-based 가림, 마키). `Camera/OrbitCamera`: 피벗 기반 텀블/트랙/돌리/프레임. `Geometry/DragMath`: 조작기 수학. `IO/`: `TriangleSoupToPolyMesh`(용접, 하드엣지 추론, 공면 삼각형→쿼드), `CubeFileFormat`(.cube JSON), 익스포터/임포터 인터페이스.
@@ -57,6 +59,8 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - `UI/Shell.cs` + `ShellActions.cs`: 레이아웃은 코드로 구성(.tscn은 루트만). **모든 메뉴/셸프/툴박스/핫키는 `ActionRegistry`의 ActionId만 호출한다.** 새 기능은 `RegisterActions`에 액션을 등록하고 `BuildMenus`에 넣는다. `Hotkeys/ShellInput.cs`가 `_Input`에서 키를 라우팅(텍스트 필드 포커스 시 무시, `viewport` 컨텍스트 = 마우스 오버/포커스). 바인딩은 `config/hotkeys.default.json`(`user://hotkeys.json`로 덮어쓰기). Godot `InputMap`은 쓰지 않는다.
 - `Viewport/ViewportLayout.cs`: 패널 4개(top/persp/front/side)를 항상 만들어 두고 단일 ↔ 4분할을 토글한다(Space 탭, `view.toggleLayout`). 마우스가 들어가거나 눌린 패널이 **활성 패널**(`Shell.Viewport`)이며 `ToolContext.Viewport`가 바뀌면 툴이 기즈모를 그 패널로 옮긴다. 표시/뷰 액션은 활성 패널에 적용된다.
 - `Viewport/ViewportPanel.cs`: SubViewport(자체 월드, Canvas 배경 그라디언트, 헤드라이트). 입력 순서: `NavigationHandler`(Alt+버튼/휠) → 파이 메뉴(`UI/PieMenu.cs`, RMB 홀드 = 모드 전환, Shift+RMB = 현재 모드 액션, Space 홀드 = 뷰 전환; 항목은 `UI/PieMenus.cs`) → `ToolManager.Current` → 끝. 우상단 `ViewportHud`(클릭 가능한 뷰 큐브, Persp/Ortho 토글, Wireframe/Shaded/Textured/Lit/UV Grid 버튼). UV Grid 모드는 `assets/textures/uv_grid.png`를 메시 UV로 입힌다.
+- `UI/UvEditor/`: UV 편집기는 임베디드 `Window`(`UvEditorWindow`, Windows → UV Editor)이고 캔버스(`UvCanvas`)가 선택 노드의 UV를 그린다. Alt+MMB 팬, Alt+RMB/휠 줌, F/A 프레임, UV/Edge/Face 모드 클릭·마키 선택, W/E/R 드래그로 UV 점 이동/회전/스케일(`UvEditCommand` Capture/Commit). 임베디드 창은 루트의 `_Input`을 받지 못하므로 `UvCanvas._UnhandledKeyInput`이 `Shell.Hotkeys._Input`으로 키를 넘긴다. 액션은 `UI/ShellUvActions.cs`(`uv.*`).
+- `Tools/InsertEdgeLoopTool.cs`: 엣지 클릭 위치의 비율 t로 `MeshOps.InsertEdgeLoop`. `SelectTool`은 더블클릭 시 엣지 루프(경계면 보더 루프)/면 셸을 선택한다. `MoveTool`은 X 홀드 = 그리드(1단위) 스냅, V 홀드 = 커서 근처 정점 스냅(`ViewportPanel.IsGridSnapHeld/IsPointSnapHeld`).
 - 아이콘은 `assets/icons/*.svg`가 원본이지만 앱은 `UI/IconData.cs`에 내장된 SVG 문자열을 쓴다(내보낸 빌드에는 .svg/.png 같은 임포트 대상 파일이 포함되지 않는다). SVG를 바꾸면 `python tools/gen-icons.py`로 재생성. UV 그리드 텍스처는 `assets/textures/uv_grid.bin`(PNG 바이트, 임포터 회피)이며 `Icons.LoadPng`로 읽는다. 내보내기 프리셋 include_filter에 `assets/textures/*.bin`이 있다.
 - 표면은 `assets/shaders/surface.gdshader`(양면, 뒷면은 검정)로 그린다. 셰이딩/UV 그리드 모드 모두 이 셰이더에 `use_texture` 유니폼만 다르다.
 - 선택 옵션: 클릭은 항상 보이는 요소 우선(`Settings.CameraBasedSelection`), 박스(마키) 선택은 `Settings.MarqueeSelectThrough`(기본 on, HUD 토글)에 따라 가려진 요소도 포함한다. 마우스 내비게이션 감도는 `Settings.MouseSensitivityPercent`(기본 80)를 `NavigationHandler`가 곱한다.

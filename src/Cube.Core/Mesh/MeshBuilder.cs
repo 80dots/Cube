@@ -23,6 +23,7 @@ public static class MeshBuilder
         AddQuad(m, v[3], v[2], v[6], v[7]); // +Y
         AddQuad(m, v[4], v[5], v[1], v[0]); // -Y
         SetAllEdgesHard(m, true);
+        SetAllEdgesSeam(m, true); // 면마다 독립된 UV 섬
         MeshNormals.Recompute(m);
         return m;
     }
@@ -87,8 +88,11 @@ public static class MeshBuilder
             {
                 SetEdgeHard(m, top[i], top[(i + 1) % segments], true);
                 SetEdgeHard(m, bottom[i], bottom[(i + 1) % segments], true);
+                SetEdgeSeam(m, top[i], top[(i + 1) % segments], true);
+                SetEdgeSeam(m, bottom[i], bottom[(i + 1) % segments], true);
             }
         }
+        SetEdgeSeam(m, bottom[0], top[0], true); // u가 0/1로 갈리는 세로 심
         MeshNormals.Recompute(m);
         return m;
     }
@@ -119,8 +123,9 @@ public static class MeshBuilder
             for (int i = 0; i < segments; i++) loop[i] = ring[segments - 1 - i];
             int fb = m.AddFace(loop);
             SetCapUvs(m, fb, radius);
-            for (int i = 0; i < segments; i++) SetEdgeHard(m, ring[i], ring[(i + 1) % segments], true);
+            for (int i = 0; i < segments; i++) { SetEdgeHard(m, ring[i], ring[(i + 1) % segments], true); SetEdgeSeam(m, ring[i], ring[(i + 1) % segments], true); }
         }
+        SetEdgeSeam(m, ring[0], apex, true);
         MeshNormals.Recompute(m);
         return m;
     }
@@ -167,6 +172,10 @@ public static class MeshBuilder
             int f = m.AddFace(t);
             SetFaceUvs(m, f, new((s + 0.5f) / segments, 0), new((float)(s + 1) / segments, 1f / rings), new((float)s / segments, 1f / rings));
         }
+        // u가 0/1로 갈리는 자오선 심
+        SetEdgeSeam(m, top, grid[0, 0], true);
+        for (int r = 0; r < rings - 2; r++) SetEdgeSeam(m, grid[r, 0], grid[r + 1, 0], true);
+        SetEdgeSeam(m, grid[rings - 2, 0], bottom, true);
         MeshNormals.Recompute(m);
         return m;
     }
@@ -201,6 +210,8 @@ public static class MeshBuilder
                     new((float)(i + 1) / segments, (float)(j + 1) / sections), new((float)i / segments, (float)(j + 1) / sections));
             }
         }
+        for (int j = 0; j < sections; j++) SetEdgeSeam(m, grid[0, j], grid[0, (j + 1) % sections], true);
+        for (int i = 0; i < segments; i++) SetEdgeSeam(m, grid[i, 0], grid[(i + 1) % segments, 0], true);
         MeshNormals.Recompute(m);
         return m;
     }
@@ -257,5 +268,22 @@ public static class MeshBuilder
         int e = m.FindEdge(va, vb);
         if (e < 0) return;
         var ed = m.Edges[e]; ed.Hard = hard; m.Edges[e] = ed;
+    }
+
+    public static void SetEdgeSeam(PolyMesh m, int va, int vb, bool seam)
+    {
+        int e = m.FindEdge(va, vb);
+        if (e < 0) return;
+        var ed = m.Edges[e]; ed.Seam = seam; m.Edges[e] = ed;
+    }
+
+    public static void SetAllEdgesSeam(PolyMesh m, bool seam)
+    {
+        for (int e = 0; e < m.Edges.Count; e++)
+        {
+            var ed = m.Edges[e];
+            if (!ed.Alive) continue;
+            ed.Seam = seam; m.Edges[e] = ed;
+        }
     }
 }

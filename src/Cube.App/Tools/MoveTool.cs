@@ -11,7 +11,7 @@ public sealed class MoveTool : TransformToolBase
 {
     public override string Id => "move";
     public override string Label => "Move";
-    public override string HelpText => "Move Tool: drag the manipulator to move the selection. Click elsewhere to select.";
+    public override string HelpText => "Move Tool: drag the manipulator to move the selection. Hold X to snap to grid, V to snap to points. Click elsewhere to select.";
 
     private NVec3 _planeNormal;
     private NVec3 _startHit;
@@ -65,6 +65,45 @@ public sealed class MoveTool : TransformToolBase
             if (!DragMath.RayPlane(ray, PivotWorld, _planeNormal, out var hit)) return;
             delta = hit - _startHit;
         }
+        delta = ApplySnap(delta, px, proj);
         ApplyTranslation(delta);
+    }
+
+    /// <summary>X: 그리드(1단위) 스냅, V: 커서 근처 정점으로 스냅. 축 드래그면 축 성분만 취한다.</summary>
+    private NVec3 ApplySnap(NVec3 delta, NVec2 px, CameraProjection proj)
+    {
+        var vp = Ctx.Viewport;
+        NVec3? target = null;
+        if (vp.IsPointSnapHeld)
+        {
+            float best = 30f * CubeApp.Instance.UiScale; best *= best;
+            var movingVerts = new HashSet<(Core.Scene.NodeId, int)>();
+            foreach (var (id, verts, _, _, _) in ComponentTargets) foreach (int v in verts) movingVerts.Add((id, v));
+            var movingNodes = new HashSet<Core.Scene.NodeId>(ObjectTargets.Select(t => t.node.Id));
+            foreach (var t in Picker.Targets())
+            {
+                if (movingNodes.Contains(t.Id)) continue;
+                var m = t.Mesh;
+                for (int v = 0; v < m.VertexCount; v++)
+                {
+                    if (!m.Verts[v].Alive || movingVerts.Contains((t.Id, v))) continue;
+                    var w = NVec3.Transform(m.Verts[v].Position, t.World);
+                    var p = proj.Project(w, out _);
+                    if (p == null) continue;
+                    float d2 = NVec2.DistanceSquared(p.Value, px);
+                    if (d2 < best) { best = d2; target = w; }
+                }
+            }
+        }
+        else if (vp.IsGridSnapHeld)
+        {
+            const float step = 1f;
+            var np = PivotWorld + delta;
+            target = new NVec3(MathF.Round(np.X / step) * step, MathF.Round(np.Y / step) * step, MathF.Round(np.Z / step) * step);
+        }
+        if (target == null) return delta;
+        var snapped = target.Value - PivotWorld;
+        if (_axisMode) { var axis = Gizmo.AxisOf(DragPart); return axis * NVec3.Dot(snapped, axis); }
+        return snapped;
     }
 }

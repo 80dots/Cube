@@ -39,7 +39,7 @@ public partial class DebugDriver : Node
             try { Exec(parts); }
             catch (Exception ex) { GD.PrintErr($"[Drive] '{step}': {ex.Message}"); }
             // 주입된 입력 이벤트는 다음 입력 플러시에서 처리되므로 입력 스텝 뒤에는 한 프레임 양보한다
-            if (parts[0] is "move" or "press" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
+            if (parts[0] is "move" or "press" or "dblclick" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
         }
         if (_steps.Count == 0 && _wait == 0) { GD.Print("[Drive] done"); QueueFree(); }
     }
@@ -68,6 +68,15 @@ public partial class DebugDriver : Node
                     var b = Button(p[1]);
                     _held.Add(b);
                     var ev = new InputEventMouseButton { ButtonIndex = b, Pressed = true, Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), ButtonMask = Mask() };
+                    Mods(ev, p, 2);
+                    Input.ParseInputEvent(ev);
+                    break;
+                }
+            case "dblclick":   // dblclick L [mods]: 더블클릭 프레스(DoubleClick=true)만 보낸다. 앞서 press/release로 첫 클릭을 보내 둘 것.
+                {
+                    var b = Button(p[1]);
+                    _held.Add(b);
+                    var ev = new InputEventMouseButton { ButtonIndex = b, Pressed = true, DoubleClick = true, Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), ButtonMask = Mask() };
                     Mods(ev, p, 2);
                     Input.ParseInputEvent(ev);
                     break;
@@ -250,7 +259,7 @@ public partial class DebugDriver : Node
                     {
                         var mn = new System.Numerics.Vector3(float.MaxValue); var mx = new System.Numerics.Vector3(float.MinValue);
                         foreach (var v in active.Mesh.Verts) if (v.Alive) { mn = System.Numerics.Vector3.Min(mn, v.Position); mx = System.Numerics.Vector3.Max(mx, v.Position); }
-                        GD.Print($"[Drive] active={active.Name} local={active.Local} meshMin=<{mn.X:F3},{mn.Y:F3},{mn.Z:F3}> meshMax=<{mx.X:F3},{mx.Y:F3},{mx.Z:F3}> comps={string.Join("|", doc.Selection.Components.Select(kv => $"{kv.Key}:v{kv.Value.Verts.Count}/e{kv.Value.Edges.Count}/f{kv.Value.Faces.Count}"))}");
+                        GD.Print($"[Drive] active={active.Name} local={active.Local} meshMin=<{mn.X:F3},{mn.Y:F3},{mn.Z:F3}> meshMax=<{mx.X:F3},{mx.Y:F3},{mx.Z:F3}> comps={string.Join("|", doc.Selection.Components.Select(kv => $"{kv.Key}:v{kv.Value.Verts.Count}/e{kv.Value.Edges.Count}/f{kv.Value.Faces.Count}/u{kv.Value.Uvs.Count}"))}");
                     }
                     break;
                 }

@@ -34,6 +34,8 @@ public struct Edge
     public int He0;
     public int He1;      // -1 = 경계
     public bool Hard;
+    /// <summary>UV 심(Cut UV Edges). 양쪽 코너 UV가 같아도 별개의 UV 점으로 취급한다.</summary>
+    public bool Seam;
     public bool Alive;
 }
 

@@ -290,6 +290,10 @@ public partial class ViewportPanel : SubViewportContainer
 
     /// <summary>Maya J 홀드: 회전/스케일 증분 스냅.</summary>
     public bool IsSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.J) ?? false;
+    /// <summary>Maya X 홀드: 그리드 스냅.</summary>
+    public bool IsGridSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.X) ?? false;
+    /// <summary>Maya V 홀드: 점(정점) 스냅.</summary>
+    public bool IsPointSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.V) ?? false;
 
     public override bool _PropagateInputEvent(InputEvent @event) => false;
 }

@@ -24,6 +24,7 @@ public class SelectTool : ToolBase
     }
 
     private bool _pressed;
+    private bool _swallowRelease;
     private Vector2 _pressPos;
     private bool _marquee;
     private SelectModifier _modifier;
@@ -40,10 +41,12 @@ public class SelectTool : ToolBase
             case InputEventMouseButton mb when mb.ButtonIndex == MouseButton.Left:
                 if (mb.Pressed)
                 {
+                    if (mb.DoubleClick && TryDoubleClickSelect(mb)) { _swallowRelease = true; return true; }
                     if (OnPrimaryPress(mb)) return true;
                     _pressed = true; _marquee = false; _pressPos = mb.Position; _modifier = ModifierOf(mb);
                     return true;
                 }
+                if (_swallowRelease) { _swallowRelease = false; _pressed = false; return true; }
                 if (_pressed)
                 {
                     _pressed = false;
@@ -89,6 +92,32 @@ public class SelectTool : ToolBase
         var min = new Vector2(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y));
         var max = new Vector2(MathF.Max(a.X, b.X), MathF.Max(a.Y, b.Y));
         return new Rect2(min, max - min);
+    }
+
+    /// <summary>Maya 더블클릭: 엣지 모드에서는 엣지 루프(경계면 보더 루프), 면 모드에서는 연결된 셸을 선택한다.</summary>
+    private bool TryDoubleClickSelect(InputEventMouseButton mb)
+    {
+        var sel = Ctx.Sel;
+        if (sel.Mode is not (SelectMode.Edge or SelectMode.Face)) return false;
+        var hit = Picker.Pick(mb.Position, sel.Mode, Ctx.CameraBasedSelection);
+        if (hit == null) return false;
+        var mesh = Ctx.Doc.Find(hit.Value.Node)?.Mesh;
+        if (mesh == null) return false;
+        IEnumerable<int> ids;
+        if (sel.Mode == SelectMode.Edge) ids = Core.Mesh.MeshOps.EdgeLoop(mesh, hit.Value.Component);
+        else
+        {
+            var comp = Core.Mesh.MeshOps.ConnectedComponents(mesh).FirstOrDefault(c => c.Contains(hit.Value.Component));
+            if (comp == null) return false;
+            ids = comp;
+        }
+        var node = hit.Value.Node;
+        var items = ids.Select(i => new SelItem(node, i)).ToArray();
+        var modifier = ModifierOf(mb);
+        // 더블클릭의 첫 클릭이 이미 Replace로 선택했으므로, 수식어 없는 더블클릭은 루프로 교체한다
+        UI.Shell.Instance.RecordSelection(s => s.Apply(items, modifier == SelectModifier.Replace ? SelectModifier.Replace : SelectModifier.Add));
+        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] double-click {sel.Mode} -> {items.Length} items");
+        return true;
     }
 
     private void ClickSelect(Vector2 px, SelectModifier modifier)

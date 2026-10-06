@@ -17,6 +17,7 @@ public partial class Shell
         Tools.Register(new MoveTool());
         Tools.Register(new RotateTool());
         Tools.Register(new ScaleTool());
+        Tools.Register(new InsertEdgeLoopTool());
     }
 
     private void RegisterActions()
@@ -77,8 +78,12 @@ public partial class Shell
         Actions.Register("mesh.soften", "Soften Edge", () => SetEdgesHard(false), canExecute: () => HasEdgeTargets(), repeatable: true);
         Actions.Register("mesh.harden", "Harden Edge", () => SetEdgesHard(true), canExecute: () => HasEdgeTargets(), repeatable: true);
         Actions.Register("mesh.reverse", "Reverse", ReverseSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
-        foreach (var (id, label) in new[] { ("mesh.bevel", "Bevel"), ("mesh.bridge", "Bridge"), ("mesh.insertLoop", "Insert Edge Loop"), ("mesh.multiCut", "Multi-Cut") })
-            Actions.Register(id, label, () => { }, canExecute: () => false);
+        bool HasBevelTargets() => sel.Mode is SelectMode.Edge or SelectMode.Face && sel.NodesWithComponents(sel.Mode).Any();
+        Actions.Register("mesh.bevel", "Bevel...", ShowBevelDialog, canExecute: HasBevelTargets);
+        Actions.Register("mesh.bevelApply", "Bevel", BevelSelection, canExecute: HasBevelTargets, repeatable: true);
+        Actions.Register("mesh.bridge", "Bridge", BridgeSelection, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
+        Actions.Register("mesh.insertLoop", "Insert Edge Loop Tool", () => Tools.SetTool("insertLoop"), isChecked: () => Tools.Current?.Id == "insertLoop");
+        Actions.Register("mesh.multiCut", "Multi-Cut", () => { }, canExecute: () => false);
 
         // --- 파일
         Files = new IO.FileActions(doc, Settings, this, msg => HelpLine.Text = msg);
@@ -121,10 +126,10 @@ public partial class Shell
         // --- 창
         Actions.Register("windows.outliner", "Outliner", () => OutlinerDock.Visible = !OutlinerDock.Visible, isChecked: () => OutlinerDock.Visible);
         Actions.Register("windows.properties", "Properties", () => PropertiesDock.Visible = !PropertiesDock.Visible, isChecked: () => PropertiesDock.Visible);
-        Actions.Register("windows.uvEditor", "UV Editor", () => { }, canExecute: () => false);
         Actions.Register("help.about", "About Cube", () => HelpLine.Text = $"Cube {ProjectSettings.GetSetting("application/config/version")} — Godot {Engine.GetVersionInfo()["string"]}");
 
         Actions.Register("app.escape", "Escape", () => { Tools.CancelCurrent(); Viewport.GrabFocus(); });
+        RegisterUvActions();
     }
 
     private SelectMode _lastComponentMode = SelectMode.Vertex;
@@ -258,6 +263,51 @@ public partial class Shell
         }
         _mergeSpin!.Value = _mergeThreshold;
         _mergeDialog.PopupCentered();
+    }
+
+    private ConfirmationDialog? _bevelDialog;
+    private SpinBox? _bevelSpin;
+    private float _bevelDistance = 0.1f;
+
+    private void ShowBevelDialog()
+    {
+        if (_bevelDialog == null)
+        {
+            _bevelDialog = new ConfirmationDialog { Title = "Bevel", OkButtonText = "Bevel" };
+            var row = new HBoxContainer();
+            row.AddChild(new Label { Text = "Distance" });
+            _bevelSpin = new SpinBox { MinValue = 0.0001, MaxValue = 1000, Step = 0.001, Value = _bevelDistance, CustomMinimumSize = new Vector2(120, 0) };
+            row.AddChild(_bevelSpin);
+            _bevelDialog.AddChild(row);
+            _bevelDialog.Confirmed += () => { _bevelDistance = (float)_bevelSpin.Value; Actions.Invoke("mesh.bevelApply"); };
+            AddChild(_bevelDialog);
+        }
+        _bevelSpin!.Value = _bevelDistance;
+        _bevelDialog.PopupCentered();
+    }
+
+    private void BevelSelection()
+    {
+        var mode = Document.Selection.Mode;
+        float dist = _bevelDistance;
+        ForEachComponentNode("Bevel", mode, (id, comps) =>
+        {
+            var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
+            var edges = mode == SelectMode.Edge ? comps.Edges.ToArray() : SelectionOps.Convert(mesh, comps, mode, SelectMode.Edge).ToArray();
+            return new MeshOpCommand("Bevel", id, m => { var faces = MeshOps.BevelEdges(m, edges, dist); return (faces.Count > 0, SelectMode.Face, faces); });
+        });
+        HelpLine.Text = $"Bevel: distance {dist:0.###}.";
+    }
+
+    private void BridgeSelection()
+    {
+        int made = 0;
+        ForEachComponentNode("Bridge", SelectMode.Edge, (id, comps) =>
+        {
+            var edges = comps.Edges.ToArray();
+            return new MeshOpCommand("Bridge", id, m => { var faces = MeshOps.BridgeEdges(m, edges); made += faces.Count; return (faces.Count > 0, SelectMode.Face, faces); });
+        });
+        HelpLine.Text = made > 0 ? $"Bridge: {made} faces created." : "Bridge: select two border edge chains with the same number of edges.";
     }
 
     private void MergeSelectedVertices()
@@ -439,7 +489,10 @@ public partial class Shell
         Menus.Build(Add("Mesh Tools"))
             .Item("mesh.insertLoop").Item("mesh.multiCut");
 
-        Menus.Build(Add("UV")).Item("windows.uvEditor");
+        Menus.Build(Add("UV"))
+            .Item("windows.uvEditor").Separator()
+            .Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
+            .Item("uv.unfold").Item("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
         Menus.Build(Add("Skeleton")).Item("skeleton.createJoints", "Create Joints", disabled: true);
         Menus.Build(Add("Skin")).Item("skin.bind", "Bind Skin", disabled: true);
 

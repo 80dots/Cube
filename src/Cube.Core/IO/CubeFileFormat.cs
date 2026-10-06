@@ -22,6 +22,7 @@ public static class CubeFileFormat
         [JsonPropertyName("uvs")] public float[][] Uvs { get; set; } = Array.Empty<float[]>();          // 면별 코너 uv (u,v 연속)
         [JsonPropertyName("materials")] public int[] Materials { get; set; } = Array.Empty<int>();      // 면별
         [JsonPropertyName("hardEdges")] public int[][] HardEdges { get; set; } = Array.Empty<int[]>();  // [a,b]
+        [JsonPropertyName("seams")] public int[][] Seams { get; set; } = Array.Empty<int[]>();          // [a,b] UV 심
     }
 
     private sealed class NodeDto
@@ -130,9 +131,14 @@ public static class CubeFileFormat
             faces.Add(ids); uvs.Add(uv); mats.Add(m.Faces[f].Material);
         }
         dto.Faces = faces.ToArray(); dto.Uvs = uvs.ToArray(); dto.Materials = mats.ToArray();
-        var hard = new List<int[]>();
-        for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Hard) { var (a, b) = m.EdgeVertices(e); hard.Add(new[] { a, b }); }
-        dto.HardEdges = hard.ToArray();
+        var hard = new List<int[]>(); var seams = new List<int[]>();
+        for (int e = 0; e < m.EdgeCount; e++)
+        {
+            var (a, b) = m.EdgeVertices(e);
+            if (m.Edges[e].Hard) hard.Add(new[] { a, b });
+            if (m.Edges[e].Seam) seams.Add(new[] { a, b });
+        }
+        dto.HardEdges = hard.ToArray(); dto.Seams = seams.ToArray();
         return dto;
     }
 
@@ -156,6 +162,12 @@ public static class CubeFileFormat
             if (pair.Length < 2) continue;
             int e = m.FindEdge(pair[0], pair[1]);
             if (e >= 0) { var ed = m.Edges[e]; ed.Hard = true; m.Edges[e] = ed; }
+        }
+        foreach (var pair in dto.Seams)
+        {
+            if (pair.Length < 2) continue;
+            int e = m.FindEdge(pair[0], pair[1]);
+            if (e >= 0) { var ed = m.Edges[e]; ed.Seam = true; m.Edges[e] = ed; }
         }
         MeshNormals.Recompute(m);
         m.BumpTopology();

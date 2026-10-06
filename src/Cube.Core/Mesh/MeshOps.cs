@@ -6,11 +6,11 @@ namespace Cube.Core.Mesh;
 /// 위상 편집 연산. 모두 메시를 제자리에서 수정하며 끝에 <see cref="PolyMesh.BumpTopology"/>를 호출한다.
 /// 노멀 재계산은 호출자(MeshEditCommand)가 한다.
 /// </summary>
-public static class MeshOps
+public static partial class MeshOps
 {
-    private readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal);
+    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal);
 
-    private static List<Corner> CaptureCorners(PolyMesh m, int f)
+    internal static List<Corner> CaptureCorners(PolyMesh m, int f)
     {
         var list = new List<Corner>();
         int start = m.Faces[f].HalfEdge, he = start;
@@ -18,7 +18,7 @@ public static class MeshOps
         return list;
     }
 
-    private static int AddFaceWithCorners(PolyMesh m, IReadOnlyList<Corner> corners, int material = 0)
+    internal static int AddFaceWithCorners(PolyMesh m, IReadOnlyList<Corner> corners, int material = 0)
     {
         var ids = new int[corners.Count];
         for (int i = 0; i < ids.Length; i++) ids[i] = corners[i].Vertex;
@@ -29,14 +29,14 @@ public static class MeshOps
         return f;
     }
 
-    private static void SetHard(PolyMesh m, int a, int b, bool hard)
+    internal static void SetHard(PolyMesh m, int a, int b, bool hard)
     {
         int e = m.FindEdge(a, b);
         if (e < 0) return;
         var ed = m.Edges[e]; ed.Hard = hard; m.Edges[e] = ed;
     }
 
-    private static bool IsHard(PolyMesh m, int a, int b)
+    internal static bool IsHard(PolyMesh m, int a, int b)
     {
         int e = m.FindEdge(a, b);
         return e >= 0 && m.Edges[e].Hard;
