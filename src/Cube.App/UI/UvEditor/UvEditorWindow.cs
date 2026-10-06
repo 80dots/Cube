@@ -45,6 +45,12 @@ public partial class UvEditorWindow : Window
         var frame = new Button { Text = "Frame", FocusMode = Control.FocusModeEnum.None, TooltipText = "Frame selection (F) / all (A)" };
         frame.Pressed += () => Canvas.FrameSelected();
         bar.AddChild(frame);
+        bar.AddChild(new VSeparator());
+        _background = new OptionButton { FocusMode = Control.FocusModeEnum.None, TooltipText = "Background" };
+        foreach (var name in new[] { "No Background", "Grid", "UV Texture", "Mapped Texture" }) _background.AddItem(name);
+        _background.Selected = (int)UvBackground.UvTexture;
+        _background.ItemSelected += i => { Canvas.Background = (UvBackground)(int)i; };
+        bar.AddChild(_background);
         root.AddChild(bar);
 
         Canvas = new UvCanvas();
@@ -58,6 +64,15 @@ public partial class UvEditorWindow : Window
     }
 
     private readonly List<(Button b, string action)> _actionButtons = new();
+    private OptionButton _background = null!;
+
+    /// <summary>배경 옵션 순환(파이 메뉴용): None → Grid → UV Texture → Mapped → ...</summary>
+    public void CycleBackground()
+    {
+        var next = (UvBackground)(((int)Canvas.Background + 1) % 4);
+        Canvas.Background = next;
+        _background.Selected = (int)next;
+    }
 
     private Button ActionButton(string action, string label)
     {

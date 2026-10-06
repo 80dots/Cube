@@ -19,6 +19,8 @@ public partial class MeshView : Node3D
     public static readonly Color Hover = MathConvert.Rgb(0xf0f0f0);
     public static readonly Color VertexNormal = MathConvert.Rgb(0xb060c0);
     public static readonly Color VertexSelected = MathConvert.Rgb(0xffff00);
+    /// <summary>머티리얼에 매핑된 텍스처(UV 편집기 Mapped Texture 배경용). 머티리얼 텍스처 지원 전까지는 null.</summary>
+    public Texture2D? MappedTexture { get; set; }
     public static readonly Color FaceCenter = MathConvert.Rgb(0x5aa0ff);
 
     private static Shader? _wireShader, _pointsShader, _tintShader;

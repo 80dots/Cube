@@ -26,8 +26,11 @@ public partial class Shell
         Actions.Register("uv.spherical", "Spherical Mapping", () => Project("Spherical", UvOps.SphericalProject), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.unfold", "Unfold", UvUnfold, canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.layout", "Layout", UvLayout, canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.cut", "Cut UV Edges", () => CutSew(true), canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
-        Actions.Register("uv.sew", "Sew UV Edges", () => CutSew(false), canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
+        Actions.Register("uv.cut", "Cut UV Edges", () => CutSew(true), canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        Actions.Register("uv.sew", "Sew UV Edges", () => CutSew(false), canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        Actions.Register("uv.frameSelected", "Frame Selected (UV)", () => UvEditorWindow?.Canvas.FrameSelected(), canExecute: () => UvEditorWindow?.Visible ?? false);
+        Actions.Register("uv.frameAll", "Frame All (UV)", () => UvEditorWindow?.Canvas.FrameAll(), canExecute: () => UvEditorWindow?.Visible ?? false);
+        Actions.Register("uv.cycleBackground", "Cycle Background (UV)", () => UvEditorWindow?.CycleBackground(), canExecute: () => UvEditorWindow?.Visible ?? false);
         Actions.Register("uv.flipU", "Flip U", () => Flip(true), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.flipV", "Flip V", () => Flip(false), canExecute: HasTargets, repeatable: true);
     }
@@ -120,13 +123,34 @@ public partial class Shell
         UvEditorWindow?.Canvas.Invalidate();
     }
 
+    /// <summary>현재 모드의 선택을 Cut/Sew 대상 엣지로: 엣지 그대로, 면은 바깥 경계 엣지, 정점/UV는 양 끝이 선택된 엣지(없으면 닿는 엣지).</summary>
+    private int[] UvCutTargetEdges(PolyMesh mesh, ComponentSet comps, SelectMode mode)
+    {
+        switch (mode)
+        {
+            case SelectMode.Edge: return comps.Edges.ToArray();
+            case SelectMode.Face: return SelectionOps.BoundaryEdgesOfFaces(mesh, comps.Faces).ToArray();
+            case SelectMode.Vertex: return SelectionOps.EdgesOfVertices(mesh, comps.Verts).ToArray();
+            case SelectMode.Uv:
+                {
+                    var topo = UvTopology.Build(mesh);
+                    var verts = comps.Uvs.Where(p => p < topo.Points.Count).Select(p => topo.Points[p].Vertex);
+                    return SelectionOps.EdgesOfVertices(mesh, verts).ToArray();
+                }
+            default: return Array.Empty<int>();
+        }
+    }
+
     private void CutSew(bool cut)
     {
         var sel = Document.Selection;
+        var mode = sel.Mode;
         using (Document.Undo.BeginGroup(cut ? "Cut UV Edges" : "Sew UV Edges"))
-            foreach (var id in sel.NodesWithComponents(SelectMode.Edge).ToArray())
+            foreach (var id in sel.NodesWithComponents(mode).ToArray())
             {
-                var edges = sel.GetComponents(id).Edges.ToArray();
+                var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
+                var edges = UvCutTargetEdges(mesh, sel.GetComponents(id), mode);
+                if (edges.Length == 0) continue;
                 Document.Undo.Push(new UvEditCommand(cut ? "Cut UV Edges" : "Sew UV Edges", id, m => { if (cut) UvOps.CutEdges(m, edges); else UvOps.SewEdges(m, edges); }));
             }
         UvEditorWindow?.Canvas.Invalidate();

@@ -67,8 +67,19 @@ public partial class PieMenu : Control
             }
             else
             {
-                int k = i - 8;
-                pos = new Vector2(_center.X - w / 2, _center.Y + Radius + h * 1.6f + k * (h + 4 * s));
+                // 오버플로: 아래쪽에 열당 최대 6개, 열은 가운데 정렬(열 폭은 그 열의 가장 넓은 항목)
+                // 아래 공간에 맞게 열당 개수를 정한다(2~6개). 공간이 모자라면 열을 늘린다
+                float startY = _center.Y + Radius + h * 1.6f;
+                int perCol = Math.Clamp((int)((Size.Y - startY) / (h + 4 * s)), 2, 6);
+                int overflow = _items.Count - 8;
+                int cols = (overflow + perCol - 1) / perCol;
+                float colW = 0;
+                for (int j = 8; j < _items.Count; j++) colW = MathF.Max(colW, _font.GetStringSize(_items[j].Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2);
+                float gap = 8 * s;
+                int k = i - 8, col = k / perCol, row = k % perCol;
+                float blockW = cols * colW + (cols - 1) * gap;
+                float left = Math.Clamp(_center.X - blockW / 2, 4 * s, MathF.Max(4 * s, Size.X - blockW - 4 * s));
+                pos = new Vector2(left + col * (colW + gap) + (colW - w) / 2, startY + row * (h + 4 * s));
             }
             _rects.Add(new Rect2(pos, new Vector2(w, h)));
         }

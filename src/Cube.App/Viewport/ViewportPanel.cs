@@ -32,7 +32,8 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>내비게이션/파이가 소비하지 않은 이벤트를 받는다(툴 라우팅). true를 반환하면 소비.</summary>
     public Func<InputEvent, bool>? ToolInput;
     /// <summary>RMB 파이 메뉴 항목 공급자(shift 여부 → 항목). Shell이 설정한다.</summary>
-    public Func<bool, IEnumerable<UI.PieItem>>? PieItems;
+    /// <summary>(shift, ctrl) → 파이 항목. RMB = 기본(모드), Shift+RMB = Edit, Ctrl+RMB = Select.</summary>
+    public Func<bool, bool, IEnumerable<UI.PieItem>>? PieItems;
     public Action<UI.PieItem>? PieExecute;
     /// <summary>마우스가 들어오거나 버튼이 눌리면 발생(활성 패널 전환).</summary>
     public event Action? Activated;
@@ -252,7 +253,7 @@ public partial class ViewportPanel : SubViewportContainer
                 if (mb.Pressed)
                 {
                     if (mb.AltPressed || PieItems == null || Pie.IsOpen) return Pie.IsOpen;
-                    Pie.Open(PieItems(mb.ShiftPressed), mb.Position);
+                    Pie.Open(PieItems(mb.ShiftPressed, mb.CtrlPressed), mb.Position);
                     return Pie.IsOpen;
                 }
                 if (Pie.IsOpen)

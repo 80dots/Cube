@@ -16,9 +16,14 @@ namespace Cube.App.UI.UvEditor;
 /// UV 편집 캔버스. 선택된 오브젝트들의 UV를 0..1 그리드 위에 그리고, 선택(UV점/엣지/면)과 W/E/R 드래그 변형을 처리한다.
 /// 내비게이션: Alt+MMB 팬, Alt+RMB·휠 줌, F 프레임.
 /// </summary>
+public enum UvBackground { None, Grid, UvTexture, Mapped }
+
 public partial class UvCanvas : Control
 {
     private Shell _shell = null!;
+    private UvBackground _background = UvBackground.UvTexture;
+    public UvBackground Background { get => _background; set { _background = value; QueueRedraw(); } }
+    private PieMenu _pie = null!;
     private float _zoom = 400f;          // UV 1단위 = 픽셀
     private GVec2 _origin;               // uv (0,0)의 캔버스 픽셀
     private Texture2D? _gridTex;
@@ -48,6 +53,8 @@ public partial class UvCanvas : Control
         SizeFlagsVertical = SizeFlags.ExpandFill;
         ClipContents = true;
         _gridTex = Icons.LoadPng("res://assets/textures/uv_grid.bin");
+        _pie = new PieMenu { Name = "UvPie" };
+        AddChild(_pie);
         shell.Document.Changed += OnDocChanged;
         shell.Document.Selection.Changed += QueueRedraw;
         shell.Document.Selection.ModeChanged += QueueRedraw;
@@ -175,14 +182,30 @@ public partial class UvCanvas : Control
         DrawRect(new Rect2(GVec2.Zero, Size), MathConvert.Rgb(0x2b2b2b));
         var p0 = UvToPx(new NVec2(0, 1)); var p1 = UvToPx(new NVec2(1, 0));
         var unit = new Rect2(p0, p1 - p0);
-        if (_gridTex != null) DrawTextureRect(_gridTex, unit, false, new Color(1, 1, 1, 0.28f));
-        else DrawRect(unit, MathConvert.Rgb(0x3a3a3a));
-        for (int i = 0; i <= 10; i++)
+        switch (_background)
         {
-            float t = i / 10f;
-            var col = i % 5 == 0 ? MathConvert.Rgb(0x6a6a6a) : MathConvert.Rgb(0x4a4a4a);
-            DrawLine(UvToPx(new NVec2(t, 0)), UvToPx(new NVec2(t, 1)), col, 1 * s);
-            DrawLine(UvToPx(new NVec2(0, t)), UvToPx(new NVec2(1, t)), col, 1 * s);
+            case UvBackground.UvTexture:
+                if (_gridTex != null) DrawTextureRect(_gridTex, unit, false, new Color(1, 1, 1, 0.28f));
+                else DrawRect(unit, MathConvert.Rgb(0x3a3a3a));
+                break;
+            case UvBackground.Mapped:
+                {
+                    // 선택 오브젝트의 머티리얼 텍스처(아직 머티리얼 텍스처 지원 전이면 평면 배경)
+                    var tex = MappedTexture();
+                    if (tex != null) DrawTextureRect(tex, unit, false, Colors.White);
+                    else DrawRect(unit, MathConvert.Rgb(0x3a3a3a));
+                    break;
+                }
+            case UvBackground.Grid:
+                DrawRect(unit, MathConvert.Rgb(0x333333));
+                for (int i = 0; i <= 10; i++)
+                {
+                    float t = i / 10f;
+                    var col = i % 5 == 0 ? MathConvert.Rgb(0x6a6a6a) : MathConvert.Rgb(0x4a4a4a);
+                    DrawLine(UvToPx(new NVec2(t, 0)), UvToPx(new NVec2(t, 1)), col, 1 * s);
+                    DrawLine(UvToPx(new NVec2(0, t)), UvToPx(new NVec2(1, t)), col, 1 * s);
+                }
+                break;
         }
         DrawRect(unit, MathConvert.Rgb(0x9a9a9a), false, 1 * s);
 
@@ -225,8 +248,9 @@ public partial class UvCanvas : Control
                     if (he < 0) continue;
                     var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
                     bool esel = sel.Mode == SelectMode.Edge && IsEdgeSelected(node, e);
-                    var col = esel ? MeshView.EdgeSelected : ed.Seam ? MathConvert.Rgb(0xff5aa0) : MathConvert.Rgb(0xdddddd);
-                    DrawLine(a, b, col, (esel ? 2f : 1f) * s, true);
+                    // 심(Cut된 엣지)은 굵은 노란색, 선택 엣지는 주황색
+                    var col = esel ? MeshView.EdgeSelected : ed.Seam ? MathConvert.Rgb(0xffe034) : MathConvert.Rgb(0xdddddd);
+                    DrawLine(a, b, col, (esel ? 2.5f : ed.Seam ? 2.5f : 1f) * s, true);
                 }
             }
             // UV 점
@@ -258,6 +282,17 @@ public partial class UvCanvas : Control
         return a * 0.5f;
     }
 
+    /// <summary>Mapped Texture 배경: 대상 노드의 머티리얼 텍스처. 아직 머티리얼 텍스처가 없으면 null.</summary>
+    private Texture2D? MappedTexture()
+    {
+        foreach (var node in TargetNodes())
+        {
+            var mv = _shell.Viewport.Scene.GetMeshView(node.Id);
+            if (mv?.MappedTexture != null) return mv.MappedTexture;
+        }
+        return null;
+    }
+
     private static Rect2 RectFrom(GVec2 a, GVec2 b)
     {
         var min = new GVec2(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y));
@@ -274,6 +309,7 @@ public partial class UvCanvas : Control
         {
             case InputEventMouseButton mb:
                 if (mb.Pressed) GrabFocus();
+                if (HandlePie(mb)) { AcceptEvent(); return; }
                 if (mb.Pressed && mb.ButtonIndex == MouseButton.WheelUp) { ZoomAt(mb.Position, 1.1f); AcceptEvent(); return; }
                 if (mb.Pressed && mb.ButtonIndex == MouseButton.WheelDown) { ZoomAt(mb.Position, 1 / 1.1f); AcceptEvent(); return; }
                 if (mb.Pressed && mb.AltPressed && mb.ButtonIndex is MouseButton.Middle or MouseButton.Right or MouseButton.Left && _navButton == MouseButton.None)
@@ -300,6 +336,7 @@ public partial class UvCanvas : Control
                 }
                 break;
             case InputEventMouseMotion mm:
+                if (_pie.IsOpen) { _pie.UpdatePointer(mm.Position); AcceptEvent(); return; }
                 if (_navButton != MouseButton.None)
                 {
                     var d = mm.Position - _last; _last = mm.Position;
@@ -329,6 +366,29 @@ public partial class UvCanvas : Control
         if (e is not InputEventKey) return;
         _shell.Hotkeys._Input(e);
         if (GetViewport().IsInputHandled() || _shell.GetViewport().IsInputHandled()) GetViewport().SetInputAsHandled();
+    }
+
+    /// <summary>RMB(Alt 없이) 홀드 = UV 파이 메뉴. 떼면 하이라이트 항목 실행.</summary>
+    private bool HandlePie(InputEventMouseButton mb)
+    {
+        if (mb.ButtonIndex == MouseButton.Right)
+        {
+            if (mb.Pressed)
+            {
+                if (mb.AltPressed || _pie.IsOpen || _dragging) return _pie.IsOpen;
+                _pie.Open(PieMenus.UvMenu(_shell), mb.Position);
+                return _pie.IsOpen;
+            }
+            if (_pie.IsOpen)
+            {
+                var chosen = _pie.Release();
+                if (chosen != null && chosen.Enabled) _shell.Actions.Invoke(chosen.ActionId);
+                QueueRedraw();
+                return true;
+            }
+            return false;
+        }
+        return _pie.IsOpen;
     }
 
     private void ZoomAt(GVec2 px, float factor)

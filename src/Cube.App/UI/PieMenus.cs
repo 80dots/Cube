@@ -41,6 +41,52 @@ public static class PieMenus
         return ids.Select(id => Item(shell, id)).ToList();
     }
 
+    /// <summary>Ctrl+RMB: 선택 변환. N To Edge, NE To Boundary Edge, E To Vertex, SE To Face, S To UV, SW To UV Island, W Grow, NW Shrink.</summary>
+    public static List<PieItem> SelectMenu(Shell shell) => new()
+    {
+        Item(shell, "select.toEdges", "To Edge"),
+        Item(shell, "select.toBoundaryEdges", "To Boundary Edge"),
+        Item(shell, "select.toVertices", "To Vertex"),
+        Item(shell, "select.toFaces", "To Face"),
+        Item(shell, "select.toUv", "To UV"),
+        Item(shell, "select.toUvIsland", "To UV Island"),
+        Item(shell, "select.grow", "Grow"),
+        Item(shell, "select.shrink", "Shrink"),
+        Item(shell, "select.all", "Select All"),
+        Item(shell, "select.none", "Deselect All"),
+    };
+
+    /// <summary>UV 편집기 RMB: UV 편집기가 지원하는 모든 기능. UV 편집기에 기능을 추가하면 여기에도 넣는다.</summary>
+    public static List<PieItem> UvMenu(Shell shell)
+    {
+        var sel = shell.Document.Selection;
+        PieItem Mode(string label, string action, SelectMode mode) => new(label + (sel.Mode == mode ? " •" : ""), action);
+        return new List<PieItem>
+        {
+            Item(shell, "uv.planarBest", "Planar"),
+            Item(shell, "uv.cylindrical", "Cylindrical"),
+            Item(shell, "uv.unfold", "Unfold"),
+            Item(shell, "uv.layout", "Layout"),
+            Item(shell, "uv.cut", "Cut UV"),
+            Item(shell, "uv.sew", "Sew UV"),
+            Mode("UV Mode", "mode.uv", SelectMode.Uv),
+            Item(shell, "uv.frameSelected", "Frame"),
+            Item(shell, "uv.planarX", "Planar X"),
+            Item(shell, "uv.planarY", "Planar Y"),
+            Item(shell, "uv.planarZ", "Planar Z"),
+            Item(shell, "uv.spherical", "Spherical"),
+            Item(shell, "uv.flipU", "Flip U"),
+            Item(shell, "uv.flipV", "Flip V"),
+            Item(shell, "uv.frameAll", "Frame All"),
+            Item(shell, "uv.cycleBackground", "Background"),
+            Mode("Edge Mode", "mode.edge", SelectMode.Edge),
+            Mode("Face Mode", "mode.face", SelectMode.Face),
+            Mode("Object Mode", "mode.object", SelectMode.Object),
+            Item(shell, "select.toUv", "To UV"),
+            Item(shell, "select.toUvIsland", "To UV Island"),
+        };
+    }
+
     /// <summary>Space 홀드: 뷰 전환. N Top, NE Front, E Right, SE Persp, S Bottom, SW Back, W Left, NW Frame All.</summary>
     public static List<PieItem> ViewMenu(Shell shell) => new()
     {

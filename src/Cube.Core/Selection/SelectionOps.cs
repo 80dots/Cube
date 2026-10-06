@@ -75,6 +75,40 @@ public static class SelectionOps
         set.ExceptWith(remove);
     }
 
+    /// <summary>면 집합의 바깥 경계 엣지(인접 면 중 하나만 집합에 속하거나 메시 경계인 엣지).</summary>
+    public static HashSet<int> BoundaryEdgesOfFaces(PolyMesh m, IEnumerable<int> faces)
+    {
+        var set = new HashSet<int>(faces);
+        var result = new HashSet<int>();
+        var tmp = new List<int>();
+        foreach (int f in set)
+        {
+            if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive) continue;
+            m.GetFaceHalfEdges(f, tmp);
+            foreach (int he in tmp)
+            {
+                var h = m.Hes[he];
+                if (h.Twin < 0 || !set.Contains(m.Hes[h.Twin].Face)) result.Add(h.Edge);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>정점 집합과 관련된 엣지: 양 끝이 모두 집합에 있는 엣지. 하나도 없으면 집합 정점에 닿는 모든 엣지.</summary>
+    public static HashSet<int> EdgesOfVertices(PolyMesh m, IEnumerable<int> vertIds)
+    {
+        var verts = new HashSet<int>(vertIds);
+        var both = new HashSet<int>(); var any = new HashSet<int>();
+        var tmp = new List<int>();
+        foreach (int v in verts)
+        {
+            if (v < 0 || v >= m.VertexCount || !m.Verts[v].Alive) continue;
+            m.GetVertexEdges(v, tmp);
+            foreach (int e in tmp) { any.Add(e); var (a, b) = m.EdgeVertices(e); if (verts.Contains(a) && verts.Contains(b)) both.Add(e); }
+        }
+        return both.Count > 0 ? both : any;
+    }
+
     /// <summary>현재 컴포넌트 선택(모든 타입)을 대상 모드의 집합으로 변환한다.</summary>
     public static HashSet<int> Convert(PolyMesh m, ComponentSet comps, SelectMode from, SelectMode to)
     {

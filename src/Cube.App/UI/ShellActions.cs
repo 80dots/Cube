@@ -5,6 +5,7 @@ using Cube.Core.Commands;
 using Cube.Core.Mesh;
 using Cube.Core.Scene;
 using Cube.Core.Selection;
+using Cube.Core.Uv;
 using Godot;
 
 namespace Cube.App.UI;
@@ -51,6 +52,9 @@ public partial class Shell
         Actions.Register("select.toVertices", "To Vertices", () => ConvertSelection(SelectMode.Vertex), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.toEdges", "To Edges", () => ConvertSelection(SelectMode.Edge), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.toFaces", "To Faces", () => ConvertSelection(SelectMode.Face), canExecute: () => sel.IsComponentMode);
+        Actions.Register("select.toBoundaryEdges", "To Boundary Edges", ConvertToBoundaryEdges, canExecute: () => sel.IsComponentMode);
+        Actions.Register("select.toUv", "To UV", () => ConvertToUv(island: false), canExecute: () => sel.IsComponentMode);
+        Actions.Register("select.toUvIsland", "To UV Island", () => ConvertToUv(island: true), canExecute: () => sel.IsComponentMode);
 
         // --- 편집
         Actions.Register("edit.undo", "Undo", () => doc.Undo.Undo(), canExecute: () => doc.Undo.CanUndo);
@@ -165,6 +169,16 @@ public partial class Shell
         Viewport.Display.RefreshAll();
     }
 
+    /// <summary>UV 모드 선택은 정점 집합으로 바꾼 ComponentSet을 돌려준다(그 외 모드는 그대로).</summary>
+    private static (ComponentSet comps, SelectMode from) NormalizeForConvert(PolyMesh mesh, ComponentSet comps, SelectMode from)
+    {
+        if (from != SelectMode.Uv) return (comps, from);
+        var topo = UvTopology.Build(mesh);
+        var c = new ComponentSet();
+        foreach (int p in comps.Uvs) if (p < topo.Points.Count) c.Verts.Add(topo.Points[p].Vertex);
+        return (c, SelectMode.Vertex);
+    }
+
     private void ConvertSelection(SelectMode to)
     {
         var sel = Document.Selection;
@@ -176,12 +190,70 @@ public partial class Shell
             foreach (var id in s.NodesWithComponents(from).ToArray())
             {
                 var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
-                converted[id] = SelectionOps.Convert(mesh, s.GetComponents(id), from, to);
+                var (comps, f) = NormalizeForConvert(mesh, s.GetComponents(id), from);
+                converted[id] = SelectionOps.Convert(mesh, comps, f, to);
             }
             s.Mode = to;
             bool first = true;
             foreach (var (id, set) in converted) { s.SelectComponents(id, to, set, replace: first); first = false; }
         });
+    }
+
+    /// <summary>To Boundary Edge: 정점/엣지는 포함 면으로, 면은 그대로 → 면 집합의 바깥 경계 엣지. 엣지 모드로 전환.</summary>
+    private void ConvertToBoundaryEdges()
+    {
+        var sel = Document.Selection;
+        var from = sel.Mode;
+        if (from == SelectMode.Object) { sel.Mode = SelectMode.Edge; return; }
+        RecordSelection(s =>
+        {
+            var converted = new Dictionary<NodeId, HashSet<int>>();
+            foreach (var id in s.NodesWithComponents(from).ToArray())
+            {
+                var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
+                var (comps, f) = NormalizeForConvert(mesh, s.GetComponents(id), from);
+                var faces = f == SelectMode.Face ? comps.Faces : SelectionOps.Convert(mesh, comps, f, SelectMode.Face);
+                converted[id] = SelectionOps.BoundaryEdgesOfFaces(mesh, faces);
+            }
+            s.Mode = SelectMode.Edge;
+            bool first = true;
+            foreach (var (id, set) in converted) { s.SelectComponents(id, SelectMode.Edge, set, replace: first); first = false; }
+        });
+    }
+
+    /// <summary>To UV / To UV Island: 선택을 정점으로 바꾼 뒤 그 정점의 UV 점(섬이면 그 점이 속한 셸 전체)을 선택. UV 모드로 전환.</summary>
+    private void ConvertToUv(bool island)
+    {
+        var sel = Document.Selection;
+        var from = sel.Mode;
+        if (from == SelectMode.Object) { sel.Mode = SelectMode.Uv; return; }
+        RecordSelection(s =>
+        {
+            var converted = new Dictionary<NodeId, HashSet<int>>();
+            foreach (var id in s.NodesWithComponents(from).ToArray())
+            {
+                var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
+                var topo = UvTopology.Build(mesh);
+                var comps = s.GetComponents(id);
+                var points = new HashSet<int>();
+                if (from == SelectMode.Uv) points.UnionWith(comps.Uvs.Where(p => p < topo.Points.Count));
+                else
+                {
+                    var verts = from == SelectMode.Vertex ? comps.Verts : SelectionOps.Convert(mesh, comps, from, SelectMode.Vertex);
+                    for (int p = 0; p < topo.Points.Count; p++) if (verts.Contains(topo.Points[p].Vertex)) points.Add(p);
+                }
+                if (island)
+                {
+                    var shells = new HashSet<int>(points.Select(p => topo.Points[p].Shell));
+                    foreach (int sh in shells) points.UnionWith(topo.PointsInShell(sh));
+                }
+                converted[id] = points;
+            }
+            s.Mode = SelectMode.Uv;
+            bool first = true;
+            foreach (var (id, set) in converted) { s.SelectComponents(id, SelectMode.Uv, set, replace: first); first = false; }
+        });
+        UvEditorWindow?.Canvas.QueueRedraw();
     }
 
     private void DeleteSelection()

@@ -61,9 +61,14 @@ public static class MayaTheme
             theme.SetColor("font_disabled_color", type, TextDim);
         }
         // 메뉴바
-        theme.SetStylebox("normal", "MenuBar", new StyleBoxEmpty());
-        theme.SetStylebox("hover", "MenuBar", Flat(ButtonHover, 2, pad: 4));
-        theme.SetStylebox("pressed", "MenuBar", Flat(ButtonPressed, 2, pad: 4));
+        // 메뉴 제목은 normal/hover/pressed 모두 같은 여백을 써서 호버 시 글자가 움직이지 않게 한다
+        var menuNormal = new StyleBoxEmpty();
+        menuNormal.SetContentMarginAll(6 * scale);
+        theme.SetStylebox("normal", "MenuBar", menuNormal);
+        theme.SetStylebox("hover", "MenuBar", Flat(ButtonHover, 2, pad: 6));
+        theme.SetStylebox("pressed", "MenuBar", Flat(ButtonPressed, 2, pad: 6));
+        theme.SetStylebox("disabled", "MenuBar", menuNormal);
+        theme.SetConstant("h_separation", "MenuBar", (int)(10 * scale));
         theme.SetColor("font_color", "MenuBar", Text);
         theme.SetColor("font_hover_color", "MenuBar", Color.Color8(255, 255, 255));
         theme.SetColor("font_pressed_color", "MenuBar", Color.Color8(255, 255, 255));

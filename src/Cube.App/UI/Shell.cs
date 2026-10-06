@@ -123,7 +123,7 @@ public partial class Shell : Control
         {
             var panel = p;
             panel.ToolInput = e => Layout.Active == panel && Tools.HandleInput(e);
-            panel.PieItems = shift => shift ? PieMenus.ContextMenu(this) : PieMenus.ModeMenu(this);
+            panel.PieItems = (shift, ctrl) => ctrl ? PieMenus.SelectMenu(this) : shift ? PieMenus.ContextMenu(this) : PieMenus.ModeMenu(this);
             panel.PieExecute = item => Actions.Invoke(item.ActionId);
         }
         Layout.ActiveChanged += p => ToolContext.Viewport = p;
@@ -187,10 +187,10 @@ public partial class Shell : Control
 
     private void BuildStatusLine(float s)
     {
-        StatusLine.AddChild(new Label { Text = " Select: " });
-        foreach (var (mode, label, action) in new[] { (SelectMode.Object, "Obj", "mode.object"), (SelectMode.Vertex, "Vtx", "mode.vertex"), (SelectMode.Edge, "Edge", "mode.edge"), (SelectMode.Face, "Face", "mode.face") })
+        int icon = (int)(18 * s);
+        foreach (var (mode, iconName, action, tip) in new[] { (SelectMode.Object, "mode_object", "mode.object", "Object Mode (F8)"), (SelectMode.Vertex, "mode_vertex", "mode.vertex", "Vertex Mode (F9)"), (SelectMode.Edge, "mode_edge", "mode.edge", "Edge Mode (F10)"), (SelectMode.Face, "mode_face", "mode.face", "Face Mode (F11)") })
         {
-            var b = new Button { Text = label, ToggleMode = true, FocusMode = FocusModeEnum.None, TooltipText = Actions.Get(action)?.Label };
+            var b = Icons.IconButton(iconName, tip, icon, toggle: true);
             string a = action;
             b.Pressed += () => Actions.Invoke(a);
             _modeButtons[mode] = b;
@@ -200,13 +200,6 @@ public partial class Shell : Control
         _cameraBased = new CheckBox { Text = "Camera-based", ButtonPressed = Settings.CameraBasedSelection, FocusMode = FocusModeEnum.None, TooltipText = "Camera-based selection (occluded components are not selected)" };
         _cameraBased.Toggled += on => Settings.CameraBasedSelection = on;
         StatusLine.AddChild(_cameraBased);
-        StatusLine.AddChild(new VSeparator());
-        _undoBtn = new Button { Text = "Undo", FocusMode = FocusModeEnum.None };
-        _undoBtn.Pressed += () => Actions.Invoke("edit.undo");
-        _redoBtn = new Button { Text = "Redo", FocusMode = FocusModeEnum.None };
-        _redoBtn.Pressed += () => Actions.Invoke("edit.redo");
-        StatusLine.AddChild(_undoBtn);
-        StatusLine.AddChild(_redoBtn);
     }
 
     private void BuildToolBox(float s)
@@ -230,6 +223,16 @@ public partial class Shell : Control
             _axisButtons[axis] = b;
             ToolBox.AddChild(b);
         }
+        // 맨 아래: Undo / Redo
+        var spacer = new Control { SizeFlagsVertical = SizeFlags.ExpandFill, MouseFilter = MouseFilterEnum.Ignore };
+        ToolBox.AddChild(spacer);
+        ToolBox.AddChild(new HSeparator());
+        _undoBtn = Icons.IconButton("undo", "Undo (Ctrl+Z)", icon);
+        _undoBtn.Pressed += () => Actions.Invoke("edit.undo");
+        _redoBtn = Icons.IconButton("redo", "Redo (Ctrl+Y)", icon);
+        _redoBtn.Pressed += () => Actions.Invoke("edit.redo");
+        ToolBox.AddChild(_undoBtn);
+        ToolBox.AddChild(_redoBtn);
     }
 
     private void BuildShelf(float s)
