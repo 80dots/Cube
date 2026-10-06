@@ -1,0 +1,21 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <RootNamespace>Cube</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Godot.NET.Sdk는 루트 이하 모든 *.cs를 글로빙하므로 하위 프로젝트는 제외한다 -->
+    <Compile Remove="src\Cube.Core\**" />
+    <Compile Remove="tests\**" />
+    <None Remove="src\Cube.Core\**" />
+    <None Remove="tests\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="src\Cube.Core\Cube.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -18,8 +18,13 @@ config/icon="res://icon.svg"
 
 [display]
 
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/dpi/allow_hidpi=true
+
+[autoload]
+
+CubeApp="*res://src/Cube.App/App/CubeApp.cs"
 
 [dotnet]
 
