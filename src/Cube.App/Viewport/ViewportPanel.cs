@@ -119,7 +119,7 @@ public partial class ViewportPanel : SubViewportContainer
         if (_doc != null) { Scene.Bind(_doc); Display.Bind(_doc); }
     }
 
-    /// <summary>front/side/back/left 같은 측면 뷰에서는 그리드를 뷰 평면에 세운다(Maya와 동일).</summary>
+    /// <summary>front/side/back/left 같은 측면 프리셋 뷰에서는 그리드를 뷰 평면에 세운다(Maya와 동일). 텀블하면 바닥으로 돌아간다.</summary>
     private void UpdateGridOrientation()
     {
         Grid.Transform = CameraController.Kind switch
@@ -129,6 +129,8 @@ public partial class ViewportPanel : SubViewportContainer
             _ => Transform3D.Identity,
         };
     }
+
+    public override void _Process(double delta) => CameraController?.Update((float)delta);
 
     public void Bind(Document doc)
     {

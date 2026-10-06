@@ -48,7 +48,7 @@ public sealed class ViewportDisplay
         {
             if (_uvGridMaterial == null)
             {
-                var tex = UI.Icons.LoadPng("res://assets/textures/uv_grid.png");
+                var tex = UI.Icons.LoadPng("res://assets/textures/uv_grid.bin");
                 _uvGridMaterial = new StandardMaterial3D { AlbedoTexture = tex, Roughness = 1f, Metallic = 0f, TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic };
             }
             return _uvGridMaterial;

@@ -29,16 +29,17 @@ public partial class PropertiesPanel : VBoxContainer
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         _title = new Label { Text = "" };
         AddChild(_title);
-        var grid = new GridContainer { Columns = 4 };
+        // 패널 폭을 넓히면 필드 열이 같이 늘어나도록 그리드와 필드에 가로 확장 플래그를 준다
+        var grid = new GridContainer { Columns = 4, SizeFlagsHorizontal = SizeFlags.ExpandFill };
         grid.AddChild(new Label { Text = "" });
-        foreach (var h in new[] { "X", "Y", "Z" }) grid.AddChild(new Label { Text = h, HorizontalAlignment = HorizontalAlignment.Center });
+        foreach (var h in new[] { "X", "Y", "Z" }) grid.AddChild(new Label { Text = h, HorizontalAlignment = HorizontalAlignment.Center, SizeFlagsHorizontal = SizeFlags.ExpandFill });
         string[] rows = { "Translate", "Rotate", "Scale" };
         for (int r = 0; r < 3; r++)
         {
             grid.AddChild(new Label { Text = rows[r] });
             for (int c = 0; c < 3; c++)
             {
-                var sb = new SpinBox { Step = 0.001, MinValue = -1e9, MaxValue = 1e9, AllowGreater = true, AllowLesser = true, CustomMinimumSize = new Vector2(64 * s, 0), UpdateOnTextChanged = false };
+                var sb = new SpinBox { Step = 0.001, MinValue = -1e9, MaxValue = 1e9, AllowGreater = true, AllowLesser = true, CustomMinimumSize = new Vector2(56 * s, 0), UpdateOnTextChanged = false, SizeFlagsHorizontal = SizeFlags.ExpandFill };
                 sb.GetLineEdit().ContextMenuEnabled = false;
                 // Enter로 확정하면 Maya처럼 포커스를 뷰포트로 돌린다
                 sb.GetLineEdit().TextSubmitted += _ => CallDeferred(nameof(ReturnFocus));
