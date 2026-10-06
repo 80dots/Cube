@@ -10,6 +10,8 @@ public sealed class Settings
     public const string Path = "user://settings.json";
 
     [JsonPropertyName("recentFiles")] public List<string> RecentFiles { get; set; } = new();
+    /// <summary>UI 배율(%). 화면 DPI 배율에 곱해진다. 기본 130.</summary>
+    [JsonPropertyName("uiScalePercent")] public int UiScalePercent { get; set; } = 130;
     [JsonPropertyName("backgroundIndex")] public int BackgroundIndex { get; set; }
     [JsonPropertyName("cameraBasedSelection")] public bool CameraBasedSelection { get; set; } = true;
     [JsonPropertyName("axisOrientation")] public string AxisOrientation { get; set; } = "World";

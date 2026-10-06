@@ -5,8 +5,8 @@ using NVec3 = System.Numerics.Vector3;
 
 namespace Cube.App.UI.Docks;
 
-/// <summary>Maya Channel Box 최소판: 활성 오브젝트의 Translate/Rotate/Scale XYZ. 편집은 TransformNodesCommand로 기록.</summary>
-public partial class ChannelBox : VBoxContainer
+/// <summary>Properties 패널(Maya Channel Box 역할): 활성 오브젝트의 Translate/Rotate/Scale XYZ. 편집은 TransformNodesCommand로 기록.</summary>
+public partial class PropertiesPanel : VBoxContainer
 {
     private Document _doc = null!;
     private Label _title = null!;
@@ -51,7 +51,7 @@ public partial class ChannelBox : VBoxContainer
         AddChild(grid);
     }
 
-    private void ReturnFocus() => Shell.Instance?.Viewport.GrabFocus();
+    private static void ReturnFocus() => Shell.Instance?.Viewport.GrabFocus();
 
     private void Refresh()
     {

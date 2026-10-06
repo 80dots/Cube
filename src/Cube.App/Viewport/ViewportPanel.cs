@@ -90,6 +90,8 @@ public partial class ViewportPanel : SubViewportContainer
 
         Overlay = new ViewportOverlay { Name = "Overlay", Camera = Camera };
         AddChild(Overlay);
+        Pie = new UI.PieMenu { Name = "PieMenu" };
+        AddChild(Pie);
         CameraController.Changed += () => Overlay.CameraLabel = CameraController.Label;
 
         Display = new ViewportDisplay(this);
@@ -194,19 +196,54 @@ public partial class ViewportPanel : SubViewportContainer
         g.SetColor(1, _bgIndex == 0 ? MathConvert.Rgb(0x2a2a2a) : top);
     }
 
+    public UI.PieMenu Pie { get; private set; } = null!;
+    /// <summary>RMB 파이 메뉴 항목 공급자(shift 여부 → 항목). Shell이 설정한다.</summary>
+    public Func<bool, IEnumerable<UI.PieItem>>? PieItems;
+    public Action<UI.PieItem>? PieExecute;
+
     public override void _GuiInput(InputEvent e)
     {
         if (e is InputEventMouseButton { Pressed: true }) GrabFocus();
         if (Navigation.Handle(e)) { AcceptEvent(); return; }
         if (Navigation.IsDragging) { AcceptEvent(); return; }
+        if (HandlePie(e)) { AcceptEvent(); return; }
         if (ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
+    }
+
+    /// <summary>RMB를 누르면(Alt 없이) 파이 메뉴를 열고, 누른 채 이동하면 하이라이트, 떼면 실행/닫기.</summary>
+    private bool HandlePie(InputEvent e)
+    {
+        if (Pie == null) return false;
+        switch (e)
+        {
+            case InputEventMouseButton { ButtonIndex: MouseButton.Right } mb:
+                if (mb.Pressed)
+                {
+                    if (mb.AltPressed || PieItems == null) return false;
+                    Pie.Open(PieItems(mb.ShiftPressed), mb.Position);
+                    return Pie.IsOpen;
+                }
+                if (Pie.IsOpen)
+                {
+                    var chosen = Pie.Release();
+                    if (chosen != null && chosen.Enabled) PieExecute?.Invoke(chosen);
+                    return true;
+                }
+                return false;
+            case InputEventMouseMotion mm when Pie.IsOpen:
+                Pie.UpdatePointer(mm.Position);
+                return true;
+            case InputEventMouseButton when Pie.IsOpen:
+                return true; // 열린 동안 다른 버튼은 무시
+        }
+        return false;
     }
 
     public bool IsMouseOver { get; private set; }
 
     public override void _Notification(int what)
     {
-        if (what == NotificationApplicationFocusOut) Navigation.Cancel();
+        if (what == NotificationApplicationFocusOut) { Navigation.Cancel(); Pie?.Close(); }
         if (what == NotificationMouseEnter) IsMouseOver = true;
         if (what == NotificationMouseExit) IsMouseOver = false;
     }

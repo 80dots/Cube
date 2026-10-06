@@ -55,7 +55,8 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 ### App (`src/Cube.App`)
 - `App/CubeApp.cs`(autoload): Document, Settings, Hi-DPI 배율, 디버그 인자. `App/DebugDriver.cs`, `App/SmokeExportRunner.cs`.
 - `UI/Shell.cs` + `ShellActions.cs`: 레이아웃은 코드로 구성(.tscn은 루트만). **모든 메뉴/셸프/툴박스/핫키는 `ActionRegistry`의 ActionId만 호출한다.** 새 기능은 `RegisterActions`에 액션을 등록하고 `BuildMenus`에 넣는다. `Hotkeys/ShellInput.cs`가 `_Input`에서 키를 라우팅(텍스트 필드 포커스 시 무시, `viewport` 컨텍스트 = 마우스 오버/포커스). 바인딩은 `config/hotkeys.default.json`(`user://hotkeys.json`로 덮어쓰기). Godot `InputMap`은 쓰지 않는다.
-- `Viewport/ViewportPanel.cs`: SubViewport(자체 월드, Canvas 배경 그라디언트, 헤드라이트). 입력 순서: `NavigationHandler`(Alt+버튼/휠) → `ToolManager.Current` → 끝. `ViewportDisplay`가 선택/셰이딩 모드를 `MeshView.Style`로 변환. `SceneView`/`MeshView`가 Document를 미러링(표면·와이어·정점·면중심·면 틴트).
+- `Viewport/ViewportPanel.cs`: SubViewport(자체 월드, Canvas 배경 그라디언트, 헤드라이트). 입력 순서: `NavigationHandler`(Alt+버튼/휠) → 파이 메뉴(`UI/PieMenu.cs`, RMB 홀드 = 모드 전환, Shift+RMB = 현재 모드 액션; 항목은 `UI/PieMenus.cs`) → `ToolManager.Current` → 끝.
+- UI 배율: `CubeApp.UiScale = 화면 DPI 배율 × Settings.UiScalePercent(기본 130)`. 창 `ContentScaleFactor`는 쓰지 않는다(3D 뷰포트가 흐려짐). 테마/위젯/픽셀 상수가 모두 `UiScale`을 곱한다. Edit → Preferences(`UI/PreferencesDialog.cs`)에서 바꾸면 `CubeApp.ReloadShell()`이 셸을 다시 만든다(문서 유지). 우측 도크는 Properties(`UI/Docks/PropertiesPanel.cs`, Maya Channel Box 역할). `ViewportDisplay`가 선택/셰이딩 모드를 `MeshView.Style`로 변환. `SceneView`/`MeshView`가 Document를 미러링(표면·와이어·정점·면중심·면 틴트).
 - `Tools/`: `SelectTool`(클릭/마키/호버/RMB 모드 메뉴) → `TransformToolBase`(피벗, 축 방향 World/Object/Normal, 드래그 캡처/커밋) → `MoveTool`/`RotateTool`/`ScaleTool`. 조작기는 `Viewport/Gizmos/`(화면 고정 100px, 깊이 무시, CPU 스크린 공간 히트).
 - `IO/`: `GltfExporter`(GltfDocument), `GltfImporter`/`FbxImporter`(GenerateScene 순회), `FileActions`/`SceneFileActions`(네이티브 다이얼로그).
 

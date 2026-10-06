@@ -27,6 +27,7 @@
     { "action": "edit.delete", "chord": "Delete" },
     { "action": "edit.delete", "chord": "Backspace" },
     { "action": "edit.duplicate", "chord": "Ctrl+D" },
+    { "action": "edit.preferences", "chord": "Ctrl+Comma" },
     { "action": "mesh.extrude", "chord": "Ctrl+E" },
 
     { "action": "file.new", "chord": "Ctrl+N" },

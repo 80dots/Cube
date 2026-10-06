@@ -23,10 +23,10 @@ public partial class Shell : Control
     public VBoxContainer OutlinerDock { get; private set; } = null!;
     public PanelContainer OutlinerBody { get; private set; } = null!;
     public Docks.Outliner Outliner { get; private set; } = null!;
-    public Docks.ChannelBox ChannelBox { get; private set; } = null!;
+    public Docks.PropertiesPanel Properties { get; private set; } = null!;
     public ViewportPanel Viewport { get; private set; } = null!;
-    public VBoxContainer ChannelBoxDock { get; private set; } = null!;
-    public PanelContainer ChannelBoxBody { get; private set; } = null!;
+    public VBoxContainer PropertiesDock { get; private set; } = null!;
+    public PanelContainer PropertiesBody { get; private set; } = null!;
     public Label HelpLine { get; private set; } = null!;
 
     public ActionRegistry Actions { get; } = new();
@@ -99,10 +99,10 @@ public partial class Shell : Control
         Viewport = new ViewportPanel { Name = "Viewport" };
         _rightSplit.AddChild(Viewport);
 
-        (ChannelBoxDock, ChannelBoxBody) = MakeDock("Channel Box", 240 * s);
-        ChannelBox = new Docks.ChannelBox { Name = "ChannelBox" };
-        ChannelBoxBody.AddChild(ChannelBox);
-        _rightSplit.AddChild(ChannelBoxDock);
+        (PropertiesDock, PropertiesBody) = MakeDock("Properties", 240 * s);
+        Properties = new Docks.PropertiesPanel { Name = "Properties" };
+        PropertiesBody.AddChild(Properties);
+        _rightSplit.AddChild(PropertiesDock);
 
         HelpLine = new Label { Name = "HelpLine", Text = "Select a tool.", CustomMinimumSize = new Vector2(0, 20 * s) };
         root.AddChild(Wrap(HelpLine, MayaTheme.PanelDark));
@@ -112,7 +112,7 @@ public partial class Shell : Control
 
         Viewport.Bind(Document);
         Outliner.Bind(Document);
-        ChannelBox.Bind(Document);
+        Properties.Bind(Document);
 
         // --- 서비스
         ToolContext = new ToolContext { Doc = Document, Viewport = Viewport, Settings = Settings, SetHelp = t => HelpLine.Text = t };
@@ -120,6 +120,8 @@ public partial class Shell : Control
         Tools = new ToolManager(ToolContext);
         RegisterTools();
         Viewport.ToolInput = e => Tools.HandleInput(e);
+        Viewport.PieItems = shift => shift ? PieMenus.ContextMenu(this) : PieMenus.ModeMenu(this);
+        Viewport.PieExecute = item => Actions.Invoke(item.ActionId);
 
         Hotkeys = new ShellInput { Name = "ShellInput", Actions = Actions, IsViewportContext = () => Viewport.IsViewportContext };
         AddChild(Hotkeys);
@@ -248,7 +250,7 @@ public partial class Shell : Control
     public void ToggleMaximizeViewport()
     {
         _maximized = !_maximized;
-        foreach (var n in new Control[] { MenuBar.GetParent<Control>() == this ? MenuBar : MenuBar, StatusLine.GetParent<Control>(), Shelf, _mainSplit.GetChild<Control>(0), ChannelBoxDock, HelpLine.GetParent<Control>() })
+        foreach (var n in new Control[] { MenuBar.GetParent<Control>() == this ? MenuBar : MenuBar, StatusLine.GetParent<Control>(), Shelf, _mainSplit.GetChild<Control>(0), PropertiesDock, HelpLine.GetParent<Control>() })
             if (n != MenuBar) n.Visible = !_maximized;
     }
 

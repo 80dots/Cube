@@ -54,6 +54,7 @@ public partial class Shell
         Actions.Register("edit.repeatLast", "Repeat Last", () => Actions.RepeatLast(), canExecute: () => Actions.LastRepeatable != null);
         Actions.Register("edit.delete", "Delete", DeleteSelection, canExecute: () => !sel.IsEmpty, repeatable: true);
         Actions.Register("edit.duplicate", "Duplicate", DuplicateSelection, canExecute: () => sel.Objects.Count > 0, repeatable: true);
+        Actions.Register("edit.preferences", "Preferences...", ShowPreferences);
 
         // --- 생성
         Actions.Register("create.cube", "Polygon Cube", () => doc.Undo.Push(CreatePrimitiveCommand.Cube(doc)), repeatable: true);
@@ -111,7 +112,7 @@ public partial class Shell
 
         // --- 창
         Actions.Register("windows.outliner", "Outliner", () => OutlinerDock.Visible = !OutlinerDock.Visible, isChecked: () => OutlinerDock.Visible);
-        Actions.Register("windows.channelBox", "Channel Box", () => ChannelBoxDock.Visible = !ChannelBoxDock.Visible, isChecked: () => ChannelBoxDock.Visible);
+        Actions.Register("windows.properties", "Properties", () => PropertiesDock.Visible = !PropertiesDock.Visible, isChecked: () => PropertiesDock.Visible);
         Actions.Register("windows.uvEditor", "UV Editor", () => { }, canExecute: () => false);
         Actions.Register("help.about", "About Cube", () => HelpLine.Text = $"Cube {ProjectSettings.GetSetting("application/config/version")} — Godot {Engine.GetVersionInfo()["string"]}");
 
@@ -352,6 +353,24 @@ public partial class Shell
 
     public void UpdateTitle() => DisplayServer.WindowSetTitle(SceneFiles.Title);
 
+    private PreferencesDialog? _prefs;
+
+    private void ShowPreferences()
+    {
+        if (_prefs == null || !GodotObject.IsInstanceValid(_prefs))
+        {
+            _prefs = new PreferencesDialog();
+            AddChild(_prefs);
+        }
+        _prefs.PopupCentered();
+    }
+
+    /// <summary>환경설정 변경을 상태 라인 위젯에 반영.</summary>
+    public void SyncStatusLine()
+    {
+        _cameraBased.SetPressedNoSignal(Settings.CameraBasedSelection);
+    }
+
     private PopupMenu? _recentMenu;
 
     private void RefreshRecentMenu()
@@ -393,7 +412,8 @@ public partial class Shell
         Menus.Build(Add("Edit"))
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
             .Item("edit.delete").Item("edit.duplicate").Separator()
-            .Item("select.all").Item("select.none");
+            .Item("select.all").Item("select.none").Separator()
+            .Item("edit.preferences");
 
         Menus.Build(Add("Create"))
             .Submenu("Polygon Primitives", m => m.Item("create.cube", "Cube").Item("create.sphere", "Sphere").Item("create.cylinder", "Cylinder").Item("create.cone", "Cone").Item("create.plane", "Plane").Item("create.torus", "Torus"));
@@ -421,7 +441,7 @@ public partial class Shell
             .Item("display.grid").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
-        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.channelBox").Item("windows.uvEditor");
+        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor");
         Menus.Build(Add("Help")).Item("help.about");
     }
 }

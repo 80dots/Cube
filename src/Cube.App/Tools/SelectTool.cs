@@ -21,9 +21,6 @@ public class SelectTool : ToolBase
     private Vector2 _pressPos;
     private bool _marquee;
     private SelectModifier _modifier;
-    private bool _rmbPressed;
-    private Vector2 _rmbPos;
-    private PopupMenu? _modeMenu;
 
     public const float DragThresholdPx = 4f;
 
@@ -61,15 +58,6 @@ public class SelectTool : ToolBase
                 UpdateHover(mm.Position);
                 return false;
 
-            case InputEventMouseButton { ButtonIndex: MouseButton.Right } rmb:
-                if (rmb.Pressed) { _rmbPressed = true; _rmbPos = rmb.Position; return true; }
-                if (_rmbPressed)
-                {
-                    _rmbPressed = false;
-                    if ((rmb.Position - _rmbPos).Length() < DragThresholdPx * CubeApp.Instance.UiScale) ShowModeMenu(rmb.Position);
-                    return true;
-                }
-                return false;
         }
         return false;
     }
@@ -80,7 +68,7 @@ public class SelectTool : ToolBase
 
     public override void Cancel()
     {
-        _pressed = false; _marquee = false; _rmbPressed = false;
+        _pressed = false; _marquee = false;
         Ctx.Viewport.Overlay.Marquee = null;
     }
 
@@ -139,28 +127,5 @@ public class SelectTool : ToolBase
         // 바뀐 노드만 갱신
         if (prev is { } p && Ctx.Viewport.Scene.GetMeshView(p.Item1) is { } pv) display.ApplyStyle(pv);
         if (h is { } n && (prev == null || prev.Value.Item1 != n.Item1) && Ctx.Viewport.Scene.GetMeshView(n.Item1) is { } nv) display.ApplyStyle(nv);
-    }
-
-    // ------------------------------------------------------------ RMB 모드 메뉴
-
-    private void ShowModeMenu(Vector2 px)
-    {
-        var shell = UI.Shell.Instance;
-        if (_modeMenu == null)
-        {
-            _modeMenu = new PopupMenu { Name = "ComponentModeMenu" };
-            foreach (var (label, action) in new[] { ("Object Mode", "mode.object"), ("Vertex", "mode.vertex"), ("Edge", "mode.edge"), ("Face", "mode.face"), ("UV", "mode.uv") })
-            {
-                _modeMenu.AddItem(label, _modeMenu.ItemCount);
-                _modeMenu.SetItemMetadata(_modeMenu.ItemCount - 1, action);
-            }
-            _modeMenu.AddSeparator();
-            _modeMenu.AddItem("Select All", _modeMenu.ItemCount); _modeMenu.SetItemMetadata(_modeMenu.ItemCount - 1, "select.all");
-            _modeMenu.IdPressed += id => shell.Actions.Invoke(_modeMenu.GetItemMetadata((int)id).AsString());
-            shell.AddChild(_modeMenu);
-        }
-        var global = Ctx.Viewport.GlobalPosition + px;
-        _modeMenu.Position = new Vector2I((int)global.X, (int)global.Y);
-        _modeMenu.Popup();
     }
 }

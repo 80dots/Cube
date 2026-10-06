@@ -20,13 +20,29 @@ public partial class CubeApp : Node
     public override void _Ready()
     {
         Instance = this;
-        UiScale = (float)DisplayServer.ScreenGetScale();
-        GetWindow().ContentScaleFactor = UiScale;
         Settings = Settings.Load();
+        ApplyUiScale();
         Document = new Document();
 
         ParseDebugArgs();
         GD.Print($"[Cube] core={Core.CoreInfo.Name} uiScale={UiScale} nodes={Document.Nodes.Count}");
+    }
+
+    /// <summary>
+    /// UI 배율 = 화면 DPI 배율 × 환경설정 퍼센트. 창의 ContentScaleFactor는 쓰지 않는다(3D 뷰포트가 업스케일되어 흐려짐).
+    /// 테마/위젯 크기와 픽셀 상수가 이 값을 곱해 쓴다.
+    /// </summary>
+    public void ApplyUiScale()
+    {
+        float dpi = (float)DisplayServer.ScreenGetScale();
+        UiScale = dpi * Math.Clamp(Settings.UiScalePercent, 50, 300) / 100f;
+    }
+
+    /// <summary>환경설정 변경 후 셸을 다시 만든다(문서는 유지).</summary>
+    public void ReloadShell()
+    {
+        ApplyUiScale();
+        GetTree().ReloadCurrentScene();
     }
 
     // 종료 확인과 설정 저장은 Shell이 처리한다(AutoAcceptQuit=false).
