@@ -33,3 +33,6 @@ obj/
 *.user
 .vs/
 TestResults/
+
+# JetBrains Rider
+.idea/
