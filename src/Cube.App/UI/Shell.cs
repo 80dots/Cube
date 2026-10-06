@@ -34,6 +34,7 @@ public partial class Shell : Control
     public ToolManager Tools { get; private set; } = null!;
     public ToolContext ToolContext { get; private set; } = null!;
     public MenuBuilder Menus { get; private set; } = null!;
+    public IO.FileActions Files { get; private set; } = null!;
 
     private readonly Dictionary<SelectMode, Button> _modeButtons = new();
     private readonly Dictionary<string, Button> _toolButtons = new();

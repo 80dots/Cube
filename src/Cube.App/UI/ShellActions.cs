@@ -76,10 +76,14 @@ public partial class Shell
         foreach (var (id, label) in new[] { ("mesh.bevel", "Bevel"), ("mesh.bridge", "Bridge"), ("mesh.insertLoop", "Insert Edge Loop"), ("mesh.multiCut", "Multi-Cut") })
             Actions.Register(id, label, () => { }, canExecute: () => false);
 
-        // --- 파일 (이후 단계)
+        // --- 파일
+        Files = new IO.FileActions(doc, Settings, this, msg => HelpLine.Text = msg);
         Actions.Register("file.new", "New Scene", NewScene);
-        foreach (var (id, label) in new[] { ("file.open", "Open Scene..."), ("file.save", "Save Scene"), ("file.saveAs", "Save Scene As..."), ("file.import", "Import..."), ("file.exportSelection", "Export Selection..."), ("file.exportAll", "Export All...") })
+        foreach (var (id, label) in new[] { ("file.open", "Open Scene..."), ("file.save", "Save Scene"), ("file.saveAs", "Save Scene As...") })
             Actions.Register(id, label, () => { }, canExecute: () => false);
+        Actions.Register("file.import", "Import...", () => Files.ShowImportDialog());
+        Actions.Register("file.exportSelection", "Export Selection...", () => Files.ShowExportDialog(true), canExecute: () => sel.Objects.Count > 0);
+        Actions.Register("file.exportAll", "Export All...", () => Files.ShowExportDialog(false), canExecute: () => doc.Root.Children.Count > 0);
         Actions.Register("file.exit", "Exit", () => GetTree().Quit());
 
         // --- 뷰

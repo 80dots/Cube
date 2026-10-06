@@ -118,6 +118,12 @@ public partial class DebugDriver : Node
             case "action":
                 GD.Print($"[Drive] action {p[1]}: {UI.Shell.Instance.Actions.Invoke(p[1])}");
                 break;
+            case "export":
+                GD.Print($"[Drive] export: {UI.Shell.Instance.Files.Export(p[1], selectionOnly: p.Length > 2 && p[2] == "selection")}");
+                break;
+            case "import":
+                GD.Print($"[Drive] import: {UI.Shell.Instance.Files.Import(p[1])}");
+                break;
             case "print":
                 {
                     var doc = CubeApp.Instance.Document;

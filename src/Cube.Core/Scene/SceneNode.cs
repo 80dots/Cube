@@ -42,6 +42,13 @@ public class SceneNode
     /// <summary>문서 루트 여부(루트는 표시·선택되지 않는다).</summary>
     public bool IsRoot { get; internal set; }
 
+    /// <summary>문서에 넣기 전 트리를 구성할 때 쓰는 자식 연결(가져오기 등).</summary>
+    public void AttachChild(SceneNode child)
+    {
+        child.Parent = this;
+        Children.Add(child);
+    }
+
     public IEnumerable<SceneNode> Descendants()
     {
         foreach (var c in Children)
