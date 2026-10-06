@@ -4,7 +4,7 @@ using Godot;
 
 namespace Cube.App.Viewport;
 
-/// <summary>OrbitCamera 상태를 Godot Camera3D에 적용한다. 뷰 종류(persp/front/side/top)별 상태를 보관한다.</summary>
+/// <summary>OrbitCamera 상태를 Godot Camera3D에 적용한다. 뷰 종류(persp/front/side/top/back/left/bottom)별 상태를 보관한다.</summary>
 public sealed class ViewportCamera
 {
     private readonly Camera3D _cam;
@@ -14,15 +14,23 @@ public sealed class ViewportCamera
     public OrbitCamera State { get; private set; }
     public event Action? Changed;
 
-    public ViewportCamera(Camera3D cam)
+    public ViewportCamera(Camera3D cam, ViewKind initial = ViewKind.Persp)
     {
         _cam = cam;
         foreach (ViewKind k in Enum.GetValues<ViewKind>()) _states[k] = OrbitCamera.Preset(k);
-        State = _states[ViewKind.Persp];
+        Kind = initial;
+        State = _states[initial];
         Apply();
     }
 
-    public string Label => Kind switch { ViewKind.Front => "front", ViewKind.Side => "side", ViewKind.Top => "top", _ => "persp" };
+    public string Label => Kind switch
+    {
+        ViewKind.Front => "front", ViewKind.Side => "side", ViewKind.Top => "top",
+        ViewKind.Back => "back", ViewKind.Left => "left", ViewKind.Bottom => "bottom",
+        _ => State.IsOrtho ? "persp (ortho)" : "persp",
+    };
+
+    public bool IsOrtho => State.IsOrtho;
 
     public void SetView(ViewKind kind)
     {
@@ -36,6 +44,8 @@ public sealed class ViewportCamera
         State.CopyFrom(OrbitCamera.Preset(Kind));
         Apply();
     }
+
+    public void ToggleOrtho() { State.ToggleOrtho(); Apply(); }
 
     public void Tumble(float dx, float dy) { State.Tumble(dx, dy); Apply(); }
     public void Track(float dx, float dy, float vpHeight) { State.Track(dx, dy, vpHeight); Apply(); }

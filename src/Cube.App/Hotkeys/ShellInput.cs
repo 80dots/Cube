@@ -19,18 +19,32 @@ public partial class ShellInput : Node
         Map = HotkeyMap.Load();
     }
 
+    /// <summary>Space 누름/뗌(텍스트 필드 포커스가 아닐 때). Shell이 탭=레이아웃 토글, 홀드=뷰 파이로 해석한다.</summary>
+    public event Action? SpaceDown;
+    public event Action? SpaceUp;
+    private bool _spaceHeld;
+
     public override void _Input(InputEvent e)
     {
         if (e is not InputEventKey k) return;
-        if (!k.Pressed) { HeldKeys.Remove(k.Keycode); HeldKeys.Remove(k.PhysicalKeycode); return; }
-        if (k.Echo) return;
-        HeldKeys.Add(k.Keycode);
-
         var focus = GetViewport().GuiGetFocusOwner();
         bool textFocused = focus is LineEdit or TextEdit || (focus != null && focus.GetParent() is SpinBox);
+        if (!k.Pressed)
+        {
+            HeldKeys.Remove(k.Keycode); HeldKeys.Remove(k.PhysicalKeycode);
+            if (k.Keycode == Key.Space && _spaceHeld) { _spaceHeld = false; SpaceUp?.Invoke(); GetViewport().SetInputAsHandled(); }
+            return;
+        }
+        if (k.Echo) return;
+        HeldKeys.Add(k.Keycode);
         if (textFocused)
         {
             if (k.Keycode == Key.Escape) { focus!.ReleaseFocus(); Actions.Invoke("app.escape"); GetViewport().SetInputAsHandled(); }
+            return;
+        }
+        if (k.Keycode == Key.Space && !k.CtrlPressed && !k.AltPressed && !k.ShiftPressed)
+        {
+            _spaceHeld = true; SpaceDown?.Invoke(); GetViewport().SetInputAsHandled();
             return;
         }
 

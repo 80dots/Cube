@@ -86,5 +86,24 @@ public class OrbitCameraTests
         Assert.True(Near(side.Forward, -Vector3.UnitX));    // 오른쪽(+X)에서 -X를 봄
         front.Tumble(100, 100);
         Assert.Equal(0f, front.Yaw);                        // ortho에서는 텀블 무시
+        Assert.True(Near(OrbitCamera.Preset(ViewKind.Back).Forward, Vector3.UnitZ));
+        Assert.True(Near(OrbitCamera.Preset(ViewKind.Left).Forward, Vector3.UnitX));
+        Assert.True(Near(OrbitCamera.Preset(ViewKind.Bottom).Forward, Vector3.UnitY));
+    }
+
+    [Fact]
+    public void ToggleOrtho_KeepsFraming_AndPerspCanTumbleInOrtho()
+    {
+        var c = OrbitCamera.MayaDefault();
+        c.AllowOrthoTumble = true;
+        float d = c.Distance;
+        c.ToggleOrtho();
+        Assert.True(c.IsOrtho);
+        Assert.True(MathF.Abs(c.OrthoSize - 2 * d * MathF.Tan(c.FovDegrees * MathF.PI / 360f)) < 1e-3f);
+        float yaw = c.Yaw; c.Tumble(50, 0);
+        Assert.NotEqual(yaw, c.Yaw);
+        c.ToggleOrtho();
+        Assert.False(c.IsOrtho);
+        Assert.True(MathF.Abs(c.Distance - d) < 1e-3f);
     }
 }

@@ -7,10 +7,12 @@ namespace Cube.App.Viewport;
 
 /// <summary>
 /// 3D 뷰포트 위젯. SubViewport에 자체 World3D를 두고 카메라·헤드라이트·그리드·SceneView를 담는다.
-/// 입력은 이 컨테이너의 _GuiInput에서만 받아 내비게이션 → 툴 순으로 넘긴다.
+/// 입력은 이 컨테이너의 _GuiInput에서만 받아 내비게이션 → 파이 메뉴 → 툴 순으로 넘긴다.
 /// </summary>
 public partial class ViewportPanel : SubViewportContainer
 {
+    public ViewKind InitialView = ViewKind.Persp;
+
     public SubViewport Viewport { get; private set; } = null!;
     public Camera3D Camera { get; private set; } = null!;
     public ViewportCamera CameraController { get; private set; } = null!;
@@ -19,10 +21,21 @@ public partial class ViewportPanel : SubViewportContainer
     public GridView Grid { get; private set; } = null!;
     public SceneView Scene { get; private set; } = null!;
     public ViewportOverlay Overlay { get; private set; } = null!;
+    public ViewportHud Hud { get; private set; } = null!;
     public Node3D GizmoRoot { get; private set; } = null!;
+    public ViewportDisplay Display { get; private set; } = null!;
+    public UI.PieMenu Pie { get; private set; } = null!;
 
-    /// <summary>내비게이션이 소비하지 않은 이벤트를 받는다(툴 라우팅). true를 반환하면 소비.</summary>
+    private Picker? _picker;
+    public Picker Picker => _picker ??= new Picker(this);
+
+    /// <summary>내비게이션/파이가 소비하지 않은 이벤트를 받는다(툴 라우팅). true를 반환하면 소비.</summary>
     public Func<InputEvent, bool>? ToolInput;
+    /// <summary>RMB 파이 메뉴 항목 공급자(shift 여부 → 항목). Shell이 설정한다.</summary>
+    public Func<bool, IEnumerable<UI.PieItem>>? PieItems;
+    public Action<UI.PieItem>? PieExecute;
+    /// <summary>마우스가 들어오거나 버튼이 눌리면 발생(활성 패널 전환).</summary>
+    public event Action? Activated;
 
     private Document? _doc;
     private TextureRect _background = null!;
@@ -52,7 +65,6 @@ public partial class ViewportPanel : SubViewportContainer
         };
         AddChild(Viewport);
 
-        // 배경 그라디언트: Environment Canvas 모드로 SubViewport의 2D 캔버스를 배경으로 그린다
         var gradient = new Gradient();
         gradient.SetColor(0, BackgroundCycle[0]);
         gradient.SetColor(1, MathConvert.Rgb(0x2a2a2a));
@@ -73,18 +85,16 @@ public partial class ViewportPanel : SubViewportContainer
 
         Camera = new Camera3D { Name = "Camera", Fov = 45, Near = 0.05f, Far = 10000f, Current = true };
         Viewport.AddChild(Camera);
-        CameraController = new ViewportCamera(Camera);
+        CameraController = new ViewportCamera(Camera, InitialView);
         Navigation = new NavigationHandler(this);
 
         HeadLight = new DirectionalLight3D { Name = "HeadLight", LightEnergy = 1.0f, ShadowEnabled = false };
-        Camera.AddChild(HeadLight); // 카메라를 따라가는 헤드라이트(Maya 기본 라이팅)
+        Camera.AddChild(HeadLight);
 
         Grid = new GridView { Name = "Grid" };
         Viewport.AddChild(Grid);
-
         Scene = new SceneView { Name = "Scene" };
         Viewport.AddChild(Scene);
-
         GizmoRoot = new Node3D { Name = "Gizmos" };
         Viewport.AddChild(GizmoRoot);
 
@@ -92,16 +102,33 @@ public partial class ViewportPanel : SubViewportContainer
         AddChild(Overlay);
         Pie = new UI.PieMenu { Name = "PieMenu" };
         AddChild(Pie);
-        CameraController.Changed += () => Overlay.CameraLabel = CameraController.Label;
 
         Display = new ViewportDisplay(this);
+        CameraController.Changed += () => { Overlay.CameraLabel = CameraController.Label; UpdateGridOrientation(); };
+        Overlay.CameraLabel = CameraController.Label;
+        UpdateGridOrientation();
+
+        float s = CubeApp.Instance.UiScale;
+        Hud = new ViewportHud { Name = "Hud" };
+        Hud.SetAnchorsPreset(LayoutPreset.TopRight);
+        Hud.Position = new Vector2(-8 * s, 8 * s);
+        Hud.GrowHorizontal = GrowDirection.Begin;
+        AddChild(Hud);
+        Hud.Setup(this);
 
         if (_doc != null) { Scene.Bind(_doc); Display.Bind(_doc); }
     }
 
-    public ViewportDisplay Display { get; private set; } = null!;
-    private Picker? _picker;
-    public Picker Picker => _picker ??= new Picker(this);
+    /// <summary>front/side/back/left 같은 측면 뷰에서는 그리드를 뷰 평면에 세운다(Maya와 동일).</summary>
+    private void UpdateGridOrientation()
+    {
+        Grid.Transform = CameraController.Kind switch
+        {
+            ViewKind.Front or ViewKind.Back => new Transform3D(Basis.FromEuler(new Vector3(Mathf.Pi / 2, 0, 0)), Vector3.Zero),
+            ViewKind.Side or ViewKind.Left => new Transform3D(Basis.FromEuler(new Vector3(0, 0, Mathf.Pi / 2)), Vector3.Zero),
+            _ => Transform3D.Identity,
+        };
+    }
 
     public void Bind(Document doc)
     {
@@ -110,18 +137,20 @@ public partial class ViewportPanel : SubViewportContainer
     }
 
     public Document? Document => _doc;
-
     public float Aspect => Size.Y > 0 ? Size.X / Size.Y : 1f;
 
-    public void SetView(ViewKind kind) => CameraController.SetView(kind);
+    public void SetView(ViewKind kind)
+    {
+        CameraController.SetView(kind);
+        Hud?.Refresh();
+    }
 
     /// <summary>F: 선택을 프레임, 선택이 없으면 전체(A).</summary>
     public void FrameSelected()
     {
         if (_doc == null) return;
         var ids = _doc.Selection.Objects.ToList();
-        if (_doc.Selection.IsComponentMode)
-            ids.AddRange(_doc.Selection.NodesWithComponents(_doc.Selection.Mode));
+        if (_doc.Selection.IsComponentMode) ids.AddRange(_doc.Selection.NodesWithComponents(_doc.Selection.Mode));
         if (ids.Count == 0) { FrameAll(); return; }
         Aabb? total = null;
         foreach (var id in ids.Distinct())
@@ -196,21 +225,22 @@ public partial class ViewportPanel : SubViewportContainer
         g.SetColor(1, _bgIndex == 0 ? MathConvert.Rgb(0x2a2a2a) : top);
     }
 
-    public UI.PieMenu Pie { get; private set; } = null!;
-    /// <summary>RMB 파이 메뉴 항목 공급자(shift 여부 → 항목). Shell이 설정한다.</summary>
-    public Func<bool, IEnumerable<UI.PieItem>>? PieItems;
-    public Action<UI.PieItem>? PieExecute;
+    // ---------------------------------------------------------------- 입력
+
+    /// <summary>이 패널이 마지막으로 받은 마우스 위치(로컬). OS 커서 위치 대신 쓰므로 주입된 입력에서도 맞다.</summary>
+    public Vector2 LastMouseLocal { get; private set; }
 
     public override void _GuiInput(InputEvent e)
     {
-        if (e is InputEventMouseButton { Pressed: true }) GrabFocus();
+        if (e is InputEventMouse me) { LastMouseLocal = me.Position; if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); } }
+        if (e is InputEventMouseButton { Pressed: true }) { GrabFocus(); Activated?.Invoke(); }
         if (Navigation.Handle(e)) { AcceptEvent(); return; }
         if (Navigation.IsDragging) { AcceptEvent(); return; }
         if (HandlePie(e)) { AcceptEvent(); return; }
         if (ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
     }
 
-    /// <summary>RMB를 누르면(Alt 없이) 파이 메뉴를 열고, 누른 채 이동하면 하이라이트, 떼면 실행/닫기.</summary>
+    /// <summary>RMB를 누르면(Alt 없이) 파이 메뉴를 열고, 누른 채 이동하면 하이라이트, 떼면 실행/닫기. Space 파이도 같은 경로로 이동/실행된다.</summary>
     private bool HandlePie(InputEvent e)
     {
         if (Pie == null) return false;
@@ -219,7 +249,7 @@ public partial class ViewportPanel : SubViewportContainer
             case InputEventMouseButton { ButtonIndex: MouseButton.Right } mb:
                 if (mb.Pressed)
                 {
-                    if (mb.AltPressed || PieItems == null) return false;
+                    if (mb.AltPressed || PieItems == null || Pie.IsOpen) return Pie.IsOpen;
                     Pie.Open(PieItems(mb.ShiftPressed), mb.Position);
                     return Pie.IsOpen;
                 }
@@ -234,17 +264,22 @@ public partial class ViewportPanel : SubViewportContainer
                 Pie.UpdatePointer(mm.Position);
                 return true;
             case InputEventMouseButton when Pie.IsOpen:
-                return true; // 열린 동안 다른 버튼은 무시
+                return true;
         }
         return false;
     }
+
+    /// <summary>키보드(Space)로 여는 파이: 현재 마우스 위치에 연다.</summary>
+    public void OpenPieAtMouse(IEnumerable<UI.PieItem> items) => Pie.Open(items, LastMouseLocal);
+
+    public UI.PieItem? ReleasePie() => Pie.IsOpen ? Pie.Release() : null;
 
     public bool IsMouseOver { get; private set; }
 
     public override void _Notification(int what)
     {
         if (what == NotificationApplicationFocusOut) { Navigation.Cancel(); Pie?.Close(); }
-        if (what == NotificationMouseEnter) IsMouseOver = true;
+        if (what == NotificationMouseEnter) { IsMouseOver = true; Activated?.Invoke(); }
         if (what == NotificationMouseExit) IsMouseOver = false;
     }
 

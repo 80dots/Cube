@@ -31,6 +31,9 @@ public partial class Shell
             Actions.Register("tool." + id, label, () => Tools.SetTool(t), isChecked: () => Tools.Current?.Id == t);
         }
         Actions.Register("tool.last", "Last Tool", () => Tools.SwapToPrevious());
+        Actions.Register("axis.world", "Axis: World", () => ToolContext.AxisOrientation = AxisOrientation.World, isChecked: () => ToolContext.AxisOrientation == AxisOrientation.World);
+        Actions.Register("axis.local", "Axis: Local", () => ToolContext.AxisOrientation = AxisOrientation.Object, isChecked: () => ToolContext.AxisOrientation == AxisOrientation.Object);
+        Actions.Register("axis.normal", "Axis: Normal", () => ToolContext.AxisOrientation = AxisOrientation.Normal, isChecked: () => ToolContext.AxisOrientation == AxisOrientation.Normal);
 
         // --- 선택 모드
         Actions.Register("mode.object", "Object Mode", () => sel.Mode = SelectMode.Object, isChecked: () => sel.Mode == SelectMode.Object);
@@ -91,23 +94,28 @@ public partial class Shell
         Actions.Register("file.exit", "Exit", () => GetTree().Quit());
 
         // --- 뷰
-        Actions.Register("view.frameSelected", "Frame Selected", Viewport.FrameSelected);
-        Actions.Register("view.frameAll", "Frame All", Viewport.FrameAll);
+        Actions.Register("view.frameSelected", "Frame Selected", () => Viewport.FrameSelected());
+        Actions.Register("view.frameAll", "Frame All", () => Viewport.FrameAll());
         Actions.Register("view.home", "Home", () => Viewport.CameraController.Home());
         Actions.Register("view.persp", "Perspective", () => Viewport.SetView(ViewKind.Persp), isChecked: () => Viewport.CameraController.Kind == ViewKind.Persp);
         Actions.Register("view.front", "Front", () => Viewport.SetView(ViewKind.Front), isChecked: () => Viewport.CameraController.Kind == ViewKind.Front);
         Actions.Register("view.side", "Side", () => Viewport.SetView(ViewKind.Side), isChecked: () => Viewport.CameraController.Kind == ViewKind.Side);
         Actions.Register("view.top", "Top", () => Viewport.SetView(ViewKind.Top), isChecked: () => Viewport.CameraController.Kind == ViewKind.Top);
+        Actions.Register("view.back", "Back", () => Viewport.SetView(ViewKind.Back), isChecked: () => Viewport.CameraController.Kind == ViewKind.Back);
+        Actions.Register("view.left", "Left", () => Viewport.SetView(ViewKind.Left), isChecked: () => Viewport.CameraController.Kind == ViewKind.Left);
+        Actions.Register("view.bottom", "Bottom", () => Viewport.SetView(ViewKind.Bottom), isChecked: () => Viewport.CameraController.Kind == ViewKind.Bottom);
+        Actions.Register("view.toggleProjection", "Perspective / Orthographic", () => { Viewport.CameraController.ToggleOrtho(); Viewport.Hud.Refresh(); }, isChecked: () => Viewport.CameraController.IsOrtho);
+        Actions.Register("view.toggleLayout", "Single / Four Panes", () => { Layout.Toggle(); Settings.QuadView = Layout.IsQuad; }, isChecked: () => Layout.IsQuad);
         Actions.Register("view.maximize", "Maximize Viewport", ToggleMaximizeViewport, isChecked: () => _maximized);
 
         // --- 표시
-        var disp = Viewport.Display;
-        Actions.Register("display.wireframe", "Wireframe", () => disp.SetMode(ShadingMode.Wireframe), isChecked: () => disp.Mode == ShadingMode.Wireframe);
-        Actions.Register("display.shaded", "Smooth Shade All", () => disp.SetMode(ShadingMode.Shaded), isChecked: () => disp.Mode == ShadingMode.Shaded);
-        Actions.Register("display.textured", "Smooth Shade + Textured", () => disp.SetMode(ShadingMode.Textured), isChecked: () => disp.Mode == ShadingMode.Textured);
-        Actions.Register("display.lit", "Use All Lights", () => disp.SetMode(ShadingMode.Lit), isChecked: () => disp.Mode == ShadingMode.Lit);
-        Actions.Register("display.wireOnShaded", "Wireframe on Shaded", () => { disp.WireOnShaded = !disp.WireOnShaded; Settings.WireOnShaded = disp.WireOnShaded; disp.RefreshAll(); }, isChecked: () => disp.WireOnShaded);
-        Actions.Register("display.grid", "Grid", () => { disp.ShowGrid = !disp.ShowGrid; Settings.ShowGrid = disp.ShowGrid; }, isChecked: () => disp.ShowGrid);
+        Actions.Register("display.wireframe", "Wireframe", () => Viewport.Display.SetMode(ShadingMode.Wireframe), isChecked: () => Viewport.Display.Mode == ShadingMode.Wireframe);
+        Actions.Register("display.shaded", "Smooth Shade All", () => Viewport.Display.SetMode(ShadingMode.Shaded), isChecked: () => Viewport.Display.Mode == ShadingMode.Shaded);
+        Actions.Register("display.textured", "Smooth Shade + Textured", () => Viewport.Display.SetMode(ShadingMode.Textured), isChecked: () => Viewport.Display.Mode == ShadingMode.Textured);
+        Actions.Register("display.lit", "Use All Lights", () => Viewport.Display.SetMode(ShadingMode.Lit), isChecked: () => Viewport.Display.Mode == ShadingMode.Lit);
+        Actions.Register("display.uvGrid", "UV Grid", () => Viewport.Display.SetMode(ShadingMode.UvGrid), isChecked: () => Viewport.Display.Mode == ShadingMode.UvGrid);
+        Actions.Register("display.wireOnShaded", "Wireframe on Shaded", () => { bool on = !Viewport.Display.WireOnShaded; Settings.WireOnShaded = on; foreach (var p in Layout.Panels) { p.Display.WireOnShaded = on; p.Display.RefreshAll(); } }, isChecked: () => Viewport.Display.WireOnShaded);
+        Actions.Register("display.grid", "Grid", () => { bool on = !Viewport.Display.ShowGrid; Settings.ShowGrid = on; foreach (var p in Layout.Panels) p.Display.ShowGrid = on; }, isChecked: () => Viewport.Display.ShowGrid);
         Actions.Register("display.background", "Background Color", () => { Viewport.CycleBackground(); });
 
         // --- 창
@@ -221,7 +229,6 @@ public partial class Shell
         }
         // Maya 압출 조작기 간이판: 법선 방향 Move 툴로 전환
         ToolContext.AxisOrientation = AxisOrientation.Normal;
-        _axisOrientation.Selected = (int)AxisOrientation.Normal;
         Tools.SetTool("move");
         HelpLine.Text = "Extrude: drag the manipulator to offset the new faces.";
     }
@@ -437,9 +444,9 @@ public partial class Shell
         Menus.Build(Add("Skin")).Item("skin.bind", "Bind Skin", disabled: true);
 
         Menus.Build(Add("Display"))
-            .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.wireOnShaded").Separator()
+            .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.grid").Item("display.background").Separator()
-            .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
+            .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
         Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor");
         Menus.Build(Add("Help")).Item("help.about");

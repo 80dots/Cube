@@ -2,7 +2,7 @@ using Cube.Core.Selection;
 
 namespace Cube.App.UI;
 
-/// <summary>뷰포트 파이 메뉴 구성. RMB = 선택 모드 전환, Shift+RMB = 현재 모드에서 수행 가능한 편집 액션.</summary>
+/// <summary>뷰포트 파이 메뉴 구성. RMB = 선택 모드 전환, Shift+RMB = 현재 모드에서 수행 가능한 편집 액션, Space 홀드 = 뷰 전환.</summary>
 public static class PieMenus
 {
     /// <summary>N, NE, E, SE, S, SW, W, NW 순.</summary>
@@ -40,6 +40,21 @@ public static class PieMenus
         };
         return ids.Select(id => Item(shell, id)).ToList();
     }
+
+    /// <summary>Space 홀드: 뷰 전환. N Top, NE Front, E Right, SE Persp, S Bottom, SW Back, W Left, NW Frame All.</summary>
+    public static List<PieItem> ViewMenu(Shell shell) => new()
+    {
+        Item(shell, "view.top", "Top"),
+        Item(shell, "view.front", "Front"),
+        Item(shell, "view.side", "Right"),
+        Item(shell, "view.persp", "Perspective"),
+        Item(shell, "view.bottom", "Bottom"),
+        Item(shell, "view.back", "Back"),
+        Item(shell, "view.left", "Left"),
+        Item(shell, "view.frameAll", "Frame All"),
+        Item(shell, "view.toggleProjection", "Persp / Ortho"),
+        Item(shell, "view.toggleLayout", "Single / Four Panes"),
+    };
 
     private static PieItem Item(Shell shell, string actionId, string? label = null)
     {

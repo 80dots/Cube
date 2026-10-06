@@ -8,17 +8,31 @@ namespace Cube.App.Tools;
 
 public enum AxisOrientation { World, Object, Normal }
 
-/// <summary>툴이 접근하는 공용 컨텍스트.</summary>
+/// <summary>툴이 접근하는 공용 컨텍스트. 활성 뷰포트와 축 방향이 바뀌면 이벤트로 알린다.</summary>
 public sealed class ToolContext
 {
     public required Document Doc { get; init; }
-    public required ViewportPanel Viewport { get; init; }
     public required Settings Settings { get; init; }
     public SelectionState Sel => Doc.Selection;
     public UndoStack Undo => Doc.Undo;
-    public AxisOrientation AxisOrientation { get; set; } = AxisOrientation.World;
     public bool CameraBasedSelection => Settings.CameraBasedSelection;
     public Action<string>? SetHelp;
+
+    private ViewportPanel _viewport = null!;
+    public required ViewportPanel Viewport
+    {
+        get => _viewport;
+        set { if (_viewport == value) return; _viewport = value; ViewportChanged?.Invoke(value); }
+    }
+    public event Action<ViewportPanel>? ViewportChanged;
+
+    private AxisOrientation _axis = AxisOrientation.World;
+    public AxisOrientation AxisOrientation
+    {
+        get => _axis;
+        set { if (_axis == value) return; _axis = value; AxisOrientationChanged?.Invoke(value); }
+    }
+    public event Action<AxisOrientation>? AxisOrientationChanged;
 }
 
 /// <summary>뷰포트 입력을 받는 툴. 내비게이션이 소비하지 않은 이벤트만 온다.</summary>
@@ -29,9 +43,7 @@ public interface ITool
     string HelpText { get; }
     void Activate(ToolContext ctx);
     void Deactivate();
-    /// <summary>true면 이벤트를 소비.</summary>
     bool HandleInput(InputEvent e);
-    /// <summary>드래그 등 진행 중 작업을 취소(Esc, 포커스 잃음).</summary>
     void Cancel();
 }
 
@@ -41,10 +53,17 @@ public abstract class ToolBase : ITool
     public abstract string Id { get; }
     public abstract string Label { get; }
     public virtual string HelpText => "";
-    public virtual void Activate(ToolContext ctx) { Ctx = ctx; ctx.SetHelp?.Invoke(HelpText); }
-    public virtual void Deactivate() { }
+    public virtual void Activate(ToolContext ctx)
+    {
+        Ctx = ctx;
+        ctx.SetHelp?.Invoke(HelpText);
+        ctx.ViewportChanged += OnViewportChanged;
+    }
+    public virtual void Deactivate() { Ctx.ViewportChanged -= OnViewportChanged; }
     public virtual bool HandleInput(InputEvent e) => false;
     public virtual void Cancel() { }
+    /// <summary>활성 뷰포트가 바뀌었을 때(4분할 뷰). 피커/기즈모를 새 패널로 옮긴다.</summary>
+    protected virtual void OnViewportChanged(ViewportPanel panel) { }
 }
 
 public sealed class ToolManager

@@ -2,7 +2,7 @@ using System.Numerics;
 
 namespace Cube.Core.Camera;
 
-public enum ViewKind { Persp, Front, Side, Top }
+public enum ViewKind { Persp, Front, Side, Top, Back, Left, Bottom }
 
 /// <summary>
 /// Maya 식 피벗(center of interest) 기반 카메라 상태. 순수 수학이며 Godot Camera3D에 적용하는 쪽은 App이다.
@@ -38,7 +38,10 @@ public sealed class OrbitCamera
             case ViewKind.Front: return new OrbitCamera { Yaw = 0, Pitch = 0, Distance = 1000, IsOrtho = true, OrthoSize = 30 };
             case ViewKind.Side: return new OrbitCamera { Yaw = MathF.PI / 2, Pitch = 0, Distance = 1000, IsOrtho = true, OrthoSize = 30 };
             case ViewKind.Top: return new OrbitCamera { Yaw = 0, Pitch = -MathF.PI / 2, Distance = 1000, IsOrtho = true, OrthoSize = 30 };
-            default: return MayaDefault();
+            case ViewKind.Back: return new OrbitCamera { Yaw = MathF.PI, Pitch = 0, Distance = 1000, IsOrtho = true, OrthoSize = 30 };
+            case ViewKind.Left: return new OrbitCamera { Yaw = -MathF.PI / 2, Pitch = 0, Distance = 1000, IsOrtho = true, OrthoSize = 30 };
+            case ViewKind.Bottom: return new OrbitCamera { Yaw = 0, Pitch = MathF.PI / 2, Distance = 1000, IsOrtho = true, OrthoSize = 30 };
+            default: { var p = MayaDefault(); p.AllowOrthoTumble = true; return p; }
         }
     }
 
@@ -63,9 +66,20 @@ public sealed class OrbitCamera
     public Vector3 Up => Vector3.Transform(Vector3.UnitY, Rotation);
     public Vector3 Eye => Pivot + Vector3.Transform(Vector3.UnitZ, Rotation) * Distance;
 
+    /// <summary>persp 카메라는 직교 투영으로 바꿔도 텀블할 수 있다(Maya의 Orthographic 체크). 고정 뷰(front/top...)는 불가.</summary>
+    public bool AllowOrthoTumble;
+
+    /// <summary>원근 ↔ 직교 전환. 현재 프레이밍이 유지되도록 거리/직교 폭을 맞춘다.</summary>
+    public void ToggleOrtho()
+    {
+        float t = MathF.Tan(FovDegrees * MathF.PI / 360f);
+        if (IsOrtho) { Distance = MathF.Max(OrthoSize / (2f * t), MinDistance); IsOrtho = false; }
+        else { OrthoSize = 2f * Distance * t; IsOrtho = true; }
+    }
+
     public void Tumble(float dxPixels, float dyPixels)
     {
-        if (IsOrtho) return;
+        if (IsOrtho && !AllowOrthoTumble) return;
         Yaw -= dxPixels * TumbleSpeed;
         Pitch -= dyPixels * TumbleSpeed;
         Pitch = Math.Clamp(Pitch, -MaxPitch, MaxPitch);
@@ -125,6 +139,6 @@ public sealed class OrbitCamera
 
     public void CopyFrom(OrbitCamera o)
     {
-        Pivot = o.Pivot; Distance = o.Distance; Yaw = o.Yaw; Pitch = o.Pitch; IsOrtho = o.IsOrtho; OrthoSize = o.OrthoSize; FovDegrees = o.FovDegrees;
+        Pivot = o.Pivot; Distance = o.Distance; Yaw = o.Yaw; Pitch = o.Pitch; IsOrtho = o.IsOrtho; OrthoSize = o.OrthoSize; FovDegrees = o.FovDegrees; AllowOrthoTumble = o.AllowOrthoTumble;
     }
 }

@@ -32,7 +32,6 @@ public sealed class RotateTool : TransformToolBase
     {
         float angle = DragMath.ScreenAngle(_centerPx, PressPx, px) * _sign;
         if (Ctx.Viewport.IsSnapHeld) angle = MathF.Round(angle / (MathF.PI / 12f)) * (MathF.PI / 12f); // J: 15° 스냅
-        var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.CreateFromAxisAngle(_axis, angle) * Matrix4x4.CreateTranslation(PivotWorld);
-        ApplyWorldMatrixAboutPivot(m);
+        ApplyRotation(_axis, angle);
     }
 }

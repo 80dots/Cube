@@ -1,4 +1,5 @@
 using System.Numerics;
+using Cube.App.Viewport;
 using Cube.App.Viewport.Gizmos;
 using Cube.Core.Commands;
 using Cube.Core.Geometry;
@@ -8,24 +9,26 @@ using Cube.Core.Selection;
 using Godot;
 using NVec2 = System.Numerics.Vector2;
 using NVec3 = System.Numerics.Vector3;
+using NQuat = System.Numerics.Quaternion;
 
 namespace Cube.App.Tools;
 
 /// <summary>
 /// 조작기를 가진 변형 툴의 공통 기반. 선택이 있으면 피벗에 조작기를 띄우고, 조작기 밖 클릭은 선택으로 처리한다.
 /// 드래그 시작 시 초기값을 캡처하고, 드래그 중 문서를 직접 갱신(프리뷰)하며, 놓을 때 하나의 명령으로 커밋한다.
+/// 오브젝트는 TRS 속성을 직접 갱신한다(행렬 분해를 쓰지 않으므로 비균등 스케일+회전에서도 안전).
 /// </summary>
 public abstract class TransformToolBase : SelectTool
 {
     protected GizmoBase Gizmo = null!;
+    public GizmoBase? GizmoPublic => Gizmo;
     protected bool Dragging { get; private set; }
     protected GizmoPart DragPart { get; private set; }
     protected NVec2 PressPx;
     protected Ray PressRay;
 
-    // 드래그 대상 캡처
-    protected readonly List<(SceneNode node, Transform3 initial, Matrix4x4 parentInv)> ObjectTargets = new();
-    protected readonly List<(NodeId node, int[] verts, NVec3[] initial, Matrix4x4 worldInv)> ComponentTargets = new();
+    protected readonly List<(SceneNode node, Transform3 initial, Matrix4x4 parentWorld, Matrix4x4 parentInv)> ObjectTargets = new();
+    protected readonly List<(NodeId node, int[] verts, NVec3[] initial, Matrix4x4 world, Matrix4x4 worldInv)> ComponentTargets = new();
     protected NVec3 PivotWorld;
 
     protected abstract GizmoBase CreateGizmo();
@@ -33,14 +36,11 @@ public abstract class TransformToolBase : SelectTool
     public override void Activate(ToolContext ctx)
     {
         base.Activate(ctx);
-        if (Gizmo == null)
-        {
-            Gizmo = CreateGizmo();
-            Gizmo.Setup(ctx.Viewport);
-            ctx.Viewport.GizmoRoot.AddChild(Gizmo);
-        }
+        if (Gizmo == null) { Gizmo = CreateGizmo(); }
+        AttachGizmo(ctx.Viewport);
         ctx.Doc.Selection.Changed += OnSelectionChanged;
         ctx.Doc.Changed += OnDocChanged;
+        ctx.AxisOrientationChanged += OnAxisChanged;
         RefreshGizmo();
     }
 
@@ -48,12 +48,34 @@ public abstract class TransformToolBase : SelectTool
     {
         Ctx.Doc.Selection.Changed -= OnSelectionChanged;
         Ctx.Doc.Changed -= OnDocChanged;
+        Ctx.AxisOrientationChanged -= OnAxisChanged;
         Gizmo.Visible = false;
         base.Deactivate();
     }
 
+    private void AttachGizmo(ViewportPanel panel)
+    {
+        if (Gizmo.GetParent() == panel.GizmoRoot) return;
+        if (Gizmo.GetParent() != null) Gizmo.GetParent().RemoveChild(Gizmo);
+        else Gizmo.Setup(panel);
+        Gizmo.Setup(panel);
+        panel.GizmoRoot.AddChild(Gizmo);
+    }
+
+    protected override void OnViewportChanged(ViewportPanel panel)
+    {
+        base.OnViewportChanged(panel);
+        if (Dragging) EndDrag(commit: true);
+        AttachGizmo(panel);
+        RefreshGizmo();
+    }
+
     private void OnSelectionChanged() { if (!Dragging) RefreshGizmo(); }
-    private void OnDocChanged(DocChange c) { if (!Dragging && c.Kind is ChangeKind.TransformChanged or ChangeKind.MeshGeometry or ChangeKind.MeshTopology or ChangeKind.NodeRemoved or ChangeKind.Reset) RefreshGizmo(); }
+    private void OnAxisChanged(AxisOrientation _) { if (!Dragging) RefreshGizmo(); }
+    private void OnDocChanged(DocChange c)
+    {
+        if (!Dragging && c.Kind is ChangeKind.TransformChanged or ChangeKind.MeshGeometry or ChangeKind.MeshTopology or ChangeKind.NodeRemoved or ChangeKind.Reset) RefreshGizmo();
+    }
 
     /// <summary>선택 피벗과 축 방향으로 조작기를 배치한다.</summary>
     protected void RefreshGizmo()
@@ -65,6 +87,7 @@ public abstract class TransformToolBase : SelectTool
         Gizmo.Visible = true;
         Gizmo.SetHover(GizmoPart.None);
         Gizmo.MarkDirty();
+        Gizmo.ForceUpdate();
     }
 
     protected bool TryComputePivot(out NVec3 pivot)
@@ -97,14 +120,9 @@ public abstract class TransformToolBase : SelectTool
         switch (Ctx.AxisOrientation)
         {
             case AxisOrientation.Object:
-                {
-                    var node = doc.Find(sel.Mode == SelectMode.Object ? sel.ActiveObject : sel.NodesWithComponents(sel.Mode).FirstOrDefault());
-                    if (node != null) return DragMath.OrthonormalAxes(node.WorldMatrix);
-                    break;
-                }
             case AxisOrientation.Normal when sel.Mode == SelectMode.Object:
                 {
-                    var node = doc.Find(sel.ActiveObject);
+                    var node = doc.Find(sel.Mode == SelectMode.Object ? sel.ActiveObject : sel.NodesWithComponents(sel.Mode).FirstOrDefault());
                     if (node != null) return DragMath.OrthonormalAxes(node.WorldMatrix);
                     break;
                 }
@@ -122,7 +140,7 @@ public abstract class TransformToolBase : SelectTool
                         foreach (int f in faces) normal += NVec3.Normalize(NVec3.TransformNormal(m.Faces[f].Normal, w));
                     }
                     if (normal.LengthSquared() > 1e-8f) return DragMath.BasisFromNormal(normal);
-                    var node2 = doc.Find(sel.ActiveObject);
+                    var node2 = doc.Find(sel.NodesWithComponents(sel.Mode).FirstOrDefault());
                     if (node2 != null) return DragMath.OrthonormalAxes(node2.WorldMatrix);
                     break;
                 }
@@ -171,6 +189,7 @@ public abstract class TransformToolBase : SelectTool
             EndDrag(commit: true);
             return true;
         }
+        if (Dragging && e is InputEventKey { Keycode: Key.Escape, Pressed: true }) { EndDrag(commit: false); return true; }
         return base.HandleInput(e);
     }
 
@@ -189,7 +208,6 @@ public abstract class TransformToolBase : SelectTool
         var sel = Ctx.Sel; var doc = Ctx.Doc;
         if (sel.Mode == SelectMode.Object)
         {
-            // 선택된 노드 중 조상이 함께 선택된 것은 제외(부모 이동에 따라감)
             var set = new HashSet<NodeId>(sel.Objects);
             foreach (var id in sel.Objects)
             {
@@ -199,7 +217,7 @@ public abstract class TransformToolBase : SelectTool
                 if (ancestorSel) continue;
                 var parentWorld = n.Parent != null && !n.Parent.IsRoot ? n.Parent.WorldMatrix : Matrix4x4.Identity;
                 Matrix4x4.Invert(parentWorld, out var inv);
-                ObjectTargets.Add((n, n.Local, inv));
+                ObjectTargets.Add((n, n.Local, parentWorld, inv));
             }
         }
         else
@@ -208,10 +226,12 @@ public abstract class TransformToolBase : SelectTool
             {
                 var n = doc.Find(id); if (n?.Mesh == null) continue;
                 var verts = SelectedVertices(n.Mesh, sel.GetComponents(id), sel.Mode).ToArray();
+                if (verts.Length == 0) continue;
                 var init = new NVec3[verts.Length];
                 for (int i = 0; i < verts.Length; i++) init[i] = n.Mesh.Verts[verts[i]].Position;
-                Matrix4x4.Invert(n.WorldMatrix, out var inv);
-                ComponentTargets.Add((id, verts, init, inv));
+                var world = n.WorldMatrix;
+                Matrix4x4.Invert(world, out var inv);
+                ComponentTargets.Add((id, verts, init, world, inv));
             }
         }
         OnDragBegin(proj);
@@ -222,6 +242,7 @@ public abstract class TransformToolBase : SelectTool
 
     protected virtual void EndDrag(bool commit)
     {
+        if (!Dragging) return;
         Dragging = false;
         Gizmo.SetActive(GizmoPart.None);
         var doc = Ctx.Doc;
@@ -243,7 +264,7 @@ public abstract class TransformToolBase : SelectTool
         if (ComponentTargets.Count > 0)
         {
             using var g = doc.Undo.BeginGroup(Label);
-            foreach (var (id, verts, init, _) in ComponentTargets)
+            foreach (var (id, verts, init, _, _) in ComponentTargets)
             {
                 var mesh = doc.Get(id).Mesh!;
                 var after = new NVec3[verts.Length];
@@ -263,14 +284,14 @@ public abstract class TransformToolBase : SelectTool
     protected void ApplyTranslation(NVec3 worldDelta)
     {
         var doc = Ctx.Doc;
-        foreach (var (node, initial, parentInv) in ObjectTargets)
+        foreach (var (node, initial, _, parentInv) in ObjectTargets)
         {
             var local = initial;
             local.Translation = initial.Translation + NVec3.TransformNormal(worldDelta, parentInv);
             node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
-        foreach (var (id, verts, init, worldInv) in ComponentTargets)
+        foreach (var (id, verts, init, _, worldInv) in ComponentTargets)
         {
             var d = NVec3.TransformNormal(worldDelta, worldInv);
             var pos = new NVec3[verts.Length];
@@ -281,28 +302,69 @@ public abstract class TransformToolBase : SelectTool
         Gizmo.MarkDirty();
     }
 
-    /// <summary>피벗 기준 월드 변환 행렬(회전/스케일)을 대상에 적용(프리뷰).</summary>
-    protected void ApplyWorldMatrixAboutPivot(Matrix4x4 worldDeltaAboutPivot)
+    /// <summary>피벗 기준 월드 축 회전을 적용(프리뷰). 오브젝트는 회전 속성과 위치만 바꾼다(스케일 유지).</summary>
+    protected void ApplyRotation(NVec3 worldAxis, float angle)
     {
         var doc = Ctx.Doc;
-        foreach (var (node, initial, parentInv) in ObjectTargets)
+        var q = NQuat.CreateFromAxisAngle(NVec3.Normalize(worldAxis), angle);
+        foreach (var (node, initial, parentWorld, parentInv) in ObjectTargets)
         {
-            var parentWorld = node.Parent != null && !node.Parent.IsRoot ? node.Parent.WorldMatrix : Matrix4x4.Identity;
-            var world = initial.ToMatrix() * parentWorld;
-            var newWorld = world * worldDeltaAboutPivot;
-            var newLocal = newWorld * parentInv;
-            node.Local = Transform3.FromMatrix(newLocal);
+            // 부모 공간에서의 회전/피벗
+            var axisParent = NVec3.Normalize(NVec3.TransformNormal(worldAxis, parentInv));
+            var qParent = NQuat.CreateFromAxisAngle(axisParent, angle);
+            var pivotParent = NVec3.Transform(PivotWorld, parentInv);
+            var local = initial;
+            local.RotationDegrees = Transform3.QuaternionToEulerXYZDegrees(NQuat.Concatenate(initial.Rotation, qParent));
+            local.Translation = pivotParent + NVec3.Transform(initial.Translation - pivotParent, qParent);
+            node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
-        foreach (var (id, verts, init, worldInv) in ComponentTargets)
+        var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.CreateFromQuaternion(q) * Matrix4x4.CreateTranslation(PivotWorld);
+        ApplyComponentsWorldMatrix(m);
+    }
+
+    /// <summary>기즈모 축 기저에서의 스케일을 적용(프리뷰). 오브젝트는 Scale 속성에 반영(축은 가장 가까운 로컬 축으로 매핑).</summary>
+    protected void ApplyScale(NVec3 scaleInGizmoAxes)
+    {
+        var doc = Ctx.Doc;
+        var gx = Gizmo.AxisX; var gy = Gizmo.AxisY; var gz = Gizmo.AxisZ;
+        foreach (var (node, initial, parentWorld, parentInv) in ObjectTargets)
         {
-            var node = doc.Get(id);
-            var world = node.WorldMatrix;
+            var (lx, ly, lz) = DragMath.OrthonormalAxes(initial.ToMatrix() * parentWorld);
+            var localScale = NVec3.One;
+            // 기즈모 축별 배율을 가장 가까운 로컬 축에 적용
+            foreach (var (axis, s) in new[] { (gx, scaleInGizmoAxes.X), (gy, scaleInGizmoAxes.Y), (gz, scaleInGizmoAxes.Z) })
+            {
+                if (MathF.Abs(s - 1f) < 1e-6f) continue;
+                float dx = MathF.Abs(NVec3.Dot(axis, lx)), dy = MathF.Abs(NVec3.Dot(axis, ly)), dz = MathF.Abs(NVec3.Dot(axis, lz));
+                if (dx >= dy && dx >= dz) localScale.X *= s; else if (dy >= dz) localScale.Y *= s; else localScale.Z *= s;
+            }
+            var local = initial;
+            local.Scale = initial.Scale * localScale;
+            // 피벗이 오브젝트 원점이 아니면(다중 선택) 위치도 피벗 기준으로 스케일
+            var pivotParent = NVec3.Transform(PivotWorld, parentInv);
+            var rel = initial.Translation - pivotParent;
+            var relWorld = NVec3.TransformNormal(rel, parentWorld);
+            var scaledWorld = gx * (NVec3.Dot(relWorld, gx) * scaleInGizmoAxes.X) + gy * (NVec3.Dot(relWorld, gy) * scaleInGizmoAxes.Y) + gz * (NVec3.Dot(relWorld, gz) * scaleInGizmoAxes.Z);
+            local.Translation = pivotParent + NVec3.TransformNormal(scaledWorld, parentInv);
+            node.Local = local;
+            doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
+        }
+        var b = new Matrix4x4(gx.X, gx.Y, gx.Z, 0, gy.X, gy.Y, gy.Z, 0, gz.X, gz.Y, gz.Z, 0, 0, 0, 0, 1);
+        var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.Transpose(b) * Matrix4x4.CreateScale(scaleInGizmoAxes) * b * Matrix4x4.CreateTranslation(PivotWorld);
+        ApplyComponentsWorldMatrix(m);
+    }
+
+    private void ApplyComponentsWorldMatrix(Matrix4x4 worldDelta)
+    {
+        var doc = Ctx.Doc;
+        foreach (var (id, verts, init, world, worldInv) in ComponentTargets)
+        {
             var pos = new NVec3[verts.Length];
             for (int i = 0; i < verts.Length; i++)
             {
                 var w = NVec3.Transform(init[i], world);
-                w = NVec3.Transform(w, worldDeltaAboutPivot);
+                w = NVec3.Transform(w, worldDelta);
                 pos[i] = NVec3.Transform(w, worldInv);
             }
             MoveVerticesCommand.Preview(doc, id, verts, pos);

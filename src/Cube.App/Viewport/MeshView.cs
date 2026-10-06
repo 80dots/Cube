@@ -50,6 +50,8 @@ public partial class MeshView : Node3D
         public Func<int, Color>? VertexColor;   // vertexId → 색
         public Func<int, bool>? FaceSelected;   // faceId → 틴트 여부
         public float VertexPx = 4f;
+        /// <summary>null이면 기본 회색 lambert, 아니면 이 머티리얼로 표면을 그린다(UV 그리드 등).</summary>
+        public Material? SurfaceMaterial;
     }
 
     public ComponentStyle Style { get; } = new();
@@ -130,6 +132,7 @@ public partial class MeshView : Node3D
         if (mesh == null || _surface == null) return;
         var s = Style;
         _surface.Visible = s.ShowSurface;
+        _surface.MaterialOverride = s.SurfaceMaterial ?? _shadedMat;
         _wire.Visible = s.ShowWire;
         _points.Visible = s.ShowVertices;
         _faceCenters.Visible = s.ShowFaceCenters;

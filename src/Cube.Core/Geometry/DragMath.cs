@@ -45,9 +45,10 @@ public static class DragMath
         return Vector2.Distance(Vector2.Lerp(a, b, u), p);
     }
 
-    /// <summary>볼록 다각형 내부 판정(2D).</summary>
+    /// <summary>볼록 다각형 내부 판정(2D). 퇴화(면적 0) 다각형은 항상 false.</summary>
     public static bool PointInConvexPolygon(Vector2 p, ReadOnlySpan<Vector2> poly)
     {
+        if (MathF.Abs(PolygonArea(poly)) < 1e-6f) return false;
         int sign = 0;
         for (int i = 0; i < poly.Length; i++)
         {
@@ -57,7 +58,15 @@ public static class DragMath
             int s = c > 0 ? 1 : -1;
             if (sign == 0) sign = s; else if (s != sign) return false;
         }
-        return true;
+        return sign != 0;
+    }
+
+    /// <summary>부호 있는 다각형 면적(2D).</summary>
+    public static float PolygonArea(ReadOnlySpan<Vector2> poly)
+    {
+        float a = 0;
+        for (int i = 0; i < poly.Length; i++) { var p = poly[i]; var q = poly[(i + 1) % poly.Length]; a += p.X * q.Y - q.X * p.Y; }
+        return a * 0.5f;
     }
 
     /// <summary>축 a를 Z로 하고 월드 Y를 기준으로 그람-슈미트한 정규직교 기저(행 = 축).</summary>

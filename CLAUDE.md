@@ -36,7 +36,7 @@ GUI 동작은 입력 이벤트 주입 스크립트로 검증한다. 좌표는 �
 ```powershell
 & $godot --path . -- --with-cube "--drive=wait 6; move 100 100; press L; release L; key A; wait 2; key F11; wait 1; move 537 300; press L; release L; key E ctrl; wait 2; print; shot C:/tmp/a.png" --quit-after=100
 ```
-스텝: `wait N`, `move X Y`, `press L|M|R [alt|shift|ctrl]`, `release`, `drag X Y [mods]`, `wheel N`, `key NAME [mods]`(Godot Key 이름: `Key4`, `F9`, `Escape`...), `action <actionId>`, `export PATH [selection]`, `import PATH`, `save PATH`, `open PATH`, `print`(노드/선택/Undo/툴/활성 노드 트랜스폼·메시 Y 범위), `shot PATH`. 주입된 입력은 다음 프레임에 처리되므로 입력 스텝 뒤에는 자동으로 한 프레임 쉰다. `--drive`가 있으면 핫키/메뉴 로그(`[Hotkey]`, `[Menu]`, `[Select]`)가 켜진다. `--screenshot=PATH --quit-after=N`만으로 정적 스크린샷도 가능.
+스텝: `wait N`, `move X Y`, `press L|M|R [alt|shift|ctrl]`, `release`, `drag X Y [mods]`, `wheel N`, `key NAME [mods]`(Godot Key 이름: `Key4`, `F9`, `Escape`...), `action <actionId>`, `export PATH [selection]`, `import PATH`, `save PATH`, `open PATH`, `print`(노드/선택/Undo/툴/활성 노드 트랜스폼·메시 Y 범위), `gizmo`(조작기 피벗/축), `panel N`(활성 뷰포트 선택: 0 top, 1 persp, 2 front, 3 side), `axisdrag X|Y|Z px` / `ringdrag X|Y|Z|S px` / `centerdrag dx dy`(조작기 핸들을 찾아 드래그; 뷰 각도 무관), `shot PATH`. 좌표는 `c+10`처럼 뷰포트 중심 기준도 된다. 주입된 입력은 다음 프레임에 처리되므로 입력 스텝 뒤에는 자동으로 한 프레임 쉰다. `--drive`가 있으면 핫키/메뉴 로그(`[Hotkey]`, `[Menu]`, `[Select]`)가 켜진다. `--screenshot=PATH --quit-after=N`만으로 정적 스크린샷도 가능.
 
 Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_output` → `stop_project`. `add_node`의 properties는 `.tscn`에 저장되지 않으므로 씬은 직접 편집한다.
 
@@ -55,9 +55,11 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 ### App (`src/Cube.App`)
 - `App/CubeApp.cs`(autoload): Document, Settings, Hi-DPI 배율, 디버그 인자. `App/DebugDriver.cs`, `App/SmokeExportRunner.cs`.
 - `UI/Shell.cs` + `ShellActions.cs`: 레이아웃은 코드로 구성(.tscn은 루트만). **모든 메뉴/셸프/툴박스/핫키는 `ActionRegistry`의 ActionId만 호출한다.** 새 기능은 `RegisterActions`에 액션을 등록하고 `BuildMenus`에 넣는다. `Hotkeys/ShellInput.cs`가 `_Input`에서 키를 라우팅(텍스트 필드 포커스 시 무시, `viewport` 컨텍스트 = 마우스 오버/포커스). 바인딩은 `config/hotkeys.default.json`(`user://hotkeys.json`로 덮어쓰기). Godot `InputMap`은 쓰지 않는다.
-- `Viewport/ViewportPanel.cs`: SubViewport(자체 월드, Canvas 배경 그라디언트, 헤드라이트). 입력 순서: `NavigationHandler`(Alt+버튼/휠) → 파이 메뉴(`UI/PieMenu.cs`, RMB 홀드 = 모드 전환, Shift+RMB = 현재 모드 액션; 항목은 `UI/PieMenus.cs`) → `ToolManager.Current` → 끝.
+- `Viewport/ViewportLayout.cs`: 패널 4개(top/persp/front/side)를 항상 만들어 두고 단일 ↔ 4분할을 토글한다(Space 탭, `view.toggleLayout`). 마우스가 들어가거나 눌린 패널이 **활성 패널**(`Shell.Viewport`)이며 `ToolContext.Viewport`가 바뀌면 툴이 기즈모를 그 패널로 옮긴다. 표시/뷰 액션은 활성 패널에 적용된다.
+- `Viewport/ViewportPanel.cs`: SubViewport(자체 월드, Canvas 배경 그라디언트, 헤드라이트). 입력 순서: `NavigationHandler`(Alt+버튼/휠) → 파이 메뉴(`UI/PieMenu.cs`, RMB 홀드 = 모드 전환, Shift+RMB = 현재 모드 액션, Space 홀드 = 뷰 전환; 항목은 `UI/PieMenus.cs`) → `ToolManager.Current` → 끝. 우상단 `ViewportHud`(클릭 가능한 뷰 큐브, Persp/Ortho 토글, Wireframe/Shaded/Textured/Lit/UV Grid 버튼). UV Grid 모드는 `assets/textures/uv_grid.png`를 메시 UV로 입힌다.
+- 아이콘은 `assets/icons/*.svg`를 `UI/Icons.cs`가 런타임에 UI 배율로 래스터화한다(임포트 불필요). PNG도 `Icons.LoadPng`로 읽는다. 내보내기 프리셋의 include_filter에 두 폴더가 들어 있어야 pck에 포함된다.
 - UI 배율: `CubeApp.UiScale = 화면 DPI 배율 × Settings.UiScalePercent(기본 130)`. 창 `ContentScaleFactor`는 쓰지 않는다(3D 뷰포트가 흐려짐). 테마/위젯/픽셀 상수가 모두 `UiScale`을 곱한다. Edit → Preferences(`UI/PreferencesDialog.cs`)에서 바꾸면 `CubeApp.ReloadShell()`이 셸을 다시 만든다(문서 유지). 우측 도크는 Properties(`UI/Docks/PropertiesPanel.cs`, Maya Channel Box 역할). `ViewportDisplay`가 선택/셰이딩 모드를 `MeshView.Style`로 변환. `SceneView`/`MeshView`가 Document를 미러링(표면·와이어·정점·면중심·면 틴트).
-- `Tools/`: `SelectTool`(클릭/마키/호버/RMB 모드 메뉴) → `TransformToolBase`(피벗, 축 방향 World/Object/Normal, 드래그 캡처/커밋) → `MoveTool`/`RotateTool`/`ScaleTool`. 조작기는 `Viewport/Gizmos/`(화면 고정 100px, 깊이 무시, CPU 스크린 공간 히트).
+- `Tools/`: `SelectTool`(클릭/마키/호버) → `TransformToolBase`(피벗, 축 방향 World/Local(Object)/Normal, 드래그 캡처/커밋) → `MoveTool`/`RotateTool`/`ScaleTool`. 오브젝트 회전/스케일은 행렬 분해 없이 TRS 속성을 직접 갱신한다(비균등 스케일+회전에서도 안전). 축 방향은 툴박스 하단 아이콘 버튼(`axis.world/local/normal`)이며 바꾸면 `ToolContext.AxisOrientationChanged`로 기즈모가 즉시 갱신된다. 조작기는 `Viewport/Gizmos/`(화면 고정 100px, 깊이 무시, CPU 스크린 공간 히트).
 - `IO/`: `GltfExporter`(GltfDocument), `GltfImporter`/`FbxImporter`(GenerateScene 순회), `FileActions`/`SceneFileActions`(네이티브 다이얼로그).
 
 ### 반드시 지킬 규약

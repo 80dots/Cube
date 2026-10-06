@@ -46,6 +46,10 @@ public class DragMathTests
         var sq = new[] { new Vector2(0, 0), new Vector2(10, 0), new Vector2(10, 10), new Vector2(0, 10) };
         Assert.True(DragMath.PointInConvexPolygon(new Vector2(5, 5), sq));
         Assert.False(DragMath.PointInConvexPolygon(new Vector2(15, 5), sq));
+        // 퇴화(선분) 다각형은 어떤 점도 포함하지 않는다
+        var line = new[] { new Vector2(0, 0), new Vector2(10, 0), new Vector2(20, 0), new Vector2(30, 0) };
+        Assert.False(DragMath.PointInConvexPolygon(new Vector2(5, 0), line));
+        Assert.False(DragMath.PointInConvexPolygon(new Vector2(500, 500), line));
     }
 
     [Fact]

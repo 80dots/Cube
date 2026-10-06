@@ -42,6 +42,7 @@
     { "action": "display.shaded", "chord": "5", "context": "viewport" },
     { "action": "display.textured", "chord": "6", "context": "viewport" },
     { "action": "display.lit", "chord": "7", "context": "viewport" },
+    { "action": "display.wireOnShaded", "chord": "8", "context": "viewport" },
     { "action": "display.background", "chord": "Alt+B", "context": "viewport" },
     { "action": "view.maximize", "chord": "Ctrl+Space" },
     { "action": "app.escape", "chord": "Escape" }

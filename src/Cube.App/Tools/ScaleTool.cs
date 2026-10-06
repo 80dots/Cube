@@ -56,14 +56,7 @@ public sealed class ScaleTool : TransformToolBase
             scale = DragPart switch { GizmoPart.X => new NVec3(ratio, 1, 1), GizmoPart.Y => new NVec3(1, ratio, 1), _ => new NVec3(1, 1, ratio) };
         }
         if (Ctx.Viewport.IsSnapHeld) scale = new NVec3(Snap(scale.X), Snap(scale.Y), Snap(scale.Z));
-        // 기즈모 축 기저에서 스케일: T(-p) · Bᵀ · S · B · T(p)
-        var b = new Matrix4x4(
-            Gizmo.AxisX.X, Gizmo.AxisX.Y, Gizmo.AxisX.Z, 0,
-            Gizmo.AxisY.X, Gizmo.AxisY.Y, Gizmo.AxisY.Z, 0,
-            Gizmo.AxisZ.X, Gizmo.AxisZ.Y, Gizmo.AxisZ.Z, 0,
-            0, 0, 0, 1);
-        var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.Transpose(b) * Matrix4x4.CreateScale(scale) * b * Matrix4x4.CreateTranslation(PivotWorld);
-        ApplyWorldMatrixAboutPivot(m);
+        ApplyScale(scale);
     }
 
     private static float Snap(float v) => MathF.Max(MathF.Round(v * 4f) / 4f, 0.25f);

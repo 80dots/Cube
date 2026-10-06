@@ -14,8 +14,14 @@ public class SelectTool : ToolBase
     public override string Label => "Select Tool";
     public override string HelpText => "Select Tool: click or drag to select. Shift toggles, Ctrl deselects, Ctrl+Shift adds.";
 
-    protected Picker Picker => _picker ??= new Picker(Ctx.Viewport);
-    private Picker? _picker;
+    protected Picker Picker => Ctx.Viewport.Picker;
+
+    protected override void OnViewportChanged(Viewport.ViewportPanel panel)
+    {
+        // 다른 패널로 옮겨가면 진행 중 마키/호버를 정리한다
+        Cancel();
+        SetHover(null);
+    }
 
     private bool _pressed;
     private Vector2 _pressPos;

@@ -63,7 +63,8 @@ public partial class MoveGizmo : GizmoBase
             var corners = new[] { a * PlaneMin + b * PlaneMin, a * PlaneMax + b * PlaneMin, a * PlaneMax + b * PlaneMax, a * PlaneMin + b * PlaneMax };
             bool ok = true;
             for (int i = 0; i < 4; i++) { var p = Proj(proj, corners[i]); if (p == null) { ok = false; break; } q[i] = p.Value; }
-            if (ok && DragMath.PointInConvexPolygon(px, q)) return part;
+            // 뷰와 평행해 선으로 보이는 평면 핸들은 잡을 수 없다(면적이 (6px)² 미만이면 무시)
+            if (ok && MathF.Abs(DragMath.PolygonArea(q)) >= 36f * s * s && DragMath.PointInConvexPolygon(px, q)) return part;
         }
         GizmoPart best = GizmoPart.None; float bestD = HitPx * s;
         foreach (var (part, axis) in new[] { (GizmoPart.X, Vector3.Right), (GizmoPart.Y, Vector3.Up), (GizmoPart.Z, Vector3.Back) })

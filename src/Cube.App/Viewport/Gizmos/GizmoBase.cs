@@ -36,6 +36,7 @@ public abstract partial class GizmoBase : Node3D
     public void Setup(ViewportPanel panel)
     {
         Panel = panel;
+        if (MeshNode != null) return; // 패널만 바꾸는 경우(4분할 뷰 전환)
         Mesh = new ImmediateMesh();
         MeshNode = new MeshInstance3D
         {
@@ -70,6 +71,14 @@ public abstract partial class GizmoBase : Node3D
     public override void _Process(double delta)
     {
         if (!Visible) return;
+        UpdateScale();
+        if (_dirty) { Rebuild(); _dirty = false; }
+    }
+
+    /// <summary>다음 프레임을 기다리지 않고 크기/지오메트리를 즉시 갱신(히트 테스트가 바로 이어질 때).</summary>
+    public void ForceUpdate()
+    {
+        if (Panel == null || !IsInsideTree()) return;
         UpdateScale();
         if (_dirty) { Rebuild(); _dirty = false; }
     }

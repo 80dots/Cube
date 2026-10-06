@@ -4,7 +4,7 @@ using Godot;
 
 namespace Cube.App.Viewport;
 
-public enum ShadingMode { Wireframe = 4, Shaded = 5, Textured = 6, Lit = 7 }
+public enum ShadingMode { Wireframe = 4, Shaded = 5, Textured = 6, Lit = 7, UvGrid = 9 }
 
 /// <summary>
 /// 뷰포트 표시 상태(셰이딩 모드, 와이어 on 셰이디드, 그리드)와 선택 상태를 MeshView 스타일로 변환한다.
@@ -39,6 +39,22 @@ public sealed class ViewportDisplay
         RefreshAll();
     }
 
+    private static StandardMaterial3D? _uvGridMaterial;
+
+    /// <summary>UV 그리드 체커 머티리얼(assets/textures/uv_grid.png). 메시의 UV를 그대로 보여준다.</summary>
+    public static StandardMaterial3D UvGridMaterial
+    {
+        get
+        {
+            if (_uvGridMaterial == null)
+            {
+                var tex = UI.Icons.LoadPng("res://assets/textures/uv_grid.png");
+                _uvGridMaterial = new StandardMaterial3D { AlbedoTexture = tex, Roughness = 1f, Metallic = 0f, TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic };
+            }
+            return _uvGridMaterial;
+        }
+    }
+
     public void SetMode(ShadingMode mode)
     {
         Mode = mode;
@@ -66,6 +82,7 @@ public sealed class ViewportDisplay
         var hover = Hover is { } h && h.node == id ? h : ((NodeId, SelectMode, int)?)null;
 
         s.ShowSurface = Mode != ShadingMode.Wireframe;
+        s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : null;
         s.ShowWire = Mode == ShadingMode.Wireframe || WireOnShaded || objSelected || compMode;
         s.ShowVertices = compMode && mode == SelectMode.Vertex;
         s.ShowFaceCenters = compMode && mode == SelectMode.Face;

@@ -17,6 +17,7 @@ public sealed class Settings
     [JsonPropertyName("axisOrientation")] public string AxisOrientation { get; set; } = "World";
     [JsonPropertyName("wireOnShaded")] public bool WireOnShaded { get; set; } = true;
     [JsonPropertyName("showGrid")] public bool ShowGrid { get; set; } = true;
+    [JsonPropertyName("quadView")] public bool QuadView { get; set; }
     [JsonPropertyName("lastExportDir")] public string? LastExportDir { get; set; }
     [JsonPropertyName("lastSceneDir")] public string? LastSceneDir { get; set; }
 
