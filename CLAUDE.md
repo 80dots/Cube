@@ -49,6 +49,21 @@ dotnet build
 
 테스트 프레임워크(GUT, gdUnit4, GodotTestDriver 등)는 아직 도입되지 않았다.
 
+## Godot MCP 서버
+
+`godot` MCP 서버(`@coding-solo/godot-mcp`)가 user 스코프(`~/.claude.json`)에 등록되어 있다. 에디터 애드온 없이 `GODOT_PATH`로 지정된 4.7.2 콘솔 실행 파일을 직접 구동한다.
+
+- 주요 도구: `launch_editor`, `run_project`, `get_debug_output`, `stop_project`, `get_project_info`, `create_scene`, `add_node`, `save_scene`, `get_uid`, `update_project_uids`
+- 프로젝트 실행 후 런타임 에러를 확인할 때는 `run_project` → `get_debug_output` 순으로 쓴다.
+- 서버가 보이지 않으면 `claude mcp get godot`으로 상태를 확인한다. 재등록 시 Git Bash에서는 `MSYS_NO_PATHCONV=1`을 켜야 `cmd /c`의 `/c`가 경로로 변환되지 않는다.
+
+## 버전 및 릴리즈 워크플로
+
+- 버전의 단일 출처는 `project.godot`의 `application/config/version`이다 (초기값 `0.0.1`).
+- **수정 작업을 완료할 때마다** 현재 버전을 그대로 유지한 채 커밋하고 `origin/main`에 푸시한 뒤, 해당 버전의 **드래프트 릴리즈**를 만든다. 버전은 사용자가 올리라고 할 때만 올린다.
+- 드래프트 릴리즈는 `gh release create v<version> --draft --target main` 으로 만든다. 같은 버전의 드래프트가 이미 있으면 새로 만들지 말고 `gh release edit v<version> --notes ...`로 노트를 갱신한다.
+- GitHub 작업은 항상 80dots 계정으로 한다.
+
 ## 파일 규칙
 
 - `.editorconfig`: 모든 파일 UTF-8.
