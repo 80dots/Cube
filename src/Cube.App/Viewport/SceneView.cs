@@ -15,6 +15,8 @@ public partial class SceneView : Node3D
 
     public IReadOnlyDictionary<NodeId, MeshView> MeshViews => _meshViews;
     public event Action? Rebuilt;
+    /// <summary>새 MeshView가 트리에 들어간 직후(스타일 적용용).</summary>
+    public event Action<MeshView>? MeshViewCreated;
 
     public void Bind(Document doc)
     {
@@ -87,6 +89,7 @@ public partial class SceneView : Node3D
         view.Visible = n.Visible;
         _views[n.Id] = view;
         ParentViewFor(n).AddChild(view);
+        if (view is MeshView created) MeshViewCreated?.Invoke(created);
         foreach (var c in n.Children) AddView(c);
     }
 

@@ -48,7 +48,8 @@ public sealed class GodotMeshBridge
         Fit(ref _linePos, r.LineVertexCount); Fit(ref _lineCol, r.LineVertexCount);
         for (int i = 0; i < r.LineCount; i++)
         {
-            var c = colorOf(r.LineToEdge[i]);
+            // 정점 색은 셰이더에서 선형으로 취급되므로 sRGB 값을 선형으로 바꿔 넘긴다
+            var c = colorOf(r.LineToEdge[i]).SrgbToLinear();
             _linePos[i * 2] = r.LinePositions[i * 2].ToGodot();
             _linePos[i * 2 + 1] = r.LinePositions[i * 2 + 1].ToGodot();
             _lineCol[i * 2] = c; _lineCol[i * 2 + 1] = c;
@@ -68,7 +69,7 @@ public sealed class GodotMeshBridge
         for (int i = 0; i < n; i++)
         {
             mm.SetInstanceTransform(i, new Transform3D(Basis.Identity, positions[i].ToGodot()));
-            mm.SetInstanceColor(i, colorOf(i));
+            mm.SetInstanceColor(i, colorOf(i).SrgbToLinear());
         }
     }
 

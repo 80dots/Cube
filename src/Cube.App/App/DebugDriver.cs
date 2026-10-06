@@ -38,6 +38,8 @@ public partial class DebugDriver : Node
             var parts = step.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             try { Exec(parts); }
             catch (Exception ex) { GD.PrintErr($"[Drive] '{step}': {ex.Message}"); }
+            // 주입된 입력 이벤트는 다음 입력 플러시에서 처리되므로 입력 스텝 뒤에는 한 프레임 양보한다
+            if (parts[0] is "move" or "press" or "release" or "drag" or "wheel" or "key") _wait = Math.Max(_wait, 1);
         }
         if (_steps.Count == 0 && _wait == 0) { GD.Print("[Drive] done"); QueueFree(); }
     }
@@ -111,6 +113,15 @@ public partial class DebugDriver : Node
                 {
                     var img = GetViewport().GetTexture().GetImage();
                     GD.Print($"[Drive] shot {p[1]}: {img.SavePng(p[1])}");
+                    break;
+                }
+            case "action":
+                GD.Print($"[Drive] action {p[1]}: {UI.Shell.Instance.Actions.Invoke(p[1])}");
+                break;
+            case "print":
+                {
+                    var doc = CubeApp.Instance.Document;
+                    GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode}");
                     break;
                 }
             default: GD.PrintErr($"[Drive] unknown step {p[0]}"); break;

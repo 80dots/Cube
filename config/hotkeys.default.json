@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "bindings": [
+    { "action": "tool.select", "chord": "Q" },
+    { "action": "tool.move", "chord": "W" },
+    { "action": "tool.rotate", "chord": "E" },
+    { "action": "tool.scale", "chord": "R" },
+    { "action": "tool.last", "chord": "Y" },
+
+    { "action": "mode.toggle", "chord": "F8" },
+    { "action": "mode.vertex", "chord": "F9" },
+    { "action": "mode.edge", "chord": "F10" },
+    { "action": "mode.face", "chord": "F11" },
+    { "action": "mode.uv", "chord": "F12" },
+    { "action": "select.grow", "chord": "Shift+Period" },
+    { "action": "select.shrink", "chord": "Shift+Comma" },
+    { "action": "select.toVertices", "chord": "Ctrl+F9" },
+    { "action": "select.toEdges", "chord": "Ctrl+F10" },
+    { "action": "select.toFaces", "chord": "Ctrl+F11" },
+
+    { "action": "edit.undo", "chord": "Z" },
+    { "action": "edit.undo", "chord": "Ctrl+Z" },
+    { "action": "edit.redo", "chord": "Shift+Z" },
+    { "action": "edit.redo", "chord": "Ctrl+Shift+Z" },
+    { "action": "edit.redo", "chord": "Ctrl+Y" },
+    { "action": "edit.repeatLast", "chord": "G" },
+    { "action": "edit.delete", "chord": "Delete" },
+    { "action": "edit.delete", "chord": "Backspace" },
+    { "action": "edit.duplicate", "chord": "Ctrl+D" },
+    { "action": "mesh.extrude", "chord": "Ctrl+E" },
+
+    { "action": "file.new", "chord": "Ctrl+N" },
+    { "action": "file.open", "chord": "Ctrl+O" },
+    { "action": "file.save", "chord": "Ctrl+S" },
+    { "action": "file.saveAs", "chord": "Ctrl+Shift+S" },
+
+    { "action": "view.frameSelected", "chord": "F", "context": "viewport" },
+    { "action": "view.frameAll", "chord": "A", "context": "viewport" },
+    { "action": "view.home", "chord": "Alt+Home", "context": "viewport" },
+    { "action": "display.wireframe", "chord": "4", "context": "viewport" },
+    { "action": "display.shaded", "chord": "5", "context": "viewport" },
+    { "action": "display.textured", "chord": "6", "context": "viewport" },
+    { "action": "display.lit", "chord": "7", "context": "viewport" },
+    { "action": "display.background", "chord": "Alt+B", "context": "viewport" },
+    { "action": "view.maximize", "chord": "Ctrl+Space" },
+    { "action": "app.escape", "chord": "Escape" }
+  ]
+}

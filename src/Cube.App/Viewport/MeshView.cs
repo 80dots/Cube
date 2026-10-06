@@ -49,7 +49,7 @@ public partial class MeshView : Node3D
         public Func<int, Color>? EdgeColor;     // edgeId → 색 (null이면 ObjectWireColor/소프트 구분)
         public Func<int, Color>? VertexColor;   // vertexId → 색
         public Func<int, bool>? FaceSelected;   // faceId → 틴트 여부
-        public float VertexPx = 3f;
+        public float VertexPx = 4f;
     }
 
     public ComponentStyle Style { get; } = new();

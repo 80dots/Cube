@@ -92,13 +92,17 @@ public partial class ViewportPanel : SubViewportContainer
         AddChild(Overlay);
         CameraController.Changed += () => Overlay.CameraLabel = CameraController.Label;
 
-        if (_doc != null) Scene.Bind(_doc);
+        Display = new ViewportDisplay(this);
+
+        if (_doc != null) { Scene.Bind(_doc); Display.Bind(_doc); }
     }
+
+    public ViewportDisplay Display { get; private set; } = null!;
 
     public void Bind(Document doc)
     {
         _doc = doc;
-        if (Scene != null) Scene.Bind(doc);
+        if (Scene != null) { Scene.Bind(doc); Display.Bind(doc); }
     }
 
     public Document? Document => _doc;
@@ -194,23 +198,19 @@ public partial class ViewportPanel : SubViewportContainer
         if (Navigation.Handle(e)) { AcceptEvent(); return; }
         if (Navigation.IsDragging) { AcceptEvent(); return; }
         if (ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
-        if (HandleViewKeys(e)) { AcceptEvent(); return; }
     }
 
-    /// <summary>뷰포트 컨텍스트 키(F/A/Alt+Home). 전역 핫키 라우터가 생기면 그쪽으로 옮긴다.</summary>
-    public bool HandleViewKeys(InputEvent e)
-    {
-        if (e is not InputEventKey { Pressed: true, Echo: false } k) return false;
-        if (k.Keycode == Key.F && !k.CtrlPressed && !k.AltPressed) { FrameSelected(); return true; }
-        if (k.Keycode == Key.A && !k.CtrlPressed && !k.AltPressed) { FrameAll(); return true; }
-        if (k.Keycode == Key.Home && k.AltPressed) { CameraController.Home(); return true; }
-        return false;
-    }
+    public bool IsMouseOver { get; private set; }
 
     public override void _Notification(int what)
     {
         if (what == NotificationApplicationFocusOut) Navigation.Cancel();
+        if (what == NotificationMouseEnter) IsMouseOver = true;
+        if (what == NotificationMouseExit) IsMouseOver = false;
     }
+
+    /// <summary>핫키 "viewport" 컨텍스트: 마우스가 위에 있거나 포커스를 가진 경우.</summary>
+    public bool IsViewportContext => IsMouseOver || HasFocus();
 
     public override bool _PropagateInputEvent(InputEvent @event) => false;
 }
