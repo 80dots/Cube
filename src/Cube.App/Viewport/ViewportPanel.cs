@@ -98,6 +98,8 @@ public partial class ViewportPanel : SubViewportContainer
     }
 
     public ViewportDisplay Display { get; private set; } = null!;
+    private Picker? _picker;
+    public Picker Picker => _picker ??= new Picker(this);
 
     public void Bind(Document doc)
     {

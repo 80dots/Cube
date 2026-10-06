@@ -23,6 +23,7 @@ public partial class Shell : Control
     public VBoxContainer OutlinerDock { get; private set; } = null!;
     public PanelContainer OutlinerBody { get; private set; } = null!;
     public Docks.Outliner Outliner { get; private set; } = null!;
+    public Docks.ChannelBox ChannelBox { get; private set; } = null!;
     public ViewportPanel Viewport { get; private set; } = null!;
     public VBoxContainer ChannelBoxDock { get; private set; } = null!;
     public PanelContainer ChannelBoxBody { get; private set; } = null!;
@@ -97,6 +98,8 @@ public partial class Shell : Control
         _rightSplit.AddChild(Viewport);
 
         (ChannelBoxDock, ChannelBoxBody) = MakeDock("Channel Box", 240 * s);
+        ChannelBox = new Docks.ChannelBox { Name = "ChannelBox" };
+        ChannelBoxBody.AddChild(ChannelBox);
         _rightSplit.AddChild(ChannelBoxDock);
 
         HelpLine = new Label { Name = "HelpLine", Text = "Select a tool.", CustomMinimumSize = new Vector2(0, 20 * s) };
@@ -107,6 +110,7 @@ public partial class Shell : Control
 
         Viewport.Bind(Document);
         Outliner.Bind(Document);
+        ChannelBox.Bind(Document);
 
         // --- 서비스
         ToolContext = new ToolContext { Doc = Document, Viewport = Viewport, Settings = Settings, SetHelp = t => HelpLine.Text = t };

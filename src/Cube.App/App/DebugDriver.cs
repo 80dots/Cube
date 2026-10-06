@@ -122,6 +122,13 @@ public partial class DebugDriver : Node
                 {
                     var doc = CubeApp.Instance.Document;
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode}");
+                    var active = doc.Find(doc.Selection.ActiveObject) ?? doc.MeshNodes().FirstOrDefault();
+                    if (active?.Mesh != null)
+                    {
+                        float ymax = float.MinValue, ymin = float.MaxValue;
+                        foreach (var v in active.Mesh.Verts) if (v.Alive) { ymax = MathF.Max(ymax, v.Position.Y); ymin = MathF.Min(ymin, v.Position.Y); }
+                        GD.Print($"[Drive] active={active.Name} local={active.Local} meshY=[{ymin:F3},{ymax:F3}] comps={string.Join("|", doc.Selection.Components.Select(kv => $"{kv.Key}:v{kv.Value.Verts.Count}/e{kv.Value.Edges.Count}/f{kv.Value.Faces.Count}"))}");
+                    }
                     break;
                 }
             default: GD.PrintErr($"[Drive] unknown step {p[0]}"); break;
