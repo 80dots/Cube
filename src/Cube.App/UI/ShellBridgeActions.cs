@@ -47,7 +47,8 @@ public partial class Shell
         Actions.Register("bridge.autoReload", "Auto Reload When File Changes", () => { Settings.Bridge.AutoReload = !Settings.Bridge.AutoReload; Settings.Save(); }, isChecked: () => Settings.Bridge.AutoReload);
         Actions.Register("bridge.openFolder", "Open Bridge Folder", () => { var d = BridgeDir(null); OS.ShellOpen(d); });
         Actions.Register("bridge.settings", "Bridge Settings...", ToggleBridgeSettings, isChecked: () => BridgeSettingsWindow?.Visible ?? false);
-        Actions.Register("bridge.blenderFile", "Send to Blender (add-on receives)", () => SendToBridge(BridgeApp.Blender, launch: false), canExecute: HasBridgeNodes, repeatable: true);
+        Actions.Register("bridge.blenderAll", "Send All to Blender", () => SendToBridge(BridgeApp.Blender, launch: false, selection: false), canExecute: HasBridgeNodes, repeatable: true);
+        Actions.Register("bridge.blenderSelected", "Send Selected to Blender", () => SendToBridge(BridgeApp.Blender, launch: false, selection: true), canExecute: () => Document.Selection.Objects.Count > 0, repeatable: true);
         Actions.Register("bridge.installBlenderAddon", "Install Blender Add-on", InstallBlenderAddon);
         Actions.Register("bridge.saveBlenderAddon", "Save Blender Add-on As...", SaveBlenderAddon);
         Actions.Register("bridge.openAddonsFolder", "Open Add-ons Folder (shipped add-ons)", () =>
@@ -76,19 +77,20 @@ public partial class Shell
     }
 
     /// <summary>보낼 노드: 선택 오브젝트(없으면 루트 자식 전부). 선택이 있으면 선택만 내보낸다.</summary>
-    private List<SceneNode> BridgeNodes(out bool selectionOnly)
+    /// <summary>보낼 노드. selection = null이면 선택이 있을 때 선택, 없으면 전체; true/false는 강제.</summary>
+    private List<SceneNode> BridgeNodes(bool? selection, out bool selectionOnly)
     {
         var sel = Document.Selection.Objects.Select(id => Document.Find(id)).Where(n => n != null).Cast<SceneNode>().ToList();
-        selectionOnly = sel.Count > 0;
+        selectionOnly = selection ?? sel.Count > 0;
         return selectionOnly ? sel : Document.Root.Children.ToList();
     }
 
-    private void SendToBridge(BridgeApp app) => SendToBridge(app, launch: true);
+    private void SendToBridge(BridgeApp app) => SendToBridge(app, launch: true, selection: null);
 
-    private void SendToBridge(BridgeApp app, bool launch)
+    private void SendToBridge(BridgeApp app, bool launch, bool? selection)
     {
-        var nodes = BridgeNodes(out bool selOnly);
-        if (nodes.Count == 0) { HelpLine.Text = "Bridge: nothing to send."; return; }
+        var nodes = BridgeNodes(selection, out bool selOnly);
+        if (nodes.Count == 0) { HelpLine.Text = selOnly ? "Bridge: nothing selected." : "Bridge: nothing to send."; return; }
         string dir = BridgeDir(app);
         string path;
         try
@@ -114,7 +116,7 @@ public partial class Shell
 
         string ret = app == BridgeApp.Blender ? System.IO.Path.Combine(dir, "cube_bridge.obj") : path;
         Bridge = new BridgeSession { App = app, Path = path, ReturnPath = ret, Nodes = nodes.Select(n => (n.Id, n.Name)).ToList(), Stamp = System.IO.File.Exists(ret) ? System.IO.File.GetLastWriteTimeUtc(ret) : DateTime.UtcNow };
-        if (!launch) { HelpLine.Text = $"Bridge: wrote {System.IO.Path.GetFileName(path)} — the Blender add-on (View3D sidebar → Cube tab, Auto receive) imports it; 'Send to Cube' there sends it back here."; return; }
+        if (!launch) { HelpLine.Text = $"Bridge: sent {nodes.Count} node(s) ({(selOnly ? "selected" : "all")}) — the Blender add-on (View3D sidebar → Cube tab, Auto receive) imports {System.IO.Path.GetFileName(path)}; 'Send All/Selected to Cube' there sends back."; return; }
         string? exe = ResolveExe(app);
         if (exe == null)
         {

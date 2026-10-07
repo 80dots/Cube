@@ -3,21 +3,21 @@
 # Install: Blender > Edit > Preferences > Add-ons > Install... > choose this file > enable "Cube Bridge"
 #          (or Cube > Bridge > Add-ons > Install Blender Add-on, which copies it into your Blender add-on folders).
 # Use:     View3D sidebar (N) > Cube tab.
-#          Receive from Cube  — imports cube_bridge.fbx written by Cube > Bridge > Send to Blender
-#                               (FBX keeps n-gons, shared vertices, custom normals, UVs, materials/textures, joints/skin).
-#          Send to Cube       — exports the scene (or the selection) to cube_bridge.obj (n-gons, normals, UVs) plus cube_bridge.json
-#                               (object origins = world matrices, so Cube restores pivot/rotation/scale); Cube reloads it.
-#          Auto receive       — watches cube_bridge.fbx and imports it whenever Cube writes it.
+#          Auto receive            — watches cube_bridge.fbx (written by Cube > Bridge > Send All/Selected to Blender) and imports it
+#                                    (FBX keeps n-gons, shared vertices, custom normals, UVs, materials/textures, joints/skin).
+#          Send All to Cube        — exports the whole scene to cube_bridge.obj (n-gons, normals, UVs) plus cube_bridge.json
+#                                    (object origins = world matrices, so Cube restores pivot/rotation/scale); Cube reloads it.
+#          Send Selected to Cube   — same for the selected objects only.
 #          Export on save     — also sends to Cube every time the .blend is saved.
 # The bridge folder defaults to %APPDATA%/Godot/app_userdata/Cube/bridge/blender (Cube's user:// folder on Windows).
 
 bl_info = {
     "name": "Cube Bridge",
     "author": "Cube",
-    "version": (1, 2, 0),
+    "version": (1, 3, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > Cube",
-    "description": "Send meshes to and receive meshes from Cube (FBX in, OBJ out, polygons intact)",
+    "description": "Exchange meshes with Cube: auto-receives cube_bridge.fbx, Send All/Selected to Cube writes OBJ + origins",
     "category": "Import-Export",
 }
 
@@ -85,11 +85,10 @@ class CubeBridgePreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
     bridge_dir: StringProperty(name="Bridge folder", subtype='DIR_PATH', default=default_bridge_dir(),
                                description="Folder where Cube writes cube_bridge.fbx and reads cube_bridge.obj (Cube user://bridge/blender)")
-    auto_receive: BoolProperty(name="Auto receive", default=True, description="Import cube_bridge.fbx whenever Cube writes it")
+    auto_receive: BoolProperty(name="Auto receive", default=True, description="Import cube_bridge.fbx whenever Cube writes it (Bridge > Send All/Selected to Blender)")
     export_on_save: BoolProperty(name="Send to Cube when saving the .blend", default=False)
     replace_previous: BoolProperty(name="Replace previously received objects", default=True,
                                    description="Delete the objects imported last time (kept in the 'Cube Bridge' collection) before importing again")
-    use_selection: BoolProperty(name="Send only the selection when something is selected", default=True)
 
     def draw(self, context):
         col = self.layout.column()
@@ -97,7 +96,6 @@ class CubeBridgePreferences(bpy.types.AddonPreferences):
         col.prop(self, "auto_receive")
         col.prop(self, "export_on_save")
         col.prop(self, "replace_previous")
-        col.prop(self, "use_selection")
         col.label(text="Receive: " + receive_file())
         col.label(text="Send:    " + send_file())
 
@@ -189,11 +187,14 @@ def _export_obj(path, use_sel):
                                  axis_forward='-Z', axis_up='Y', global_scale=1.0)
 
 
-def send(context, report=None):
+def send(context, use_sel, report=None):
     path = send_file()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    p = prefs()
-    use_sel = bool(p.use_selection and context.selected_objects)
+    if use_sel and not context.selected_objects:
+        msg = "Nothing selected"
+        if report: report({'WARNING'}, msg)
+        set_status(msg)
+        return False
     try:
         _export_obj(path, use_sel)
         objects = context.selected_objects if use_sel else list(context.view_layer.objects)
@@ -209,22 +210,26 @@ def send(context, report=None):
     return True
 
 
-class CUBE_OT_receive(bpy.types.Operator):
-    bl_idname = "cube.receive_from_cube"
-    bl_label = "Receive from Cube"
-    bl_description = "Import cube_bridge.fbx written by Cube (Bridge > Send to Blender)"
+class CUBE_OT_send_all(bpy.types.Operator):
+    bl_idname = "cube.send_all_to_cube"
+    bl_label = "Send All to Cube"
+    bl_description = "Export the whole scene to cube_bridge.obj (+ origins); Cube reloads it automatically"
 
     def execute(self, context):
-        return {'FINISHED'} if receive(context, self.report) else {'CANCELLED'}
+        return {'FINISHED'} if send(context, False, self.report) else {'CANCELLED'}
 
 
-class CUBE_OT_send(bpy.types.Operator):
-    bl_idname = "cube.send_to_cube"
-    bl_label = "Send to Cube"
-    bl_description = "Export the scene (or the selection) to cube_bridge.obj; Cube reloads it automatically"
+class CUBE_OT_send_selected(bpy.types.Operator):
+    bl_idname = "cube.send_selected_to_cube"
+    bl_label = "Send Selected to Cube"
+    bl_description = "Export the selected objects to cube_bridge.obj (+ origins); Cube reloads it automatically"
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.selected_objects)
 
     def execute(self, context):
-        return {'FINISHED'} if send(context, self.report) else {'CANCELLED'}
+        return {'FINISHED'} if send(context, True, self.report) else {'CANCELLED'}
 
 
 class CUBE_OT_open_folder(bpy.types.Operator):
@@ -248,12 +253,11 @@ class CUBE_PT_bridge(bpy.types.Panel):
         p = prefs()
         layout = self.layout
         col = layout.column(align=True)
-        col.operator("cube.receive_from_cube", icon='IMPORT')
-        col.operator("cube.send_to_cube", icon='EXPORT')
+        col.operator("cube.send_all_to_cube", icon='EXPORT')
+        col.operator("cube.send_selected_to_cube", icon='RESTRICT_SELECT_OFF')
         layout.prop(p, "auto_receive")
         layout.prop(p, "export_on_save")
         layout.prop(p, "replace_previous")
-        layout.prop(p, "use_selection")
         box = layout.box()
         rp = receive_file()
         box.label(text="in: " + RECEIVE_NAME, icon='FILE_3D' if os.path.isfile(rp) else 'ERROR')
@@ -283,12 +287,12 @@ def _watch():
 def _on_save(_dummy):
     try:
         if prefs().export_on_save:
-            send(bpy.context)
+            send(bpy.context, False)
     except Exception as e:
         print("Cube Bridge export on save failed:", e)
 
 
-classes = (CubeBridgePreferences, CUBE_OT_receive, CUBE_OT_send, CUBE_OT_open_folder, CUBE_PT_bridge)
+classes = (CubeBridgePreferences, CUBE_OT_send_all, CUBE_OT_send_selected, CUBE_OT_open_folder, CUBE_PT_bridge)
 
 
 def register():

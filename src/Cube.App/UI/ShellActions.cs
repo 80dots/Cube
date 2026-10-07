@@ -638,7 +638,7 @@ public partial class Shell
             .Item("render.headlight").Item("render.shadows");
 
         Menus.Build(Add("Bridge"))
-            .Item("bridge.blenderFile").Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()
+            .Item("bridge.blenderAll").Item("bridge.blenderSelected").Separator().Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()
             .Submenu("Add-ons", m => m.Item("bridge.installBlenderAddon").Item("bridge.saveBlenderAddon").Separator().Item("bridge.openAddonsFolder"))
             .Item("bridge.tripo").Separator()
             .Item("bridge.reload").Item("bridge.autoReload").Item("bridge.openFolder").Separator()
