@@ -18,6 +18,9 @@ public partial class Shell : Control
     public MenuBar MenuBar { get; private set; } = null!;
     public HBoxContainer StatusLine { get; private set; } = null!;
     public TabContainer Shelf { get; private set; } = null!;
+    /// <summary>셸프 줄 전체: [탭 셸프(확장)] | [Bridge 영역(오른쪽 끝)].</summary>
+    public HBoxContainer ShelfRow { get; private set; } = null!;
+    public HBoxContainer BridgeShelf { get; private set; } = null!;
     public HBoxContainer PolyShelf { get; private set; } = null!;
     public HBoxContainer UvShelf { get; private set; } = null!;
     public HBoxContainer RigShelf { get; private set; } = null!;
@@ -84,11 +87,27 @@ public partial class Shell : Control
         root.AddChild(Wrap(StatusLine, MayaTheme.PanelDark));
 
         // 셸프: Maya처럼 탭(Polygons / UV / Rigging)마다 아이콘+텍스트 버튼 줄
-        Shelf = new TabContainer { Name = "Shelf", CustomMinimumSize = new Vector2(0, 108 * s) };
+        // 셸프 줄을 둘로 나눈다: 왼쪽은 탭 셸프(남는 폭), 오른쪽 끝은 Bridge 영역(외부 앱 연동 기능 전부, 아이콘 버튼)
+        ShelfRow = new HBoxContainer { Name = "ShelfRow", CustomMinimumSize = new Vector2(0, 108 * s) };
+        ShelfRow.AddThemeConstantOverride("separation", 0);
+        root.AddChild(ShelfRow);
+        Shelf = new TabContainer { Name = "Shelf", SizeFlagsHorizontal = SizeFlags.ExpandFill };
         PolyShelf = MakeShelfTab("Polygons");
         UvShelf = MakeShelfTab("UV");
         RigShelf = MakeShelfTab("Rigging");
-        root.AddChild(Shelf);
+        ShelfRow.AddChild(Shelf);
+        ShelfRow.AddChild(new VSeparator());
+        var bridgePanel = new PanelContainer { Name = "BridgePanel" };
+        bridgePanel.AddThemeStyleboxOverride("panel", new StyleBoxFlat { BgColor = MayaTheme.PanelDark, ContentMarginLeft = 4 * s, ContentMarginRight = 4 * s, ContentMarginTop = 2 * s });
+        var bridgeBox = new VBoxContainer();
+        bridgeBox.AddThemeConstantOverride("separation", (int)(2 * s));
+        var bridgeTitle = new Label { Text = "Bridge" };
+        bridgeTitle.AddThemeColorOverride("font_color", MayaTheme.TextDim);
+        bridgeBox.AddChild(bridgeTitle);
+        BridgeShelf = new HBoxContainer { Name = "BridgeItems" };
+        bridgeBox.AddChild(BridgeShelf);
+        bridgePanel.AddChild(bridgeBox);
+        ShelfRow.AddChild(bridgePanel);
 
         // --- 중앙
         _mainSplit = new HSplitContainer { Name = "MainSplit", SizeFlagsVertical = SizeFlags.ExpandFill };
@@ -308,6 +327,10 @@ public partial class Shell : Control
             new[] { ("uv.unfold", "Unfold", "uv_unfold"), ("uv.layoutApply", "Layout", "uv_layout"), ("uv.cut", "Cut UV", "uv_cut"), ("uv.sew", "Sew UV", "uv_sew"), ("uv.flipU", "Flip U", "uv_flip_u"), ("uv.flipV", "Flip V", "uv_flip_v") },
             new[] { ("uv.autoSeams", "Auto Seams", "uv_autoseam"), ("uv.autoWrap", "Auto Wrap", "uv_autowrap") },
             new[] { ("uv.automaticApply", "Automatic", "uv_automatic"), ("uv.optimize", "Optimize", "uv_optimize"), ("uv.straightenApply", "Straighten", "uv_straighten"), ("uv.pin", "Pin", "uv_pin"), ("uv.cutSewTool", "3D Cut/Sew", "uv_cutsew"), ("uv.setEditor", "UV Sets", "uv_sets") });
+        Fill(BridgeShelf,
+            new[] { ("bridge.blenderAll", "All → Blender", "bridge_blender_all"), ("bridge.blenderSelected", "Sel → Blender", "bridge_blender_sel"), ("bridge.rizom", "RizomUV", "bridge_rizom"), ("bridge.marmoset", "Marmoset", "bridge_marmoset"), ("bridge.cascadeur", "Cascadeur", "bridge_cascadeur"), ("bridge.tripo", "Tripo3D", "bridge_tripo") },
+            new[] { ("bridge.reload", "Reload", "bridge_reload"), ("bridge.autoReload", "Auto", "bridge_auto"), ("bridge.openFolder", "Folder", "bridge_folder") },
+            new[] { ("bridge.installBlenderAddon", "Add-on", "bridge_addon"), ("bridge.settings", "Settings", "preferences") });
         Fill(RigShelf,
             new[] { ("skeleton.jointTool", "Joint Tool", "rig_joint"), ("skeleton.insertJointTool", "Insert Joint", "rig_insert_joint"), ("skeleton.mirror", "Mirror Joint", "rig_mirror"), ("skeleton.orient", "Orient Joint", "rig_orient"), ("skeleton.orientApply", "Orient Now", "rig_orient") },
             new[] { ("skin.bind", "Bind Skin", "skin_bind"), ("skin.detach", "Detach Skin", "skin_detach"), ("skin.paintTool", "Paint Weights", "skin_paint"), ("skin.normalize", "Normalize", "skin_normalize"), ("skin.rebind", "Reset Weights", "skin_rebind") });
@@ -377,7 +400,7 @@ public partial class Shell : Control
     public void ToggleMaximizeViewport()
     {
         _maximized = !_maximized;
-        foreach (var n in new Control[] { StatusLine.GetParent<Control>(), Shelf, _mainSplit.GetChild<Control>(0), PropertiesDock, HelpLine.GetParent<Control>() })
+        foreach (var n in new Control[] { StatusLine.GetParent<Control>(), ShelfRow, _mainSplit.GetChild<Control>(0), PropertiesDock, HelpLine.GetParent<Control>() })
             n.Visible = !_maximized;
     }
 
