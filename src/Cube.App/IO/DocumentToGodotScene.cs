@@ -190,24 +190,36 @@ public static class DocumentToGodotScene
             var list = v < skin.Weights.Length ? skin.Weights[v] : null;
             float sum = 0; int k = 0;
             if (list != null)
-                foreach (var (j, w) in list.OrderByDescending(x => x.weight).Take(4)) { bones4[c * 4 + k] = boneOf[j]; weights4[c * 4 + k] = w; sum += w; k++; }
+                foreach (var (j, w) in list.OrderByDescending(x => x.weight).Take(4)) { bones4[c * 4 + k] = j; weights4[c * 4 + k] = w; sum += w; k++; }
             if (sum > 1e-6f) for (int i = 0; i < 4; i++) weights4[c * 4 + i] /= sum;
-            else { bones4[c * 4] = boneOf.Length > 0 ? boneOf[0] : 0; weights4[c * 4] = 1f; }
+            else { bones4[c * 4] = 0; weights4[c * 4] = 1f; }
         }
         var arr = new ArrayMesh { ResourceName = n.Name + "Shape" };
         new GodotMeshBridge().UploadSurface(arr, render, null, bones4, weights4);
         if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(n));
         ctx.Tris += render.TriangleCount;
 
-        // Skin: 본마다 역바인드(스켈레톤 공간) = skelWorld · inv(jointWorld)
+        // Skin: 스킨 조인트 j = 바인드 j(메시 BONES 값은 바인드 번호), 역바인드(스켈레톤 공간) = skelWorld · inv(jointWorld)
         var gskin = new Skin();
         for (int j = 0; j < skin.Joints.Count; j++)
         {
             var jn = doc.Find(skin.Joints[j]);
-            if (jn == null) continue;
-            NMat.Invert(jn.WorldMatrix, out var jointInv);
-            gskin.AddBind(boneOf[j], (skelWorld * jointInv).ToGodot());
-            gskin.SetBindName(j, jn.Name);
+            var jointInv = NMat.Identity;
+            if (jn != null) NMat.Invert(jn.WorldMatrix, out jointInv);
+            gskin.AddBind(boneOf[j], (skelWorld * jointInv).ToGodot()); // 바인드 번호가 j와 같도록 항상 추가
+            gskin.SetBindName(j, jn?.Name ?? skel.GetBoneName(boneOf[j]));
+        }
+        // 가중치가 없는 본도 바인드로 넣는다: Godot glTF 내보내기는 Skin에 없는 본을 버리는데, 그 본의 트랜스폼(루트 본 회전 등)과 애니메이션이 함께 사라진다
+        var bound = new HashSet<int>(boneOf);
+        foreach (var (jid, info) in ctx.Bones)
+        {
+            if (info.skel != skel || bound.Contains(info.bone)) continue;
+            var jn = doc.Find(jid); if (jn == null) continue;
+            NMat.Invert(jn.WorldMatrix, out var inv2);
+            int bi = gskin.GetBindCount();
+            gskin.AddBind(info.bone, (skelWorld * inv2).ToGodot());
+            gskin.SetBindName(bi, jn.Name);
+            bound.Add(info.bone);
         }
         mi = new MeshInstance3D { Name = n.Name, Mesh = arr, Skin = gskin };
         skel.AddChild(mi);

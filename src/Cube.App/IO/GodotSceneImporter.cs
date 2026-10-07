@@ -120,6 +120,18 @@ public abstract class GodotSceneImporterBase : IImporter
             ctx.Meshes++;
             if (skinData != null && TryFindSkeleton(g, out var skelNode) && ctx.BoneNodes.TryGetValue(skelNode, out var boneNodes))
             {
+                // 메시 BONES 값은 스켈레톤 본 번호가 아니라 Skin 바인드 번호다(Skin이 있을 때). 바인드 → 본으로 바꾼다
+                if (skinData.Skin is { } gs && gs.GetBindCount() > 0)
+                {
+                    var map = new int[gs.GetBindCount()];
+                    for (int b = 0; b < map.Length; b++)
+                    {
+                        int bone = gs.GetBindBone(b);
+                        if (bone < 0) bone = skelNode.FindBone(gs.GetBindName(b));
+                        map[b] = bone;
+                    }
+                    skinData.BindToBone = map;
+                }
                 var skin = BuildSkin(skinData, boneNodes, vmap, mesh, out var jointNodes);
                 if (skin != null) { shape.Skin = skin; ctx.Pending.Add((node, skin, jointNodes)); ctx.Skins++; }
             }
@@ -147,6 +159,8 @@ public abstract class GodotSceneImporterBase : IImporter
     private sealed class SkinData
     {
         public Skin? Skin;
+        /// <summary>바인드 번호 → 스켈레톤 본 번호(없으면 BONES 값을 본 번호로 본다).</summary>
+        public int[]? BindToBone;
         public List<(int[] bones, float[] weights, int stride)> PerSurface = new();
     }
 
@@ -159,6 +173,7 @@ public abstract class GodotSceneImporterBase : IImporter
         var jointIndexOfBone = new Dictionary<int, int>();
         int Joint(int bone)
         {
+            if (sd.BindToBone != null) bone = bone >= 0 && bone < sd.BindToBone.Length ? sd.BindToBone[bone] : -1;
             if (bone < 0 || bone >= boneNodes.Length) return -1;
             if (!jointIndexOfBone.TryGetValue(bone, out int j)) { j = joints.Count; joints.Add(boneNodes[bone]); jointIndexOfBone[bone] = j; }
             return j;

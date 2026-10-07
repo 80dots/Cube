@@ -49,10 +49,16 @@ public sealed class MenuBuilder
         }
     }
 
+    private readonly HashSet<PopupMenu> _wired = new();
+
+    /// <summary>같은 팝업에 여러 번 호출해 항목을 이어 붙일 수 있다(File 메뉴). 클릭 핸들러는 팝업마다 한 번만 연결한다(두 번 연결하면 액션이 두 번 실행됨).</summary>
     public Menu Build(PopupMenu popup)
     {
-        popup.IdPressed += id => OnPressed(popup, id);
-        popup.AboutToPopup += () => RefreshStates(popup);
+        if (_wired.Add(popup))
+        {
+            popup.IdPressed += id => OnPressed(popup, id);
+            popup.AboutToPopup += () => RefreshStates(popup);
+        }
         return new Menu(this, popup);
     }
 

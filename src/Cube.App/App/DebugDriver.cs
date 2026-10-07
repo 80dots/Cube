@@ -248,8 +248,45 @@ public partial class DebugDriver : Node
                             if (d > worst) { worst = d; wn = sk.GetBoneName(b); }
                         }
                         GD.Print($"[Drive] skincheck pose t={t} clip={p[2]} worst bone position diff={worst:F4} at {wn}");
+                        // 메시 변형: Godot 규칙(BONES = 바인드 번호, 정점(스켈레톤 공간) = Σ w · global[bindBone] · bindPose · v)으로 직접 계산한 AABB와 Cube 표시 AABB 비교
+                        Mesh? gm = mi?.Mesh ?? imi?.Mesh?.GetMesh();
+                        if (gm != null && skin != null)
+                        {
+                            var gmin = new Vector3(1e9f, 1e9f, 1e9f); var gmax = -gmin;
+                            for (int sfi = 0; sfi < gm.GetSurfaceCount(); sfi++)
+                            {
+                                var arr = gm.SurfaceGetArrays(sfi);
+                                var pos = arr[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                                var bns = arr[(int)Mesh.ArrayType.Bones].AsInt32Array(); var wts = arr[(int)Mesh.ArrayType.Weights].AsFloat32Array();
+                                int stride = bns.Length / Math.Max(1, pos.Length);
+                                for (int v = 0; v < pos.Length; v++)
+                                {
+                                    var acc = Vector3.Zero;
+                                    for (int k = 0; k < stride; k++)
+                                    {
+                                        float w = wts[v * stride + k]; if (w <= 0) continue;
+                                        int bind = bns[v * stride + k];
+                                        int bone = skin.GetBindBone(bind); if (bone < 0) bone = sk.FindBone(skin.GetBindName(bind));
+                                        acc += w * (glob[bone] * skin.GetBindPose(bind) * pos[v]);
+                                    }
+                                    gmin = gmin.Min(acc); gmax = gmax.Max(acc);
+                                }
+                            }
+                            var sn = CubeApp.Instance.Document.SkinnedNodes().FirstOrDefault();
+                            var mv = sn != null ? UI.Shell.Instance.Viewport.Scene.GetMeshView(sn.Id) : null;
+                            var dmin = new System.Numerics.Vector3(1e9f); var dmax = -dmin;
+                            if (mv?.Deformed != null) foreach (var dp in mv.Deformed) { dmin = System.Numerics.Vector3.Min(dmin, dp); dmax = System.Numerics.Vector3.Max(dmax, dp); }
+                            GD.Print($"[Drive] skincheck mesh godot=<{gmin.X:F3},{gmin.Y:F3},{gmin.Z:F3}>..<{gmax.X:F3},{gmax.Y:F3},{gmax.Z:F3}> cube=<{dmin.X:F3},{dmin.Y:F3},{dmin.Z:F3}>..<{dmax.X:F3},{dmax.Y:F3},{dmax.Z:F3}>");
+                        }
                     }
                     scene.Free();
+                    break;
+                }
+            case "confirm":   // 열린 확인 다이얼로그의 OK(Discard)를 누른다
+                {
+                    var dl = UI.Shell.Instance.FindChildren("*", "ConfirmationDialog", true, false).OfType<ConfirmationDialog>().FirstOrDefault(d => d.Visible);
+                    if (dl != null) { dl.Hide(); dl.EmitSignal(AcceptDialog.SignalName.Confirmed); }
+                    GD.Print($"[Drive] confirm {(dl != null)}");
                     break;
                 }
             case "anim":   // anim play|pause|rest|frame N|clip N|key +1/-1: 애니메이션 재생기 조작
@@ -419,7 +456,7 @@ public partial class DebugDriver : Node
                 {
                     var doc = CubeApp.Instance.Document;
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen} cursor={DisplayServer.CursorGetShape()}");
-                    GD.Print($"[Drive] {UI.Shell.Instance.ActionPopup.DebugSummary()}");
+                    GD.Print($"[Drive] {UI.Shell.Instance.ActionPopup.DebugSummary()} dialogs={UI.Shell.Instance.FindChildren("*", "ConfirmationDialog", true, false).Count(n => n is Window w && w.Visible)}");
                     if (doc.Animations.Count > 0)
                     {
                         var pb = UI.Shell.Instance.Playback;
