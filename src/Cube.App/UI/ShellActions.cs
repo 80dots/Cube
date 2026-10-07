@@ -19,6 +19,8 @@ public partial class Shell
         Tools.Register(new RotateTool());
         Tools.Register(new ScaleTool());
         Tools.Register(new InsertEdgeLoopTool());
+        Tools.Register(new JointTool());
+        Tools.Register(new PaintWeightsTool());
     }
 
     private void RegisterActions()
@@ -45,7 +47,7 @@ public partial class Shell
         Actions.Register("mode.face", "Face", () => SetComponentMode(SelectMode.Face), isChecked: () => sel.Mode == SelectMode.Face);
         Actions.Register("mode.uv", "UV", () => SetComponentMode(SelectMode.Uv), isChecked: () => sel.Mode == SelectMode.Uv);
 
-        Actions.Register("select.all", "Select All", () => RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.MeshNodes().Select(n => n.Id)); }));
+        Actions.Register("select.all", "Select All", () => RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); }));
         Actions.Register("select.none", "Deselect All", () => RecordSelection(s => s.ClearAll()), canExecute: () => !sel.IsEmpty);
         Actions.Register("select.grow", "Grow Selection", () => GrowShrink(true), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.shrink", "Shrink Selection", () => GrowShrink(false), canExecute: () => sel.IsComponentMode);
@@ -134,6 +136,7 @@ public partial class Shell
 
         Actions.Register("app.escape", "Escape", () => { Tools.CancelCurrent(); Viewport.GrabFocus(); });
         RegisterUvActions();
+        RegisterRigActions();
     }
 
     private SelectMode _lastComponentMode = SelectMode.Vertex;
@@ -565,8 +568,8 @@ public partial class Shell
             .Item("windows.uvEditor").Separator()
             .Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
             .Item("uv.unfold").Item("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
-        Menus.Build(Add("Skeleton")).Item("skeleton.createJoints", "Create Joints", disabled: true);
-        Menus.Build(Add("Skin")).Item("skin.bind", "Bind Skin", disabled: true);
+        Menus.Build(Add("Skeleton")).Item("skeleton.jointTool");
+        Menus.Build(Add("Skin")).Item("skin.bind").Item("skin.detach").Separator().Item("skin.paintTool").Item("skin.normalize").Item("skin.rebind");
 
         Menus.Build(Add("Display"))
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()

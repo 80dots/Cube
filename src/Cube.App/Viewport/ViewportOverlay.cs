@@ -9,6 +9,8 @@ public partial class ViewportOverlay : Control
     public Camera3D? Camera;
     public string CameraLabel = "persp";
     public Rect2? Marquee;
+    /// <summary>페인트 브러시 원(중심 픽셀, 반지름 픽셀).</summary>
+    public (Vector2 center, float radiusPx)? Brush;
 
     public override void _Ready()
     {
@@ -53,6 +55,11 @@ public partial class ViewportOverlay : Control
             }
         }
 
+        if (Brush is { } br)
+        {
+            DrawArc(br.center, Mathf.Max(br.radiusPx, 2f), 0, Mathf.Tau, 48, new Color(1f, 0.35f, 0.35f, 0.9f), 1.5f * s, true);
+            DrawCircle(br.center, 2 * s, new Color(1f, 0.35f, 0.35f, 0.9f));
+        }
         // 마키
         if (Marquee is { } r)
         {

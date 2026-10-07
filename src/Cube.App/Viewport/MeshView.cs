@@ -25,7 +25,10 @@ public partial class MeshView : Node3D
 
     private static Shader? _wireShader, _pointsShader, _tintShader;
     private static Shader? _surfaceShader;
-    private static ShaderMaterial? _shadedMat;
+    private static ShaderMaterial? _shadedMat, _weightMat;
+    /// <summary>스킨 변형된 표시 위치(정점 ID 순). null이면 메시 위치 그대로.</summary>
+    public System.Numerics.Vector3[]? Deformed { get; private set; }
+    private bool _surfaceHasColors;
     private static QuadMesh? _quad;
 
     public SceneNode Node { get; }
@@ -55,6 +58,8 @@ public partial class MeshView : Node3D
         public float VertexPx = 4f;
         /// <summary>null이면 기본 회색 lambert, 아니면 이 머티리얼로 표면을 그린다(UV 그리드 등).</summary>
         public Material? SurfaceMaterial;
+        /// <summary>Paint Skin Weights: 정점 ID → 가중치(0..1). 있으면 표면을 흑백 램프로 그린다.</summary>
+        public Func<int, float>? WeightOf;
     }
 
     public ComponentStyle Style { get; } = new();
@@ -72,6 +77,7 @@ public partial class MeshView : Node3D
         _tintShader ??= GD.Load<Shader>("res://assets/shaders/face_tint.gdshader");
         _surfaceShader ??= GD.Load<Shader>("res://assets/shaders/surface.gdshader");
         _shadedMat ??= new ShaderMaterial { Shader = _surfaceShader };
+        if (_weightMat == null) { _weightMat = new ShaderMaterial { Shader = _surfaceShader }; _weightMat.SetShaderParameter("use_vertex_color", true); }
         _quad ??= new QuadMesh { Size = new Vector2(1, 1) };
 
         _surface = new MeshInstance3D { Name = "Surface", Mesh = _surfaceMesh, MaterialOverride = _shadedMat, CastShadow = GeometryInstance3D.ShadowCastingSetting.On };
@@ -108,7 +114,8 @@ public partial class MeshView : Node3D
         var mesh = Node.Mesh;
         if (mesh == null) return;
         MeshTessellator.Build(mesh, Render);
-        _bridge.UploadSurface(_surfaceMesh, Render);
+        if (Deformed != null) MeshTessellator.UpdatePositions(mesh, Render, Deformed);
+        UploadSurface();
         RefreshStyle();
     }
 
@@ -117,10 +124,37 @@ public partial class MeshView : Node3D
     {
         var mesh = Node.Mesh;
         if (mesh == null) return;
-        MeshTessellator.UpdatePositions(mesh, Render);
+        MeshTessellator.UpdatePositions(mesh, Render, Deformed);
         // 노멀이 바뀌므로 표면은 다시 올린다(코너 수는 동일)
-        _bridge.UploadSurface(_surfaceMesh, Render);
+        UploadSurface();
         RefreshStyle();
+    }
+
+    /// <summary>스킨 변형 위치를 지정(null = 해제)하고 표시를 갱신한다.</summary>
+    public void SetDeformed(System.Numerics.Vector3[]? positions)
+    {
+        Deformed = positions;
+        if (_surface != null) UpdatePositions();
+    }
+
+    private void UploadSurface()
+    {
+        var mesh = Node.Mesh!;
+        var w = Style.WeightOf;
+        if (w != null)
+        {
+            _bridge.UploadSurface(_surfaceMesh, Render, i => WeightColor(w(mesh.Hes[Render.CornerToHalfEdge[i]].Vertex)));
+            _surfaceHasColors = true;
+        }
+        else { _bridge.UploadSurface(_surfaceMesh, Render); _surfaceHasColors = false; }
+    }
+
+    /// <summary>Maya 식 가중치 램프: 0 = 어두운 회색, 1 = 흰색(선형 색).</summary>
+    private static Color WeightColor(float w)
+    {
+        w = Math.Clamp(w, 0f, 1f);
+        float g = 0.12f + 0.88f * w;
+        return new Color(g, g, g).SrgbToLinear();
     }
 
     /// <summary>선택/모드 변경 등 색만 바뀐 경우.</summary>
@@ -130,7 +164,8 @@ public partial class MeshView : Node3D
         if (mesh == null || _surface == null) return;
         var s = Style;
         _surface.Visible = s.ShowSurface;
-        _surface.MaterialOverride = s.SurfaceMaterial ?? _shadedMat;
+        if ((s.WeightOf != null) != _surfaceHasColors || s.WeightOf != null) UploadSurface();
+        _surface.MaterialOverride = s.WeightOf != null ? _weightMat : (s.SurfaceMaterial ?? _shadedMat);
         _wire.Visible = s.ShowWire;
         _points.Visible = s.ShowVertices;
         _faceCenters.Visible = s.ShowFaceCenters;

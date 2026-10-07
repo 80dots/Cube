@@ -18,8 +18,10 @@ public sealed class GodotMeshBridge
     private Vector3[] _tintPos = Array.Empty<Vector3>();
     private int[] _tintIdx = Array.Empty<int>();
 
-    /// <summary>셰이딩 표면(삼각형)을 다시 올린다.</summary>
-    public void UploadSurface(ArrayMesh mesh, RenderMeshData r)
+    private Color[] _col = Array.Empty<Color>();
+
+    /// <summary>셰이딩 표면(삼각형)을 다시 올린다. cornerColor가 있으면 정점 색(선형)을, bones/weights가 있으면 스키닝 배열(코너당 4개)을 함께 올린다.</summary>
+    public void UploadSurface(ArrayMesh mesh, RenderMeshData r, Func<int, Color>? cornerColor = null, int[]? bones4 = null, float[]? weights4 = null)
     {
         mesh.ClearSurfaces();
         if (r.IndexCount == 0) return;
@@ -41,6 +43,17 @@ public sealed class GodotMeshBridge
         arrays[(int)Mesh.ArrayType.Normal] = _nrm;
         arrays[(int)Mesh.ArrayType.TexUV] = _uv;
         arrays[(int)Mesh.ArrayType.Index] = _idx;
+        if (cornerColor != null)
+        {
+            Fit(ref _col, r.CornerCount);
+            for (int i = 0; i < r.CornerCount; i++) _col[i] = cornerColor(i);
+            arrays[(int)Mesh.ArrayType.Color] = _col;
+        }
+        if (bones4 != null && weights4 != null)
+        {
+            arrays[(int)Mesh.ArrayType.Bones] = bones4;
+            arrays[(int)Mesh.ArrayType.Weights] = weights4;
+        }
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
     }
 

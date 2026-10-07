@@ -254,6 +254,16 @@ public partial class DebugDriver : Node
                 {
                     var doc = CubeApp.Instance.Document;
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen}");
+                    var joints = doc.JointNodes().ToList();
+                    if (joints.Count > 0) GD.Print($"[Drive] joints={joints.Count} {string.Join(",", joints.Select(j => $"{j.Name}@<{j.WorldMatrix.Translation.X:F2},{j.WorldMatrix.Translation.Y:F2},{j.WorldMatrix.Translation.Z:F2}>{(j.Parent is { IsRoot: false } p ? "<" + p.Name : "")}"))}");
+                    foreach (var sn in doc.SkinnedNodes())
+                    {
+                        var sk = sn.Skin!; int weighted = sk.Weights.Count(w => w != null && w.Count > 0);
+                        var mvw = UI.Shell.Instance.Viewport.Scene.GetMeshView(sn.Id);
+                        var dmin = new System.Numerics.Vector3(float.MaxValue); var dmax = new System.Numerics.Vector3(float.MinValue);
+                        if (mvw?.Deformed != null) foreach (var dp in mvw.Deformed) { dmin = System.Numerics.Vector3.Min(dmin, dp); dmax = System.Numerics.Vector3.Max(dmax, dp); }
+                        GD.Print($"[Drive] skin {sn.Name}: joints={sk.Joints.Count} weighted={weighted} w(v0)={(sk.Weights.Length > 0 && sk.Weights[0] != null ? string.Join("|", sk.Weights[0]!.Select(w => $"{w.joint}:{w.weight:F2}")) : "-")} deformedMax=<{dmax.X:F3},{dmax.Y:F3},{dmax.Z:F3}>");
+                    }
                     var active = doc.Find(doc.Selection.ActiveObject) ?? doc.MeshNodes().FirstOrDefault();
                     if (active?.Mesh != null)
                     {

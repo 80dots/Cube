@@ -5,6 +5,7 @@ render_mode cull_disabled, diffuse_lambert, specular_disabled;
 uniform vec4 albedo : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform bool use_texture = false;
+uniform bool use_vertex_color = false;
 
 void fragment() {
 	if (!FRONT_FACING) {
@@ -14,6 +15,7 @@ void fragment() {
 	} else {
 		vec3 c = albedo.rgb;
 		if (use_texture) c = texture(albedo_tex, UV).rgb;
+		if (use_vertex_color) c = COLOR.rgb;
 		ALBEDO = c;
 		ROUGHNESS = 1.0;
 		METALLIC = 0.0;

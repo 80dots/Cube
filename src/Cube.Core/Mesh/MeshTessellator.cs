@@ -120,15 +120,25 @@ public static class MeshTessellator
     }
 
     /// <summary>위상은 그대로이고 위치만 바뀐 경우 배열의 위치 값만 갱신한다(드래그 프리뷰).</summary>
-    public static void UpdatePositions(PolyMesh m, RenderMeshData r)
+    public static void UpdatePositions(PolyMesh m, RenderMeshData r) => UpdatePositions(m, r, null);
+
+    /// <summary>위치 갱신. positions가 주어지면(스킨 변형 등) 정점 ID로 그 배열을 쓴다.</summary>
+    public static void UpdatePositions(PolyMesh m, RenderMeshData r, Vector3[]? positions)
     {
-        for (int i = 0; i < r.CornerCount; i++) r.Positions[i] = m.Verts[m.Hes[r.CornerToHalfEdge[i]].Vertex].Position;
+        Vector3 P(int v) => positions != null && v < positions.Length ? positions[v] : m.Verts[v].Position;
+        for (int i = 0; i < r.CornerCount; i++) r.Positions[i] = P(m.Hes[r.CornerToHalfEdge[i]].Vertex);
         for (int i = 0; i < r.LineCount; i++)
         {
             var (a, b) = m.EdgeVertices(r.LineToEdge[i]);
-            r.LinePositions[i * 2] = m.Verts[a].Position; r.LinePositions[i * 2 + 1] = m.Verts[b].Position;
+            r.LinePositions[i * 2] = P(a); r.LinePositions[i * 2 + 1] = P(b);
         }
-        for (int i = 0; i < r.PointCount; i++) r.PointPositions[i] = m.Verts[r.PointToVertex[i]].Position;
-        for (int i = 0; i < r.FaceCenterCount; i++) r.FaceCenters[i] = m.FaceCentroid(r.FaceCenterToFace[i]);
+        for (int i = 0; i < r.PointCount; i++) r.PointPositions[i] = P(r.PointToVertex[i]);
+        for (int i = 0; i < r.FaceCenterCount; i++)
+        {
+            if (positions == null) { r.FaceCenters[i] = m.FaceCentroid(r.FaceCenterToFace[i]); continue; }
+            int start = m.Faces[r.FaceCenterToFace[i]].HalfEdge, he = start; var sum = Vector3.Zero; int n = 0;
+            do { sum += P(m.Hes[he].Vertex); n++; he = m.Hes[he].Next; } while (he != start);
+            r.FaceCenters[i] = sum / Math.Max(n, 1);
+        }
     }
 }

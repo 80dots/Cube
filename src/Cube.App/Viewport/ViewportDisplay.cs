@@ -28,6 +28,20 @@ public sealed class ViewportDisplay
     {
         _panel = panel;
         panel.Scene.MeshViewCreated += ApplyStyle;
+        panel.Scene.StyleRefreshRequested += ApplyStyle;
+    }
+
+    /// <summary>조인트 색: 활성 초록, 선택 흰색, 호버 밝은 회색, 그 외 파랑.</summary>
+    public void ApplyJointStyles()
+    {
+        var sel = _doc?.Selection;
+        foreach (var (id, jv) in _panel.Scene.JointViews)
+        {
+            bool selected = sel != null && sel.IsObjectSelected(id);
+            bool active = sel != null && sel.ActiveObject == id;
+            bool hovered = !selected && Hover is { } h && h.node == id && h.mode == SelectMode.Object;
+            jv.SetColor(active ? JointView.JointActive : selected ? JointView.JointSelected : hovered ? JointView.JointHover : JointView.JointNormal);
+        }
     }
 
     public void Bind(Document doc)
@@ -67,6 +81,7 @@ public sealed class ViewportDisplay
 
     public void RefreshAll()
     {
+        ApplyJointStyles();
         foreach (var mv in _panel.Scene.MeshViews.Values) ApplyStyle(mv);
     }
 
@@ -85,6 +100,8 @@ public sealed class ViewportDisplay
 
         s.ShowSurface = Mode != ShadingMode.Wireframe;
         s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : null;
+        var wd = UI.Shell.Instance?.WeightDisplay;
+        s.WeightOf = wd is { } w && w.node == id ? w.weight : null;
         s.ShowWire = Mode == ShadingMode.Wireframe || WireOnShaded || objSelected || compMode;
         s.ShowVertices = compMode && mode == SelectMode.Vertex;
         s.ShowFaceCenters = compMode && mode == SelectMode.Face;

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 "Cube"는 게임이 아니라 **게임 리소스 제작용 경량 DCC 툴**이다. Godot 4.7.2 mono(C#) 위에서 동작하며 Autodesk Maya의 인터페이스·조작법·단축키·기능 체계를 기준으로 한다. 집중 영역은 Low-poly 모델링, UV 편집(M2), 리깅/스키닝(M3, 바인드 포즈까지). 영상 렌더링과 키프레임 애니메이션은 범위 밖. glTF/FBX 가져오기·내보내기가 Unity/Godot에 바로 드롭인되는 것이 목표.
 
-현재 M1(뷰포트·Maya 내비게이션·선택·W/E/R 조작기·기본 폴리 편집·Undo·glTF·.cube 저장)과 M2(UV 편집기·UV 투영/Cut/Sew/Unfold/Layout·Insert Edge Loop·Bevel·Bridge·더블클릭 루프 선택·X/V 스냅·4분할 뷰·파이 메뉴)가 구현되어 있다. 전체 계획과 M2~M4 범위는 `C:\Users\minkyu\.claude\plans\maya-adaptive-glade.md` 참고.
+현재 M1(뷰포트·Maya 내비게이션·선택·W/E/R 조작기·기본 폴리 편집·Undo·glTF·.cube 저장)과 M2(UV 편집기·UV 투영/Cut/Sew/Unfold/Layout·Insert Edge Loop·Bevel·Bridge·더블클릭 루프 선택·X/V 스냅·4분할 뷰·파이 메뉴)·M3(조인트·스무스 바인드·가중치 페인트·LBS 변형 표시·glTF 스켈레톤/스킨 내보내기·가져오기·.cube 저장)가 구현되어 있다. 다음은 M4(바이너리 FBX writer). 전체 계획과 M2~M4 범위는 `C:\Users\minkyu\.claude\plans\maya-adaptive-glade.md` 참고.
 
 ## 엔진 및 도구 환경
 
@@ -50,6 +50,8 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - `Scene/Document.cs`: Maya DAG(`SceneNode` = transform, `MeshShape` = shape). Godot을 모르고 `Changed(DocChange)`만 발행. `Transform3`는 Maya 채널 박스와 같은 TRS(오일러 도, XYZ 순서, 행벡터 행렬 `S·Rx·Ry·Rz·T`).
 - `Mesh/MeshOps.*.cs`: `MeshOps`는 partial. `MeshOps.Loops.cs`(EdgeLoop/EdgeRing/InsertEdgeLoop), `MeshOps.Bevel.cs`(BevelEdges: 1세그먼트 챔퍼, 엣지 쿼드 + 정점 캡), `MeshOps.Bridge.cs`(BridgeEdges: 경계 엣지 체인 2개를 쿼드로 연결). 범용 위상 명령은 `Commands/MeshOpCommand.cs`(람다가 메시를 바꾸고 새 선택 컴포넌트를 돌려줌).
 - `Uv/UvOps.cs`: `UvTopology.Build`(심이 아닌 엣지에서 UV가 같은 코너를 합쳐 UV 점/셸을 만든다) + 투영(Planar/Cylindrical/Spherical, 경계와 UV 불연속 엣지를 심으로 표시)/CutEdges/SewEdges/UnfoldRelax/Layout/Flip. `Edge.Seam`이 UV 심이며 `.cube`에 `seams`로 저장된다. UV 편집 명령은 `Commands/UvCommands.cs`의 `UvEditCommand`(코너 UV + 심 스냅샷; 즉시형 또는 Capture/Commit 드래그형).
+- `Scene/Rig.cs`: `JointShape`(조인트 = JointShape를 가진 SceneNode, `IsJoint`)와 `SkinCluster`(조인트 ID 목록, 바인드 시점 조인트 월드 역행렬, 메시 바인드 월드, 정점별 (조인트, 가중치) 최대 4개). `MeshShape.Skin`에 붙는다. `Rig/SkinOps.cs`: `SmoothBind`(본 선분까지 거리 1/d² 가중, 상위 4개 정규화), `Deform`(LBS; 표시 전용, 메시 정점은 바인드 위치 그대로), `PaintVertex`(Replace/Add/Smooth, 다른 조인트는 비율 유지 정규화), `NormalizeAll`. 명령은 `Commands/SkinCommands.cs`(`SetSkinCommand` 바인드/디태치, `WeightPaintCommand` 스트로크). `ChangeKind.SkinChanged`. `.cube`에 `jointRadius`/`skin`으로 저장.
+- `Document.AddNode`는 하위 노드에도 ID를 배정한다. 문서에 넣기 전에 ID로 참조해야 하면(가져온 스킨의 조인트) `Document.AssignIds`를 먼저 호출한다.
 - `Selection/SelectionState.cs`: 모드(Object/Vertex/Edge/Face/Uv) + 노드별 `ComponentSet`. 선택 변경은 `SelectionCommand`로 Undo 가능(Maya 동일). `SelectionOps`는 Grow/Shrink/Convert.
 - `Commands/`: 자체 `UndoStack`(Godot UndoRedo 미사용). 드래그는 문서를 직접 갱신(프리뷰)하고 놓을 때 `Push(cmd, alreadyApplied: true)`. `MeshEditCommand`는 전체 메시 스냅샷(before/after)이며 위상 변경 통지 동안 해당 노드의 컴포넌트 선택을 비웠다가 복원한다(옛 ID 참조 방지).
 - `Picking/`: `CameraProjection`(투영/역투영), `RayPicker`(면=레이, 엣지/정점=화면 거리 임계, camera-based 가림, 마키). `Camera/OrbitCamera`: 피벗 기반 텀블/트랙/돌리/프레임. `Geometry/DragMath`: 조작기 수학. `IO/`: `TriangleSoupToPolyMesh`(용접, 하드엣지 추론, 공면 삼각형→쿼드), `CubeFileFormat`(.cube JSON), 익스포터/임포터 인터페이스.
@@ -66,7 +68,8 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - 선택 옵션: 클릭은 항상 보이는 요소 우선(`Settings.CameraBasedSelection`), 박스(마키) 선택은 `Settings.MarqueeSelectThrough`(기본 on, HUD 토글)에 따라 가려진 요소도 포함한다. 마우스 내비게이션 감도는 `Settings.MouseSensitivityPercent`(기본 80)를 `NavigationHandler`가 곱한다.
 - UI 배율: `CubeApp.UiScale = 화면 DPI 배율 × Settings.UiScalePercent(기본 130)`. 창 `ContentScaleFactor`는 쓰지 않는다(3D 뷰포트가 흐려짐). 테마/위젯/픽셀 상수가 모두 `UiScale`을 곱한다. Edit → Preferences(`UI/PreferencesDialog.cs`)에서 바꾸면 `CubeApp.ReloadShell()`이 셸을 다시 만든다(문서 유지). 우측 도크는 Properties(`UI/Docks/PropertiesPanel.cs`, Maya Channel Box 역할). `ViewportDisplay`가 선택/셰이딩 모드를 `MeshView.Style`로 변환. `SceneView`/`MeshView`가 Document를 미러링(표면·와이어·정점·면중심·면 틴트).
 - `Tools/`: `SelectTool`(클릭/마키/호버) → `TransformToolBase`(피벗, 축 방향 World/Local(Object)/Normal, 드래그 캡처/커밋) → `MoveTool`/`RotateTool`/`ScaleTool`. 오브젝트 회전/스케일은 행렬 분해 없이 TRS 속성을 직접 갱신한다(비균등 스케일+회전에서도 안전). 축 방향은 툴박스 하단 아이콘 버튼(`axis.world/local/normal`)이며 바꾸면 `ToolContext.AxisOrientationChanged`로 기즈모가 즉시 갱신된다. 조작기는 `Viewport/Gizmos/`(화면 고정 100px, 깊이 무시, CPU 스크린 공간 히트).
-- `IO/`: `GltfExporter`(GltfDocument), `GltfImporter`/`FbxImporter`(GenerateScene 순회), `FileActions`/`SceneFileActions`(네이티브 다이얼로그).
+- `IO/`: `GltfExporter`(GltfDocument), `GltfImporter`/`FbxImporter`(GenerateScene 순회), `FileActions`/`SceneFileActions`(네이티브 다이얼로그). `DocumentToGodotScene`은 루트 조인트마다 `Skeleton3D`(본 rest = 조인트 로컬, 바인드 포즈 = 내보내기 시점 현재 포즈)를 만들고, 스킨 메시는 그 스켈레톤의 자식 `MeshInstance3D`로 스켈레톤 공간에 베이크(BONES/WEIGHTS 코너당 4개 + `Skin` 역바인드 = skelWorld·inv(jointWorld))한다. 가져오기는 `Skeleton3D` 본을 조인트 노드로, 스킨 메시의 BONES/WEIGHTS를 `TriangleSoupToPolyMesh`의 정점 맵으로 옮기고 바인드 행렬은 rest 포즈에서 계산한다.
+- `Viewport/JointView.cs`: 조인트 구 + 자식으로 향하는 팔면체 본, 깊이 테스트 없음(X-ray). `SceneView`가 조인트/스킨을 미러링: 트랜스폼 변경마다 `UpdateSkins`(LBS → `MeshView.SetDeformed`), `RefreshJoints`. `Picker.PickJoint`가 오브젝트 모드에서 조인트 구(10px)/본(6px)을 먼저 집는다. `Tools/JointTool.cs`(클릭마다 체인에 조인트 추가, 원근 = 지면 평면, 직교 = 화면 평면, Enter 완료), `Tools/PaintWeightsTool.cs` + `UI/PaintWeightsWindow.cs`(영향 목록/모드/값/반지름/Flood/Normalize; `Shell.WeightDisplay`로 표면을 흑백 가중치 램프로 표시 — `surface.gdshader`의 `use_vertex_color`). 액션은 `UI/ShellRigActions.cs`(`skeleton.jointTool`, `skin.bind/detach/paintTool/normalize/rebind`).
 
 ### 반드시 지킬 규약
 - **코어는 반시계(CCW)가 앞면, Godot은 시계(CW)가 앞면.** `GodotMeshBridge`에서 삼각형마다 인덱스 1,2를 바꾼다(가져오기는 반대). 이걸 빼먹으면 면이 어둡고 컬링이 뒤집힌다.

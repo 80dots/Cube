@@ -20,9 +20,14 @@ public static class TriangleSoupToPolyMesh
 
     public sealed record Stats(int Welded, int Faces, int SkippedFaces, int HardEdges, int MergedQuads);
 
-    public static PolyMesh Convert(IReadOnlyList<Surface> surfaces, ImportOptions options, out Stats stats)
+    public static PolyMesh Convert(IReadOnlyList<Surface> surfaces, ImportOptions options, out Stats stats) => Convert(surfaces, options, out stats, out _);
+
+    /// <summary>vertexMap[surface][soupIndex] = 폴리 정점 ID(-1 = 미사용). 스킨 가중치 등 정점별 속성을 옮길 때 쓴다.</summary>
+    public static PolyMesh Convert(IReadOnlyList<Surface> surfaces, ImportOptions options, out Stats stats, out int[][] vertexMap)
     {
         var mesh = new PolyMesh();
+        vertexMap = surfaces.Select(s => Enumerable.Repeat(-1, s.Positions.Length).ToArray()).ToArray();
+        var vmap = vertexMap;
         var weld = new Dictionary<(long, long, long), int>();
         float inv = options.WeldThreshold > 0 ? 1f / options.WeldThreshold : 1e6f;
         int welded = 0, skipped = 0, faces = 0;
@@ -37,8 +42,9 @@ public static class TriangleSoupToPolyMesh
         }
 
         // 코너 노멀을 보관해 하드 엣지 판정에 쓴다
-        foreach (var s in surfaces)
+        for (int si = 0; si < surfaces.Count; si++)
         {
+            var s = surfaces[si];
             for (int t = 0; t + 2 < s.Indices.Length; t += 3)
             {
                 int i0 = s.Indices[t], i1 = s.Indices[t + 1], i2 = s.Indices[t + 2];
@@ -51,7 +57,9 @@ public static class TriangleSoupToPolyMesh
                     int a2 = mesh.AddVertex(s.Positions[i0]), b2 = mesh.AddVertex(s.Positions[i1]), c2 = mesh.AddVertex(s.Positions[i2]);
                     f = mesh.AddFace(new[] { a2, b2, c2 }, s.Material);
                     if (f < 0) { skipped++; continue; }
+                    a = a2; b = b2; c = c2;
                 }
+                vmap[si][i0] = a; vmap[si][i1] = b; vmap[si][i2] = c;
                 faces++;
                 int he = mesh.Faces[f].HalfEdge;
                 SetCorner(mesh, he, s, i0); he = mesh.Hes[he].Next;

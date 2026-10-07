@@ -15,6 +15,7 @@ public enum ChangeKind
     MeshTopology,     // 위상 변경 → 전체 재빌드
     MeshGeometry,     // 위치만 변경 → 포지션 갱신
     MeshAttributes,   // 노멀/UV/하드엣지 등 → 전체 재빌드(위상 동일)
+    SkinChanged,      // skinCluster 부착/제거/가중치 변경 → 변형·가중치 표시 갱신
     Selection,
 }
 
@@ -60,9 +61,16 @@ public sealed class Document
         node.Parent = parent;
         if (index < 0 || index > parent.Children.Count) parent.Children.Add(node); else parent.Children.Insert(index, node);
         _nodes[node.Id] = node;
-        foreach (var d in node.Descendants()) _nodes[d.Id] = d;
+        foreach (var d in node.Descendants()) { if (d.Id.IsNone) d.Id = AllocateId(); _nodes[d.Id] = d; }
         IsDirty = true;
         Notify(new DocChange(ChangeKind.NodeAdded, node.Id));
+    }
+
+    /// <summary>노드와 하위 전체에 ID를 미리 배정한다(이미 있으면 유지). 문서에 넣기 전에 ID로 참조해야 할 때(가져온 스킨의 조인트 등) 쓴다.</summary>
+    public void AssignIds(SceneNode node)
+    {
+        if (node.Id.IsNone) node.Id = AllocateId();
+        foreach (var d in node.Descendants()) if (d.Id.IsNone) d.Id = AllocateId();
     }
 
     /// <summary>노드(와 하위 트리)를 트리에서 뗀다. 객체는 보존되어 다시 AddNode 할 수 있다. 반환값은 부모 내 인덱스.</summary>
@@ -109,6 +117,18 @@ public sealed class Document
         IsDirty = false;
         Notify(new DocChange(ChangeKind.Reset, NodeId.None));
         IsDirty = false;
+    }
+
+    /// <summary>모든 조인트 노드.</summary>
+    public IEnumerable<SceneNode> JointNodes()
+    {
+        foreach (var n in _nodes.Values) if (n.IsJoint) yield return n;
+    }
+
+    /// <summary>skinCluster가 붙은 메시 노드.</summary>
+    public IEnumerable<SceneNode> SkinnedNodes()
+    {
+        foreach (var n in _nodes.Values) if (n.Skin != null) yield return n;
     }
 
     /// <summary>표시 가능한 모든 메시 노드.</summary>

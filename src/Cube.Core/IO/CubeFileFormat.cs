@@ -25,6 +25,14 @@ public static class CubeFileFormat
         [JsonPropertyName("seams")] public int[][] Seams { get; set; } = Array.Empty<int[]>();          // [a,b] UV 심
     }
 
+    private sealed class SkinDto
+    {
+        [JsonPropertyName("joints")] public int[] Joints { get; set; } = Array.Empty<int>();            // nodes 배열 인덱스
+        [JsonPropertyName("bindInverse")] public float[][] BindInverse { get; set; } = Array.Empty<float[]>(); // 16개 행우선(M11..M44)
+        [JsonPropertyName("meshBindWorld")] public float[] MeshBindWorld { get; set; } = Array.Empty<float>();
+        [JsonPropertyName("weights")] public float[][] Weights { get; set; } = Array.Empty<float[]>();  // 정점별 [j0,w0,j1,w1,...]
+    }
+
     private sealed class NodeDto
     {
         [JsonPropertyName("name")] public string Name { get; set; } = "node";
@@ -34,6 +42,8 @@ public static class CubeFileFormat
         [JsonPropertyName("scale")] public float[] Scale { get; set; } = { 1, 1, 1 };
         [JsonPropertyName("visible")] public bool Visible { get; set; } = true;
         [JsonPropertyName("mesh")] public MeshDto? Mesh { get; set; }
+        [JsonPropertyName("jointRadius")] public float? JointRadius { get; set; }   // null이 아니면 조인트
+        [JsonPropertyName("skin")] public SkinDto? Skin { get; set; }
     }
 
     private sealed class FileDto
@@ -49,6 +59,7 @@ public static class CubeFileFormat
     {
         var dto = new FileDto();
         var index = new Dictionary<SceneNode, int>();
+        var order = new List<SceneNode>();
         void Walk(SceneNode n, int parent)
         {
             var nd = new NodeDto
@@ -56,13 +67,22 @@ public static class CubeFileFormat
                 Name = n.Name, Parent = parent,
                 Translation = V(n.Local.Translation), Rotation = V(n.Local.RotationDegrees), Scale = V(n.Local.Scale),
                 Visible = n.Visible,
-                Mesh = n.Mesh != null ? ToDto(n.Mesh) : null,
+                Mesh = n.Mesh != null ? ToDto(n.Mesh, out _) : null,
+                JointRadius = n.Joint?.Radius,
             };
             index[n] = dto.Nodes.Count;
-            dto.Nodes.Add(nd);
+            dto.Nodes.Add(nd); order.Add(n);
             foreach (var c in n.Children) Walk(c, index[n]);
         }
         foreach (var c in doc.Root.Children) Walk(c, -1);
+        // 스킨은 노드 인덱스가 모두 정해진 뒤에 기록한다(메시는 Compact 리맵 반영)
+        for (int i = 0; i < order.Count; i++)
+        {
+            var n = order[i];
+            if (n.Skin == null || n.Mesh == null) continue;
+            ToDto(n.Mesh, out var remap);
+            dto.Nodes[i].Skin = SkinToDto(n.Skin, remap, doc, index);
+        }
         return JsonSerializer.Serialize(dto, JsonOptions);
     }
 
@@ -96,7 +116,7 @@ public static class CubeFileFormat
                 Name = nd.Name,
                 Local = new Transform3(V3(nd.Translation), V3(nd.Rotation), V3(nd.Scale, Vector3.One)),
                 Visible = nd.Visible,
-                Shape = nd.Mesh != null ? new MeshShape(FromDto(nd.Mesh)) : null,
+                Shape = nd.Mesh != null ? new MeshShape(FromDto(nd.Mesh)) : nd.JointRadius is { } jr ? new JointShape { Radius = jr } : null,
             };
             nodes.Add(n);
         }
@@ -107,16 +127,66 @@ public static class CubeFileFormat
         }
         for (int i = 0; i < nodes.Count; i++)
             if (dto.Nodes[i].Parent < 0 || dto.Nodes[i].Parent >= nodes.Count) doc.AddNode(nodes[i]);
+        for (int i = 0; i < nodes.Count; i++)
+            if (dto.Nodes[i].Skin is { } sd && nodes[i].MeshShape is { } ms) { ms.Skin = SkinFromDto(sd, nodes); doc.Notify(new DocChange(ChangeKind.SkinChanged, nodes[i].Id)); }
         doc.Undo.Clear();
         doc.IsDirty = false;
     }
 
     // ---------------------------------------------------------------- 메시
 
-    private static MeshDto ToDto(PolyMesh src)
+    private static SkinDto SkinToDto(SkinCluster skin, CompactRemap remap, Document doc, Dictionary<SceneNode, int> index)
+    {
+        var sd = new SkinDto
+        {
+            Joints = skin.Joints.Select(id => doc.Find(id) is { } jn && index.TryGetValue(jn, out int ix) ? ix : -1).ToArray(),
+            BindInverse = skin.BindInverse.Select(M16).ToArray(),
+            MeshBindWorld = M16(skin.MeshBindWorld),
+        };
+        int nv = remap.Vertices.Count(v => v >= 0);
+        var weights = new float[nv][];
+        for (int v = 0; v < remap.Vertices.Length; v++)
+        {
+            int nvId = remap.Vertices[v];
+            if (nvId < 0) continue;
+            var list = v < skin.Weights.Length ? skin.Weights[v] : null;
+            if (list == null) { weights[nvId] = Array.Empty<float>(); continue; }
+            var arr = new float[list.Count * 2];
+            for (int i = 0; i < list.Count; i++) { arr[i * 2] = list[i].joint; arr[i * 2 + 1] = list[i].weight; }
+            weights[nvId] = arr;
+        }
+        sd.Weights = weights;
+        return sd;
+    }
+
+    private static SkinCluster SkinFromDto(SkinDto sd, List<SceneNode> nodes)
+    {
+        var skin = new SkinCluster { MeshBindWorld = sd.MeshBindWorld.Length == 16 ? FromM16(sd.MeshBindWorld) : Matrix4x4.Identity };
+        for (int j = 0; j < sd.Joints.Length; j++)
+        {
+            int ix = sd.Joints[j];
+            skin.Joints.Add(ix >= 0 && ix < nodes.Count ? nodes[ix].Id : NodeId.None);
+            skin.BindInverse.Add(j < sd.BindInverse.Length && sd.BindInverse[j].Length == 16 ? FromM16(sd.BindInverse[j]) : Matrix4x4.Identity);
+        }
+        skin.EnsureSize(sd.Weights.Length);
+        for (int v = 0; v < sd.Weights.Length; v++)
+        {
+            var arr = sd.Weights[v];
+            if (arr == null || arr.Length < 2) continue;
+            var list = new List<(int, float)>();
+            for (int i = 0; i + 1 < arr.Length; i += 2) list.Add(((int)arr[i], arr[i + 1]));
+            skin.Weights[v] = list;
+        }
+        return skin;
+    }
+
+    private static float[] M16(Matrix4x4 m) => new[] { m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44 };
+    private static Matrix4x4 FromM16(float[] a) => new(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15]);
+
+    private static MeshDto ToDto(PolyMesh src, out CompactRemap remap)
     {
         var m = src.Clone();
-        m.Compact();
+        remap = m.Compact();
         var dto = new MeshDto();
         var verts = new float[m.VertexCount * 3];
         for (int v = 0; v < m.VertexCount; v++) { var p = m.Verts[v].Position; verts[v * 3] = p.X; verts[v * 3 + 1] = p.Y; verts[v * 3 + 2] = p.Z; }

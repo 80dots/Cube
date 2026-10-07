@@ -11,6 +11,8 @@ public abstract class Shape
 public sealed class MeshShape : Shape
 {
     public PolyMesh Mesh { get; }
+    /// <summary>Bind Skin 된 경우의 skinCluster. 없으면 null.</summary>
+    public SkinCluster? Skin { get; set; }
     public MeshShape(PolyMesh mesh) { Mesh = mesh; }
 }
 
@@ -27,6 +29,9 @@ public class SceneNode
 
     public MeshShape? MeshShape => Shape as MeshShape;
     public PolyMesh? Mesh => MeshShape?.Mesh;
+    public JointShape? Joint => Shape as JointShape;
+    public bool IsJoint => Shape is JointShape;
+    public SkinCluster? Skin => MeshShape?.Skin;
 
     public Matrix4x4 WorldMatrix
     {

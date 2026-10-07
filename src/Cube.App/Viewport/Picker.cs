@@ -41,10 +41,39 @@ public sealed class Picker
         return list;
     }
 
+    /// <summary>오브젝트 모드 조인트 피킹: 조인트 구(10px) 또는 본 선분(6px)에 가까우면 그 조인트.</summary>
+    public PickHit? PickJoint(NVec2 p)
+    {
+        var proj = Projection();
+        float best = float.MaxValue; PickHit? hit = null;
+        float rJoint = 10f * Scale, rBone = 6f * Scale;
+        foreach (var (id, jv) in _panel.Scene.JointViews)
+        {
+            if (!jv.Visible) continue;
+            var w = jv.GlobalPosition.ToNumerics();
+            var sp = proj.Project(w, out float depth);
+            if (sp == null) continue;
+            float d = NVec2.Distance(sp.Value, p);
+            if (d <= rJoint && d < best) { best = d; hit = new PickHit(id, -1, depth, w); }
+            foreach (var c in jv.Node.Children)
+            {
+                if (!c.IsJoint || !_panel.Scene.JointViews.TryGetValue(c.Id, out var cv)) continue;
+                var cw = cv.GlobalPosition.ToNumerics();
+                var cp = proj.Project(cw, out _);
+                if (cp == null) continue;
+                float t = RayPicker.ClosestParam(sp.Value, cp.Value, p);
+                float db = NVec2.Distance(sp.Value + (cp.Value - sp.Value) * t, p) + 2f * Scale; // 본은 구보다 약간 낮은 우선순위
+                if (db <= rBone + 2f * Scale && db < best) { best = db; hit = new PickHit(id, -1, depth, w); }
+            }
+        }
+        return hit;
+    }
+
     public PickHit? Pick(GVec2 px, SelectMode mode, bool cameraBased)
     {
         var p = new NVec2(px.X, px.Y);
         var targets = Targets();
+        if (mode == SelectMode.Object && PickJoint(p) is { } jh) return jh;
         return mode switch
         {
             SelectMode.Vertex => RayPicker.PickVertex(targets, Projection(), p, cameraBased, RayPicker.VertexThresholdPx * Scale),
@@ -57,6 +86,17 @@ public sealed class Picker
     {
         var min = new NVec2(rect.Position.X, rect.Position.Y);
         var max = new NVec2(rect.End.X, rect.End.Y);
-        return RayPicker.Marquee(Targets(), Projection(), min, max, mode, cameraBased);
+        var items = RayPicker.Marquee(Targets(), Projection(), min, max, mode, cameraBased);
+        if (mode == SelectMode.Object)
+        {
+            var proj = Projection();
+            foreach (var (id, jv) in _panel.Scene.JointViews)
+            {
+                if (!jv.Visible) continue;
+                var sp = proj.Project(jv.GlobalPosition.ToNumerics(), out _);
+                if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
+            }
+        }
+        return items;
     }
 }

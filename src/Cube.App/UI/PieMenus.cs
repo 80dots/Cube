@@ -30,7 +30,7 @@ public static class PieMenus
         string[] ids = sel.Mode switch
         {
             SelectMode.Object => new[] { "mesh.combine", "edit.duplicate", "mesh.separate", "mesh.harden", "edit.delete", "mesh.soften", "mesh.reverse", "view.frameSelected",
-                                         "tool.move", "tool.rotate", "tool.scale", "file.exportSelection" },
+                                         "skeleton.jointTool", "skin.bind", "skin.detach", "skin.paintTool", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection" },
             SelectMode.Face => new[] { "mesh.extrude", "select.toEdges", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
                                        "mesh.reverse", "mesh.merge", "mesh.bevel", "mesh.bridge" },
             SelectMode.Edge => new[] { "mesh.harden", "select.toFaces", "mesh.bridge", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
