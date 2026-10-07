@@ -30,6 +30,16 @@ public partial class Shell
         return v;
     }
 
+    /// <summary>실행 액션 ID → 옵션 키(Action Popup용). "<id>Apply"면 id, Flip/Symmetrize 컴포넌트는 공용 "mesh.symmetry". 옵션이 없으면 null.</summary>
+    public string? OptionKeyFor(string actionId)
+    {
+        if (actionId is "mesh.flipComponentsApply" or "mesh.symmetrizeComponentsApply") return "mesh.symmetry";
+        if (actionId.EndsWith("Apply", StringComparison.Ordinal)) { var key = actionId[..^5]; if (_optionSpecs.ContainsKey(key)) return key; }
+        return null;
+    }
+
+    public OptionSpec? OptionSpecFor(string key) => _optionSpecs.TryGetValue(key, out var s) ? s : null;
+
     /// <summary>옵션 창을 띄운다(명세 등록 필요). OK면 apply.</summary>
     private void ShowOptions(string id, Action apply)
     {

@@ -21,6 +21,7 @@ public partial class Shell : Control
     /// <summary>셸프 줄 전체: [탭 셸프(확장)] | [Bridge 영역(오른쪽 끝)].</summary>
     public HBoxContainer ShelfRow { get; private set; } = null!;
     public HBoxContainer BridgeShelf { get; private set; } = null!;
+    public ActionPopup ActionPopup { get; private set; } = null!;
     public HBoxContainer PolyShelf { get; private set; } = null!;
     public HBoxContainer UvShelf { get; private set; } = null!;
     public HBoxContainer RigShelf { get; private set; } = null!;
@@ -172,6 +173,10 @@ public partial class Shell : Control
         BuildStatusLine(s);
         BuildToolBox(s);
         BuildShelf(s);
+        // Action Popup: 마지막 기능의 파라미터를 활성 뷰포트 좌하단에서 다시 조정(Blender Adjust Last Operation)
+        ActionPopup = new ActionPopup { Name = "ActionPopup" };
+        AddChild(ActionPopup);
+        ActionPopup.Setup(this);
 
         Document.Selection.ModeChanged += RefreshModeButtons;
         Document.Undo.Changed += RefreshUndoButtons;

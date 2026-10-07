@@ -132,6 +132,14 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] shot {p[1]}: {img.SavePng(p[1])}");
                     break;
                 }
+            case "popup":
+                {
+                    // popup LABEL VALUE [AXIS]: Action Popup 필드 변경
+                    bool ok = UI.Shell.Instance.ActionPopup.DebugSet(p[1].Replace('_', ' '), float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture), p.Length > 3 ? int.Parse(p[3]) : 0);
+                    GD.Print($"[Drive] popup {p[1]}={p[2]} ok={ok}");
+                    _wait = Math.Max(_wait, 2);
+                    break;
+                }
             case "histedit":  // histedit INDEX PARAM VALUE[,Y,Z]: 활성 노드 히스토리 항목의 파라미터를 바꿔 재평가(EditHistoryCommand)
                 {
                     var doc = CubeApp.Instance.Document;
@@ -321,6 +329,7 @@ public partial class DebugDriver : Node
                 {
                     var doc = CubeApp.Instance.Document;
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen} cursor={DisplayServer.CursorGetShape()}");
+                    GD.Print($"[Drive] {UI.Shell.Instance.ActionPopup.DebugSummary()}");
                     var lights = doc.LightNodes().ToList();
                     if (lights.Count > 0) GD.Print($"[Drive] lights={lights.Count} {string.Join(",", lights.Select(l => $"{l.Name}:{l.Light!.Type}/{l.Light.Intensity:F1}"))} materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");
                     else if (doc.Materials.Count > 0) GD.Print($"[Drive] materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");

@@ -20,6 +20,8 @@ public sealed class ActionRegistry
     private readonly Dictionary<string, ShellAction> _actions = new();
     public string? LastRepeatable { get; private set; }
     public event Action<string>? Invoked;
+    /// <summary>실행 직전(Action Popup이 실행 전 Undo 상태를 기억하는 데 쓴다).</summary>
+    public event Action<string>? Invoking;
 
     public IEnumerable<ShellAction> All => _actions.Values;
 
@@ -36,6 +38,7 @@ public sealed class ActionRegistry
     {
         if (!_actions.TryGetValue(id, out var a)) { Godot.GD.PushWarning($"[Actions] unknown action '{id}'"); return false; }
         if (!a.Enabled) return false;
+        Invoking?.Invoke(id);
         a.Execute();
         if (a.Repeatable) LastRepeatable = id;
         Invoked?.Invoke(id);

@@ -108,6 +108,9 @@ public sealed class TransformNodesCommand : ICommand
 {
     private readonly NodeId[] _ids; private readonly Transform3[] _before, _after;
     public string Name { get; }
+    public IReadOnlyList<NodeId> Ids => _ids;
+    public IReadOnlyList<Transform3> Before => _before;
+    public IReadOnlyList<Transform3> After => _after;
 
     public TransformNodesCommand(string name, NodeId[] ids, Transform3[] before, Transform3[] after)
     {
