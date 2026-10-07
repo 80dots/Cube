@@ -15,6 +15,70 @@ public static partial class MeshOps
     /// </summary>
     public static List<int> BevelEdges(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments = 1)
     {
+        var result = BevelEdgesCore(m, edgeIds, distance, segments);
+        if (segments >= 2 && result.Count > 0) PostProcessRoundBevel(m, result);
+        return result;
+    }
+
+    /// <summary>
+    /// 둥근 Bevel(세그먼트 2+) 마무리(Maya와 같게):
+    /// ① 끝 정점의 캡이 이웃한 평평한 면과 같은 평면이면(엣지 하나만 Bevel된 모서리) 그 면에 합쳐 원호 정점을 면 테두리로 흡수한다
+    ///    — 별도의 얇은 D자 캡 면이 생겨 면이 잘게 쪼개져 보이지 않게.
+    /// ② 스트립 사이/스트립과 이웃 면 사이 엣지를 30° 스무딩 각(60°)으로 소프트/하드 처리해 둥근 면이 부드럽게 음영된다.
+    /// </summary>
+    private static void PostProcessRoundBevel(PolyMesh m, List<int> result)
+    {
+        var newSet = new HashSet<int>(result);
+        var hes = new List<int>();
+        bool merged = true;
+        while (merged)
+        {
+            merged = false;
+            foreach (int f in result.ToArray())
+            {
+                if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive) { result.Remove(f); continue; }
+                var nf = MeshNormals.FaceNormalUnnormalized(m, f);
+                if (nf.LengthSquared() < 1e-20f) continue;
+                nf = Vector3.Normalize(nf);
+                m.GetFaceHalfEdges(f, hes);
+                // 둥근 영역의 면(이웃한 새 면과 꺾여 있음)만 대상: 전부 평평한 경우(평면 위 Bevel)는 그대로 둔다
+                bool curved = false;
+                foreach (int he in hes)
+                {
+                    int tw = m.Hes[he].Twin; if (tw < 0) continue;
+                    int g = m.Hes[tw].Face;
+                    if (g < 0 || !newSet.Contains(g) || !m.Faces[g].Alive) continue;
+                    var ng = MeshNormals.FaceNormalUnnormalized(m, g);
+                    if (ng.LengthSquared() > 1e-20f && Vector3.Dot(nf, Vector3.Normalize(ng)) < 0.9999f) { curved = true; break; }
+                }
+                if (!curved) continue;
+                foreach (int he in hes)
+                {
+                    int tw = m.Hes[he].Twin; if (tw < 0) continue;
+                    int g = m.Hes[tw].Face;
+                    if (g < 0 || newSet.Contains(g) || !m.Faces[g].Alive) continue;
+                    var ng = MeshNormals.FaceNormalUnnormalized(m, g);
+                    if (ng.LengthSquared() < 1e-20f || Vector3.Dot(nf, Vector3.Normalize(ng)) < 0.9999f) continue;
+                    var (ok, _) = MergeFacesAcrossEdgeReturning(m, m.Hes[he].Edge);
+                    if (ok) { result.Remove(f); merged = true; }
+                    break;
+                }
+                if (merged) break;
+            }
+        }
+        var edges = new HashSet<int>();
+        foreach (int f in result)
+        {
+            if (!m.Faces[f].Alive) continue;
+            m.GetFaceHalfEdges(f, hes);
+            foreach (int he in hes) edges.Add(m.Hes[he].Edge);
+        }
+        SoftenHardenByAngle(m, edges, 60f); // 세그먼트 사이(90°/s)와 끝 면 경계는 부드럽게, 원래의 직각 모서리는 하드
+        m.BumpTopology();
+    }
+
+    private static List<int> BevelEdgesCore(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments)
+    {
         var result = new List<int>();
         var selected = new HashSet<int>(edgeIds.Where(e => e >= 0 && e < m.EdgeCount && m.Edges[e].Alive && !m.IsBoundaryEdge(e)));
         if (selected.Count == 0) return result;

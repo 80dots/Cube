@@ -16,7 +16,7 @@ public sealed class ViewportDisplay
     private Document? _doc;
 
     public ShadingMode Mode { get; private set; } = ShadingMode.Shaded;
-    public bool WireOnShaded { get; set; } = true;
+    public bool WireOnShaded { get; set; }
     public bool ShowGrid { get => _panel.Grid.Visible; set => _panel.Grid.Visible = value; }
 
     /// <summary>호버 프리셀렉션(노드, 모드, 컴포넌트 id). Picker가 갱신한다.</summary>
@@ -98,7 +98,8 @@ public sealed class ViewportDisplay
         var id = mv.Node.Id;
         bool objSelected = sel != null && sel.IsObjectSelected(id);
         bool active = sel != null && sel.ActiveObject == id;
-        bool compMode = sel != null && sel.IsComponentMode;
+        // 컴포넌트 모드여도 편집 대상(하나)이 아닌 개체는 오브젝트 모드처럼(선택 안 됨) 그린다
+        bool compMode = sel != null && sel.IsComponentMode && sel.IsComponentEditable(id);
         ComponentSet? comps = null;
         if (sel != null && compMode) sel.Components.TryGetValue(id, out comps);
         var mode = sel?.Mode ?? SelectMode.Object;

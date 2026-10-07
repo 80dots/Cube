@@ -35,7 +35,7 @@ public class MeshOpsBevelSegmentsTests
         for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Alive) Assert.False(m.IsBoundaryEdge(e), $"edge {e} is boundary: mesh not closed");
     }
 
-    // 면 수 공식: 6 + s·(베벨 엣지 수) + (캡 수). 캡은 정점에 모이는 프로파일 엣지가 3개 이상일 때 생긴다:
+    // 면 수 공식: 6 + s·(베벨 엣지 수) + (캡 수). 캡은 정점에 모이는 프로파일 엣지가 3개 이상일 때 생긴다(s ≥ 2에서 끝 면과 같은 평면인 캡은 그 면에 흡수):
     //   베벨 엣지 1개가 닿는 큐브 코너(비베벨 면 1개 + s개 프로파일 엣지) → s ≥ 2에서 (s+1)각 캡, s = 1이면 없음
     //   베벨 엣지 3개가 모이는 코너 → 항상 3s각 캡.
 
@@ -46,8 +46,12 @@ public class MeshOpsBevelSegmentsTests
     {
         var m = MeshBuilder.Cube();
         var newFaces = MeshOps.BevelEdges(m, new[] { 0 }, 0.1f, s);
-        // 띠 쿼드 s + 양끝 D형 캡 2; 정점 = 8 - 2 + 4 오프셋 + 2(s-1) 중간
-        AssertSound(m, newFaces, s + 2, 6 + s + 2, 8 + 2 * s);
+        // 띠 쿼드 s; 양끝 D형 캡은 같은 평면의 끝 면에 흡수(원호 정점이 그 면 테두리가 됨); 정점 = 8 - 2 + 4 오프셋 + 2(s-1) 중간
+        AssertSound(m, newFaces, s, 6 + s, 8 + 2 * s);
+        // 둥근 띠 사이 엣지는 소프트(부드러운 음영)
+        var tmp = new List<int>(); int soft = 0;
+        foreach (int f in newFaces) { m.GetFaceHalfEdges(f, tmp); foreach (int he in tmp) if (!m.Edges[m.Hes[he].Edge].Hard) soft++; }
+        Assert.True(soft >= 2 * (s - 1), "strip edges should be soft");
     }
 
     [Theory]
@@ -59,8 +63,8 @@ public class MeshOpsBevelSegmentsTests
         var edges = EdgesAt(m, 2); // (+x,+y,+z) 코너
         Assert.Equal(3, edges.Count);
         var newFaces = MeshOps.BevelEdges(m, edges, 0.1f, s);
-        // 띠 3s + 코너 3s각 캡 1 + 먼 끝 (s+1)각 캡 3; 정점 = 8 - 4 + 3 q + 6 P + 6(s-1) 중간
-        AssertSound(m, newFaces, 3 * s + 4, 6 + 3 * s + 4, 7 + 6 * s);
+        // 띠 3s + 코너 3s각 캡 1(먼 끝 캡 3개는 끝 면에 흡수); 정점 = 8 - 4 + 3 q + 6 P + 6(s-1) 중간
+        AssertSound(m, newFaces, 3 * s + 1, 6 + 3 * s + 1, 7 + 6 * s);
     }
 
     [Theory]

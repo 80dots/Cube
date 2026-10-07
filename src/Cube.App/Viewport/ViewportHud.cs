@@ -14,7 +14,7 @@ public partial class ViewportHud : VBoxContainer
     private ViewCube _cube = null!;
     private Button _proj = null!;
     private Button _through = null!;
-    private Button _grid = null!, _jointAxes = null!;
+    private Button _grid = null!, _jointAxes = null!, _wireOnShaded = null!;
     private readonly Dictionary<ShadingMode, Button> _modeButtons = new();
 
     public void Setup(ViewportPanel panel)
@@ -53,6 +53,9 @@ public partial class ViewportHud : VBoxContainer
             _modeButtons[mode] = b;
             row.AddChild(b);
         }
+        _wireOnShaded = Icons.IconButton("view_wire_on_shaded", "Wireframe on Shaded", icon, toggle: true);
+        _wireOnShaded.Pressed += () => { UI.Shell.Instance.Actions.Invoke("display.wireOnShaded"); RefreshAllHuds(); };
+        row.AddChild(_wireOnShaded);
         row.AddChild(new VSeparator());
 
         _through = Icons.IconButton("select_through", "Box Select Through: marquee also selects hidden components", icon, toggle: true);
@@ -86,6 +89,7 @@ public partial class ViewportHud : VBoxContainer
         _proj.TooltipText = ortho ? "Orthographic (click for Perspective)" : "Perspective (click for Orthographic)";
         _through.SetPressedNoSignal(CubeApp.Instance.Settings.MarqueeSelectThrough);
         _grid.SetPressedNoSignal(_panel.Display.ShowGrid);
+        _wireOnShaded.SetPressedNoSignal(_panel.Display.WireOnShaded);
         _jointAxes.SetPressedNoSignal(CubeApp.Instance.Settings.ShowJointAxes);
         _cube.QueueRedraw();
     }

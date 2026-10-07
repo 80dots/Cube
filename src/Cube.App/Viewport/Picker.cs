@@ -36,6 +36,9 @@ public sealed class Picker
         foreach (var (id, mv) in _panel.Scene.MeshViews)
         {
             if (!mv.Visible || mv.Node.Mesh == null) continue;
+            // 컴포넌트 모드: 편집 대상 개체(하나)만. 대상이 아직 없으면 처음 집을 개체를 고를 수 있게 전부.
+            var sel = UI.Shell.Instance?.Document.Selection;
+            if (sel != null && sel.IsComponentMode && sel.ComponentTarget != Core.Scene.NodeId.None && !sel.IsComponentEditable(id)) continue;
             list.Add(new PickTarget { Id = id, Mesh = mv.Node.Mesh, Render = mv.Render, World = mv.GlobalTransform.ToNumerics() });
         }
         return list;

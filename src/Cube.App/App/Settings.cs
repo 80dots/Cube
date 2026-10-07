@@ -51,7 +51,9 @@ public sealed class Settings
     /// <summary>마우스 내비게이션 감도(%). 기본 80.</summary>
     [JsonPropertyName("mouseSensitivityPercent")] public int MouseSensitivityPercent { get; set; } = 80;
     [JsonPropertyName("axisOrientation")] public string AxisOrientation { get; set; } = "World";
-    [JsonPropertyName("wireOnShaded")] public bool WireOnShaded { get; set; } = true;
+    [JsonPropertyName("wireOnShaded")] public bool WireOnShaded { get; set; }
+    /// <summary>v0.0.22: Wireframe on Shaded 기본값을 OFF로 바꾼 1회 마이그레이션 적용 여부.</summary>
+    [JsonPropertyName("wireOnShadedDefaultOff")] public bool WireOnShadedDefaultOff { get; set; }
     [JsonPropertyName("showGrid")] public bool ShowGrid { get; set; } = true;
     /// <summary>뷰포트 좌상단 Poly Count HUD(Verts/Edges/Faces/Tris/Objects).</summary>
     [JsonPropertyName("showPolyCount")] public bool ShowPolyCount { get; set; } = true;
@@ -91,7 +93,13 @@ public sealed class Settings
             }
         }
         catch (Exception ex) { GD.PushWarning($"[Settings] load failed: {ex.Message}"); }
-        return new Settings();
+        return new Settings { WireOnShadedDefaultOff = true };
+    }
+
+    /// <summary>예전 설정 파일을 읽은 뒤 1회 적용하는 기본값 변경.</summary>
+    public void Migrate()
+    {
+        if (!WireOnShadedDefaultOff) { WireOnShaded = false; WireOnShadedDefaultOff = true; Save(); }
     }
 
     public void Save()

@@ -21,6 +21,7 @@ public partial class CubeApp : Node
     {
         Instance = this;
         Settings = Settings.Load();
+        Settings.Migrate();
         ApplyUiScale();
         Document = new Document();
 
