@@ -243,4 +243,51 @@ public static partial class MeshOps
         foreach (var (e, a, b) in entries) if ((a == x && b == y) || (a == y && b == x)) return e;
         return -1;
     }
+
+    /// <summary>
+    /// Maya 면 루프: 서로 엣지를 공유하는 두 면 A, B에서 시작해 B 쪽으로(공유 엣지의 반대편 엣지를 건너) 쿼드를 따라 계속 가고,
+    /// A 쪽으로도 반대 방향으로 간다. 쿼드가 아닌 면(그 면까지 포함)이나 경계에서 멈추고, 한 바퀴 돌아오면 닫힌다.
+    /// 두 면이 이웃이 아니면 빈 목록.
+    /// </summary>
+    public static List<int> FaceLoop(PolyMesh m, int faceA, int faceB)
+    {
+        var result = new List<int>();
+        if (faceA < 0 || faceB < 0 || faceA >= m.FaceCount || faceB >= m.FaceCount || !m.Faces[faceA].Alive || !m.Faces[faceB].Alive || faceA == faceB) return result;
+        int shared = -1;
+        int start = m.Faces[faceA].HalfEdge, he = start;
+        do { int tw = m.Hes[he].Twin; if (tw >= 0 && m.Hes[tw].Face == faceB) { shared = m.Hes[he].Edge; break; } he = m.Hes[he].Next; } while (he != start);
+        if (shared < 0) return result;
+        var visited = new HashSet<int> { faceA, faceB };
+        var forward = new List<int> { faceB };
+        bool closed = Walk(faceB, shared, forward);
+        var backward = new List<int>();
+        if (!closed) Walk(faceA, shared, backward);
+        backward.Reverse();
+        result.AddRange(backward);
+        result.Add(faceA);
+        result.AddRange(forward);
+        return result;
+
+        // f에 entry 엣지로 들어왔을 때 반대편 엣지를 건너 계속 간다. 시작 면으로 돌아오면 true(닫힌 루프).
+        bool Walk(int f, int entry, List<int> list)
+        {
+            for (int guard = 0; guard < m.FaceCount + 2; guard++)
+            {
+                if (m.FaceDegree(f) != 4) return false;
+                int h = m.Faces[f].HalfEdge, s0 = h, entryHe = -1;
+                do { if (m.Hes[h].Edge == entry) { entryHe = h; break; } h = m.Hes[h].Next; } while (h != s0);
+                if (entryHe < 0) return false;
+                int opp = m.Hes[m.Hes[entryHe].Next].Next;
+                int tw = m.Hes[opp].Twin;
+                if (tw < 0) return false;
+                int nf = m.Hes[tw].Face;
+                if (nf < 0 || !m.Faces[nf].Alive) return false;
+                if (visited.Contains(nf)) return nf == faceA || nf == faceB;
+                visited.Add(nf);
+                list.Add(nf);
+                f = nf; entry = m.Hes[opp].Edge;
+            }
+            return false;
+        }
+    }
 }

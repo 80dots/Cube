@@ -95,6 +95,23 @@ public class SelectTool : ToolBase
     }
 
     /// <summary>Maya 더블클릭: 엣지 모드에서는 엣지 루프(경계면 보더 루프), 면 모드에서는 연결된 셸을 선택한다.</summary>
+    private Dictionary<Core.Scene.NodeId, HashSet<int>>? _facesBeforeClick;
+
+    /// <summary>더블클릭한 면 B와 이웃한, 직전에 선택돼 있던 면 A가 있으면 A→B 방향의 면 루프.</summary>
+    private List<int>? FaceLoopFromPrevious(Core.Mesh.PolyMesh mesh, Core.Scene.NodeId node, int faceB)
+    {
+        var prev = new HashSet<int>();
+        if (_facesBeforeClick != null && _facesBeforeClick.TryGetValue(node, out var p)) prev.UnionWith(p);
+        if (Ctx.Sel.Components.TryGetValue(node, out var cur)) prev.UnionWith(cur.Faces);
+        prev.Remove(faceB);
+        foreach (int a in prev)
+        {
+            var loop = Core.Mesh.MeshOps.FaceLoop(mesh, a, faceB);
+            if (loop.Count > 0) return loop;
+        }
+        return null;
+    }
+
     private bool TryDoubleClickSelect(InputEventMouseButton mb)
     {
         var sel = Ctx.Sel;
@@ -105,6 +122,11 @@ public class SelectTool : ToolBase
         if (mesh == null) return false;
         IEnumerable<int> ids;
         if (sel.Mode == SelectMode.Edge) ids = Core.Mesh.MeshOps.EdgeLoop(mesh, hit.Value.Component);
+        else if (FaceLoopFromPrevious(mesh, hit.Value.Node, hit.Value.Component) is { Count: > 0 } faceLoop)
+        {
+            // Maya: 면을 고른 뒤 이웃 면을 더블클릭하면 그 방향으로 면 루프(링처럼 한 바퀴)
+            ids = faceLoop;
+        }
         else
         {
             var comp = Core.Mesh.MeshOps.ConnectedComponents(mesh).FirstOrDefault(c => c.Contains(hit.Value.Component));
@@ -127,6 +149,8 @@ public class SelectTool : ToolBase
         var items = hit != null ? new[] { hit.Value.ToSelItem() } : Array.Empty<SelItem>();
         if (sel.Mode == SelectMode.Uv && items.Length > 0) items = Picker.ExpandUv(items).ToArray();
         if (items.Length == 0 && modifier != SelectModifier.Replace) return;
+        // 면 루프 더블클릭용: 이 클릭 직전에 선택돼 있던 면(더블클릭의 첫 클릭이 선택을 바꾸기 전 상태)
+        _facesBeforeClick = sel.Mode == SelectMode.Face ? sel.Components.ToDictionary(kv => kv.Key, kv => new HashSet<int>(kv.Value.Faces)) : null;
         UI.Shell.Instance.RecordSelection(s => s.Apply(items, modifier));
     }
 
