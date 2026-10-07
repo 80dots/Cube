@@ -283,7 +283,9 @@ public partial class Shell : Control
         }
         Fill(PolyShelf,
             new[] { ("create.cube", "Cube", "shelf_cube"), ("create.sphere", "Sphere", "shelf_sphere"), ("create.cylinder", "Cylinder", "shelf_cylinder"), ("create.cone", "Cone", "shelf_cone"), ("create.plane", "Plane", "shelf_plane"), ("create.torus", "Torus", "shelf_torus") },
-            new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.merge", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevel", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") });
+            new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.merge", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevel", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") },
+            new[] { ("mesh.addDivisions", "Add Divisions", "shelf_adddiv"), ("mesh.connect", "Connect", "shelf_connect"), ("mesh.poke", "Poke", "shelf_poke"), ("mesh.fillHole", "Fill Hole", "shelf_fillhole"), ("mesh.mirror", "Mirror", "shelf_mirror") },
+            new[] { ("mesh.multiCut", "Multi-Cut", "shelf_multicut"), ("mesh.targetWeld", "Target Weld", "shelf_targetweld"), ("mesh.insertLoop", "Insert Loop", "uv_cut") });
         Fill(UvShelf,
             new[] { ("windows.uvEditor", "UV Editor", "mode_uv") },
             new[] { ("uv.planarBest", "Planar", "uv_planar"), ("uv.planarX", "Planar X", "uv_planar_x"), ("uv.planarY", "Planar Y", "uv_planar_y"), ("uv.planarZ", "Planar Z", "uv_planar_z"), ("uv.cylindrical", "Cylindrical", "uv_cylindrical"), ("uv.spherical", "Spherical", "uv_spherical") },

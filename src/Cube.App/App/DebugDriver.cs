@@ -296,6 +296,21 @@ public partial class DebugDriver : Node
                     UI.Shell.Instance.Shelf.CurrentTab = int.Parse(p[1]);
                     break;
                 }
+            case "project":
+                {
+                    // project v|e ID : 활성 메시의 정점/엣지(중점) 뷰포트 로컬 좌표를 찍는다
+                    var doc = CubeApp.Instance.Document;
+                    var active = doc.Find(doc.Selection.ActiveObject) ?? doc.MeshNodes().FirstOrDefault();
+                    if (active?.Mesh == null) { GD.PrintErr("[Drive] no active mesh"); break; }
+                    var proj = UI.Shell.Instance.Viewport.Picker.Projection();
+                    int id = int.Parse(p[2]);
+                    System.Numerics.Vector3 pos;
+                    if (p[1] == "e") { var (a, b) = active.Mesh.EdgeVertices(id); pos = (active.Mesh.Verts[a].Position + active.Mesh.Verts[b].Position) * 0.5f; }
+                    else pos = active.Mesh.Verts[id].Position;
+                    var sp = proj.Project(System.Numerics.Vector3.Transform(pos, active.WorldMatrix), out _);
+                    GD.Print($"[Drive] project {p[1]}{id} -> {(sp == null ? "offscreen" : $"{sp.Value.X:F0} {sp.Value.Y:F0}")}");
+                    break;
+                }
             case "matassign":
                 {
                     // matassign ID : 선택 오브젝트에 머티리얼 할당(0 = lambert1)

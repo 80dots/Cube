@@ -30,12 +30,14 @@ public static class PieMenus
         string[] ids = sel.Mode switch
         {
             SelectMode.Object => new[] { "mesh.combine", "edit.duplicate", "mesh.separate", "mesh.harden", "edit.delete", "mesh.soften", "mesh.reverse", "view.frameSelected",
-                                         "mesh.smooth", "skeleton.jointTool", "skin.bind", "skin.detach", "skin.paintTool", "edit.deleteHistory", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection" },
+                                         "mesh.smooth", "skeleton.jointTool", "skin.bind", "skin.detach", "skin.paintTool", "edit.deleteHistory", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection",
+                                         "mesh.mirror", "mesh.triangulate", "mesh.quadrangulate", "mesh.cleanup", "normals.conform", "mesh.multiCut" },
             SelectMode.Face => new[] { "mesh.extrude", "select.toEdges", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
-                                       "mesh.reverse", "mesh.merge", "mesh.bevel", "mesh.bridge" },
+                                       "mesh.reverse", "mesh.merge", "mesh.bevel", "mesh.bridge", "mesh.addDivisions", "mesh.poke", "mesh.duplicateFaces", "mesh.extractFaces", "mesh.detach", "mesh.collapse", "mesh.triangulate", "mesh.quadrangulate", "mesh.circularize", "mesh.wedge" },
             SelectMode.Edge => new[] { "mesh.harden", "select.toFaces", "mesh.bridge", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
-                                       "mesh.merge", "mesh.bevel", "mesh.insertLoop" },
-            SelectMode.Vertex => new[] { "mesh.merge", "select.toFaces", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toEdges" },
+                                       "mesh.merge", "mesh.bevel", "mesh.insertLoop", "mesh.extrude", "mesh.connect", "mesh.collapse", "mesh.flipTriangleEdge", "mesh.spinEdgeForward", "mesh.offsetEdgeLoop", "mesh.slideEdge", "mesh.fillHole", "mesh.crease", "mesh.multiCut" },
+            SelectMode.Vertex => new[] { "mesh.merge", "select.toFaces", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toEdges",
+                                         "mesh.connect", "mesh.chamferVertices", "mesh.mergeToCenter", "mesh.averageVertices", "mesh.detach", "mesh.targetWeld", "mesh.multiCut" },
             _ => new[] { "mode.object", "mode.vertex", "mode.edge", "mode.face" },
         };
         var items = ids.Select(id => Item(shell, id)).ToList();

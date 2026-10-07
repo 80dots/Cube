@@ -36,6 +36,8 @@ public struct Edge
     public bool Hard;
     /// <summary>UV 심(Cut UV Edges). 양쪽 코너 UV가 같아도 별개의 UV 점으로 취급한다.</summary>
     public bool Seam;
+    /// <summary>서브디비전 크리즈 단계(Maya Crease, 0 = 없음). 1 이상이면 그 단계만큼 Catmull-Clark에서 날카롭게 유지된다.</summary>
+    public float Crease;
     public bool Alive;
 }
 
@@ -63,6 +65,9 @@ public sealed class PolyMesh
     public int TopologyVersion { get; private set; }
     /// <summary>정점 위치만 바뀔 때 증가(드래그 프리뷰 등).</summary>
     public int GeometryVersion { get; private set; }
+
+    /// <summary>잠긴 정점 노멀(Mesh Display → Lock Normals / Set Vertex Normal / Set to Face / Average). 재계산 시 이 정점의 코너 노멀은 저장된 값으로 고정된다.</summary>
+    public readonly Dictionary<int, Vector3> LockedNormals = new();
 
     private Dictionary<long, int>? _edgeMap;      // (min,max) 정점쌍 → edge id
     private int _edgeMapVersion = -1;
@@ -348,6 +353,7 @@ public sealed class PolyMesh
         Hes.Clear(); Hes.AddRange(src.Hes);
         Edges.Clear(); Edges.AddRange(src.Edges);
         Faces.Clear(); Faces.AddRange(src.Faces);
+        LockedNormals.Clear(); foreach (var kv in src.LockedNormals) LockedNormals[kv.Key] = kv.Value;
         TopologyVersion++;
         GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;
@@ -355,7 +361,7 @@ public sealed class PolyMesh
 
     public void Clear()
     {
-        Verts.Clear(); Hes.Clear(); Edges.Clear(); Faces.Clear();
+        Verts.Clear(); Hes.Clear(); Edges.Clear(); Faces.Clear(); LockedNormals.Clear();
         TopologyVersion++; GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;
     }
@@ -400,6 +406,8 @@ public sealed class PolyMesh
         Hes.Clear(); Hes.AddRange(newH);
         Edges.Clear(); Edges.AddRange(newE);
         Faces.Clear(); Faces.AddRange(newF);
+        var locked = LockedNormals.Where(kv => kv.Key < vMap.Length && vMap[kv.Key] >= 0).Select(kv => (vMap[kv.Key], kv.Value)).ToList();
+        LockedNormals.Clear(); foreach (var (v, n) in locked) LockedNormals[v] = n;
         TopologyVersion++; GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;
         return new CompactRemap(vMap, hMap, eMap, fMap);

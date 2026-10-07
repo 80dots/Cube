@@ -125,6 +125,7 @@ public sealed class ViewportDisplay
             {
                 if (mode == SelectMode.Edge && hover is { } hv && hv.Item2 == SelectMode.Edge && hv.Item3 == e) return MeshView.Hover;
                 if (comps != null && comps.Edges.Contains(e) && mode == SelectMode.Edge) return MeshView.EdgeSelected;
+                if (mesh != null && mesh.Edges[e].Crease > 0f) return MeshView.EdgeCrease;
                 if (mesh != null && !mesh.Edges[e].Hard) return MeshView.WireSoft;
                 return baseColor;
             };

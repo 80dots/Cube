@@ -15,6 +15,8 @@ public partial class MeshView : Node3D
     public static readonly Color WireActive = MathConvert.Rgb(0x3fff3f);
     public static readonly Color WireSelectedObject = MathConvert.Rgb(0xffffff);
     public static readonly Color WireSoft = MathConvert.Rgb(0x5a5a5a);
+    /// <summary>크리즈 엣지(Mesh Tools → Crease).</summary>
+    public static readonly Color EdgeCrease = MathConvert.Rgb(0xd070ff);
     public static readonly Color EdgeSelected = MathConvert.Rgb(0xff8c00);
     public static readonly Color Hover = MathConvert.Rgb(0xf0f0f0);
     public static readonly Color VertexNormal = MathConvert.Rgb(0xb060c0);

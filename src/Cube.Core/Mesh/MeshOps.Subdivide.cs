@@ -36,7 +36,9 @@ public static partial class MeshOps
             var mid = (m.Verts[a].Position + m.Verts[b].Position) * 0.5f;
             edgeMid[e] = mid;
             var (f0, f1) = m.EdgeFaces(e);
-            edgePt[e] = o.AddVertex(f1 < 0 ? mid : (m.Verts[a].Position + m.Verts[b].Position + facePos[f0] + facePos[f1]) * 0.25f);
+            var smooth = f1 < 0 ? mid : (m.Verts[a].Position + m.Verts[b].Position + facePos[f0] + facePos[f1]) * 0.25f;
+            float crease = Math.Clamp(m.Edges[e].Crease, 0f, 1f); // 크리즈: 날카로운 엣지 점(중점)과 블렌드
+            edgePt[e] = o.AddVertex(Vector3.Lerp(smooth, mid, crease));
         }
         for (int f = 0; f < nf; f++) if (m.Faces[f].Alive) facePt[f] = o.AddVertex(facePos[f]);
         // 3) 정점 점
@@ -48,8 +50,21 @@ public static partial class MeshOps
             m.GetVertexEdges(v, edges);
             var p = m.Verts[v].Position;
             var boundary = edges.Where(e => m.IsBoundaryEdge(e)).ToList();
+            var creased = edges.Where(e => m.Edges[e].Crease > 0f).ToList();
             Vector3 np;
-            if (boundary.Count >= 2)
+            if (boundary.Count < 2 && creased.Count >= 2)
+            {
+                // 크리즈 정점 규칙: 2개면 크리즈 곡선(3/4 v + 1/8 양쪽), 3개 이상이면 코너 고정. 크리즈 세기로 매끈한 결과와 블렌드
+                m.GetVertexFaces(v, faces);
+                int n = edges.Count;
+                var F = Vector3.Zero; foreach (int f in faces.Distinct()) F += facePos[f]; F /= Math.Max(faces.Distinct().Count(), 1);
+                var R = Vector3.Zero; foreach (int e in edges) R += edgeMid[e]; R /= Math.Max(n, 1);
+                var smoothP = n > 0 ? (F + R * 2f + p * (n - 3)) / n : p;
+                var sharpP = creased.Count == 2 ? p * 0.75f + (edgeMid[creased[0]] + edgeMid[creased[1]]) * 0.125f : p;
+                float w = Math.Clamp(creased.Min(e => m.Edges[e].Crease), 0f, 1f);
+                np = Vector3.Lerp(smoothP, sharpP, w);
+            }
+            else if (boundary.Count >= 2)
             {
                 if (boundary.Count > 2 || edges.Count == 2) np = p; // 코너/비정상: 고정
                 else np = p * 0.75f + (edgeMid[boundary[0]] + edgeMid[boundary[1]]) * 0.125f;
@@ -102,7 +117,7 @@ public static partial class MeshOps
     {
         int ne = dst.FindEdge(a, b);
         if (ne < 0) return;
-        var ed = dst.Edges[ne]; ed.Hard = src.Edges[e].Hard; ed.Seam = src.Edges[e].Seam; dst.Edges[ne] = ed;
+        var ed = dst.Edges[ne]; ed.Hard = src.Edges[e].Hard; ed.Seam = src.Edges[e].Seam; ed.Crease = MathF.Max(0f, src.Edges[e].Crease - 1f); dst.Edges[ne] = ed;
     }
 
     /// <summary>levels단계 Catmull-Clark을 적용해 메시를 제자리에서 교체한다.</summary>

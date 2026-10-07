@@ -24,6 +24,9 @@ public partial class Shell
         Tools.Register(new CreatePolygonTool());
         Tools.Register(new InsertJointTool());
         Tools.Register(new EditPivotTool());
+        Tools.Register(new MultiCutTool());
+        Tools.Register(new TargetWeldTool());
+        Tools.Register(new AppendPolygonTool());
     }
 
     private void RegisterActions()
@@ -95,7 +98,7 @@ public partial class Shell
         Actions.Register("create.torus", "Polygon Torus", () => doc.Undo.Push(CreatePrimitiveCommand.Torus(doc)), repeatable: true);
 
         // --- 메시 편집
-        Actions.Register("mesh.extrude", "Extrude", ExtrudeSelection, canExecute: () => sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
+        Actions.Register("mesh.extrude", "Extrude", ExtrudeSelection, canExecute: () => sel.Mode is SelectMode.Face or SelectMode.Edge && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.merge", "Merge Vertices...", ShowMergeDialog, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any());
         Actions.Register("mesh.mergeApply", "Merge Vertices", MergeSelectedVertices, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
@@ -109,7 +112,6 @@ public partial class Shell
         Actions.Register("mesh.bevelApply", "Bevel", BevelSelection, canExecute: HasBevelTargets, repeatable: true);
         Actions.Register("mesh.bridge", "Bridge", BridgeSelection, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
         Actions.Register("mesh.insertLoop", "Insert Edge Loop Tool", () => Tools.SetTool("insertLoop"), isChecked: () => Tools.Current?.Id == "insertLoop");
-        Actions.Register("mesh.multiCut", "Multi-Cut", () => { }, canExecute: () => false);
 
         // --- 파일
         Files = new IO.FileActions(doc, Settings, this, msg => HelpLine.Text = msg);
@@ -163,6 +165,7 @@ public partial class Shell
         RegisterUvActions();
         RegisterRigActions();
         RegisterSceneActions();
+        RegisterMeshActions();
     }
 
     private SelectMode _lastComponentMode = SelectMode.Vertex;
@@ -371,6 +374,15 @@ public partial class Shell
     private void ExtrudeSelection()
     {
         var doc = Document;
+        if (doc.Selection.Mode == SelectMode.Edge)
+        {
+            // Maya Extrude(엣지): 경계 엣지에서 쿼드를 뽑는다(내부 엣지는 비매니폴드가 되므로 제외)
+            ForEachComponentNode("Extrude Edges", SelectMode.Edge, (id, comps) => new MeshOpCommand("Extrude Edges", id, m => { var nf = MeshOps.ExtrudeEdges(m, comps.Edges); return (nf.Count > 0, SelectMode.Face, nf); }));
+            ToolContext.AxisOrientation = AxisOrientation.Normal;
+            Tools.SetTool("move");
+            HelpLine.Text = "Extrude: drag the manipulator to offset the new faces (border edges only).";
+            return;
+        }
         var newSel = new Dictionary<NodeId, List<int>>();
         ForEachComponentNode("Extrude", SelectMode.Face, (id, comps) =>
         {
@@ -692,13 +704,26 @@ public partial class Shell
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
 
         Menus.Build(Add("Mesh"))
-            .Item("mesh.combine").Item("mesh.separate").Separator().Item("mesh.smooth").Separator().Item("mesh.soften").Item("mesh.harden").Item("mesh.reverse");
+            .Item("mesh.combine").Item("mesh.separate").Separator()
+            .Item("mesh.conform").Item("mesh.fillHole").Item("mesh.smooth").Item("mesh.triangulate").Item("mesh.quadrangulate").Item("mesh.quadrangulateApply", "Quadrangulate (last options)").Separator()
+            .Item("mesh.mirror").Item("mesh.mirrorApply", "Mirror (last options)").Item("mesh.symmetrizeMesh").Separator()
+            .Item("mesh.cleanup");
 
         Menus.Build(Add("Edit Mesh"))
-            .Item("mesh.extrude").Item("mesh.merge").Item("mesh.bevel").Item("mesh.bridge").Separator().Item("mesh.deleteComponents");
+            .Item("mesh.addDivisions").Item("mesh.addDivisionsApply", "Add Divisions (last options)").Item("mesh.bevel").Item("mesh.bevelApply", "Bevel (last options)").Item("mesh.bridge")
+            .Item("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach").Item("mesh.extrude").Item("mesh.merge").Item("mesh.mergeToCenter")
+            .Item("mesh.flipComponents").Item("mesh.symmetrizeComponents").Separator()
+            .Item("mesh.averageVertices").Item("mesh.chamferVertices").Separator()
+            .Item("mesh.deleteComponents").Item("mesh.flipTriangleEdge").Item("mesh.spinEdgeBackward").Item("mesh.spinEdgeForward").Item("mesh.offsetEdgeLoop").Item("mesh.slideEdge").Separator()
+            .Item("mesh.duplicateFaces").Item("mesh.extractFaces").Item("mesh.poke").Item("mesh.wedge");
 
         Menus.Build(Add("Mesh Tools"))
-            .Item("mesh.insertLoop").Item("mesh.multiCut");
+            .Item("mesh.appendPolygon").Item("mesh.connect", "Connect").Item("mesh.crease").Item("mesh.uncrease").Item("create.polygonTool").Item("mesh.insertLoop").Item("mesh.multiCut").Item("mesh.offsetEdgeLoop", "Offset Edge Loop...").Item("mesh.slideEdge", "Slide Edge...").Item("mesh.targetWeld");
+
+        Menus.Build(Add("Mesh Display"))
+            .Item("normals.average").Item("normals.conform").Item("mesh.reverse", "Reverse").Item("normals.setToFace").Item("normals.setVertexNormal").Separator()
+            .Item("mesh.harden", "Harden Edge").Item("mesh.soften", "Soften Edge").Item("normals.softenHardenAngle").Separator()
+            .Item("normals.lock").Item("normals.unlock");
 
         Menus.Build(Add("UV"))
             .Item("windows.uvEditor").Separator()

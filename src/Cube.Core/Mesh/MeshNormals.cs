@@ -71,6 +71,7 @@ public static class MeshNormals
             }
             float len = sum.Length();
             he.Normal = len > 1e-12f ? sum / len : m.Faces[he.Face].Normal;
+            if (m.LockedNormals.TryGetValue(he.Vertex, out var locked) && locked.LengthSquared() > 1e-12f) he.Normal = Vector3.Normalize(locked);
             m.Hes[h] = he;
         }
     }

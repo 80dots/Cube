@@ -23,6 +23,8 @@ public static class CubeFileFormat
         [JsonPropertyName("materials")] public int[] Materials { get; set; } = Array.Empty<int>();      // 면별
         [JsonPropertyName("hardEdges")] public int[][] HardEdges { get; set; } = Array.Empty<int[]>();  // [a,b]
         [JsonPropertyName("seams")] public int[][] Seams { get; set; } = Array.Empty<int[]>();          // [a,b] UV 심
+        [JsonPropertyName("creases")] public float[][]? Creases { get; set; }                            // [a,b,crease]
+        [JsonPropertyName("lockedNormals")] public float[][]? LockedNormals { get; set; }                // [v,x,y,z]
     }
 
     private sealed class SkinDto
@@ -244,6 +246,10 @@ public static class CubeFileFormat
             if (m.Edges[e].Seam) seams.Add(new[] { a, b });
         }
         dto.HardEdges = hard.ToArray(); dto.Seams = seams.ToArray();
+        var creases = new List<float[]>();
+        for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Crease > 0f) { var (a, b) = m.EdgeVertices(e); creases.Add(new[] { a, b, m.Edges[e].Crease }); }
+        if (creases.Count > 0) dto.Creases = creases.ToArray();
+        if (m.LockedNormals.Count > 0) dto.LockedNormals = m.LockedNormals.Select(kv => new[] { kv.Key, kv.Value.X, kv.Value.Y, kv.Value.Z }).ToArray();
         return dto;
     }
 
@@ -274,6 +280,15 @@ public static class CubeFileFormat
             int e = m.FindEdge(pair[0], pair[1]);
             if (e >= 0) { var ed = m.Edges[e]; ed.Seam = true; m.Edges[e] = ed; }
         }
+        if (dto.Creases != null)
+            foreach (var c in dto.Creases)
+            {
+                if (c.Length < 3) continue;
+                int e = m.FindEdge((int)c[0], (int)c[1]);
+                if (e >= 0) { var ed = m.Edges[e]; ed.Crease = c[2]; m.Edges[e] = ed; }
+            }
+        if (dto.LockedNormals != null)
+            foreach (var l in dto.LockedNormals) if (l.Length >= 4) m.LockedNormals[(int)l[0]] = new Vector3(l[1], l[2], l[3]);
         MeshNormals.Recompute(m);
         m.BumpTopology();
         return m;
