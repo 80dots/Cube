@@ -72,7 +72,7 @@ public partial class Shell : Control
         StatusLine = new HBoxContainer { Name = "StatusLine", CustomMinimumSize = new Vector2(0, 28 * s) };
         root.AddChild(Wrap(StatusLine, MayaTheme.PanelDark));
 
-        Shelf = new TabContainer { Name = "Shelf", CustomMinimumSize = new Vector2(0, 64 * s) };
+        Shelf = new TabContainer { Name = "Shelf", CustomMinimumSize = new Vector2(0, 86 * s) };
         var polyScroll = new ScrollContainer { Name = "Polygons", HorizontalScrollMode = ScrollContainer.ScrollMode.Auto, VerticalScrollMode = ScrollContainer.ScrollMode.Disabled };
         PolyShelf = new HBoxContainer { Name = "Items" };
         polyScroll.AddChild(PolyShelf);
@@ -256,17 +256,21 @@ public partial class Shell : Control
 
     private void BuildShelf(float s)
     {
-        foreach (var (action, label) in new[] { ("create.cube", "Cube"), ("create.sphere", "Sphere"), ("create.cylinder", "Cyl"), ("create.cone", "Cone"), ("create.plane", "Plane"), ("create.torus", "Torus") })
-            PolyShelf.AddChild(ShelfButton(action, label, s));
+        foreach (var (action, label, icon) in new[] { ("create.cube", "Cube", "shelf_cube"), ("create.sphere", "Sphere", "shelf_sphere"), ("create.cylinder", "Cylinder", "shelf_cylinder"), ("create.cone", "Cone", "shelf_cone"), ("create.plane", "Plane", "shelf_plane"), ("create.torus", "Torus", "shelf_torus") })
+            PolyShelf.AddChild(ShelfButton(action, label, icon, s));
         PolyShelf.AddChild(new VSeparator());
-        foreach (var (action, label) in new[] { ("mesh.extrude", "Extrude"), ("mesh.merge", "Merge"), ("mesh.combine", "Combine"), ("mesh.separate", "Separate"), ("mesh.bevel", "Bevel"), ("mesh.bridge", "Bridge") })
-            PolyShelf.AddChild(ShelfButton(action, label, s));
+        foreach (var (action, label, icon) in new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.merge", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevel", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") })
+            PolyShelf.AddChild(ShelfButton(action, label, icon, s));
     }
 
-    private Button ShelfButton(string action, string label, float s)
+    /// <summary>셸프 버튼: 아이콘 위, 텍스트 아래.</summary>
+    private Button ShelfButton(string action, string label, string icon, float s)
     {
         var a = Actions.Get(action);
-        var b = new Button { Text = label, FocusMode = FocusModeEnum.None, TooltipText = a?.Label ?? action, CustomMinimumSize = new Vector2(44 * s, 40 * s) };
+        var b = new Button { Text = label, FocusMode = FocusModeEnum.None, TooltipText = a?.Label ?? action, CustomMinimumSize = new Vector2(56 * s, 52 * s), IconAlignment = HorizontalAlignment.Center, VerticalIconAlignment = VerticalAlignment.Top, ExpandIcon = false };
+        b.AddThemeFontSizeOverride("font_size", (int)(11 * s));
+        var tex = Icons.Get(icon, (int)(22 * s));
+        if (tex != null) b.Icon = tex;
         b.Pressed += () => Actions.Invoke(action);
         if (a == null) b.Disabled = true;
         return b;
