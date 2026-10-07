@@ -8,7 +8,7 @@ namespace Cube.App.IO;
 /// <summary>가져오기/내보내기 실행과 네이티브 파일 다이얼로그. 메뉴 액션과 DebugDriver가 공유한다.</summary>
 public sealed class FileActions
 {
-    public readonly List<IExporter> Exporters = new() { new GltfExporter() };
+    public readonly List<IExporter> Exporters = new() { new GltfExporter(), new Core.IO.Fbx.FbxExporter() };
     public readonly List<IImporter> Importers = new() { new GltfImporter(), new FbxImporter() };
 
     private readonly Document _doc;

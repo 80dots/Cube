@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 "Cube"는 게임이 아니라 **게임 리소스 제작용 경량 DCC 툴**이다. Godot 4.7.2 mono(C#) 위에서 동작하며 Autodesk Maya의 인터페이스·조작법·단축키·기능 체계를 기준으로 한다. 집중 영역은 Low-poly 모델링, UV 편집(M2), 리깅/스키닝(M3, 바인드 포즈까지). 영상 렌더링과 키프레임 애니메이션은 범위 밖. glTF/FBX 가져오기·내보내기가 Unity/Godot에 바로 드롭인되는 것이 목표.
 
-현재 M1(뷰포트·Maya 내비게이션·선택·W/E/R 조작기·기본 폴리 편집·Undo·glTF·.cube 저장)과 M2(UV 편집기·UV 투영/Cut/Sew/Unfold/Layout·Insert Edge Loop·Bevel·Bridge·더블클릭 루프 선택·X/V 스냅·4분할 뷰·파이 메뉴)·M3(조인트·스무스 바인드·가중치 페인트·LBS 변형 표시·glTF 스켈레톤/스킨 내보내기·가져오기·.cube 저장)가 구현되어 있다. 다음은 M4(바이너리 FBX writer). 전체 계획과 M2~M4 범위는 `C:\Users\minkyu\.claude\plans\maya-adaptive-glade.md` 참고.
+현재 M1(뷰포트·Maya 내비게이션·선택·W/E/R 조작기·기본 폴리 편집·Undo·glTF·.cube 저장)과 M2(UV 편집기·UV 투영/Cut/Sew/Unfold/Layout·Insert Edge Loop·Bevel·Bridge·더블클릭 루프 선택·X/V 스냅·4분할 뷰·파이 메뉴)·M3(조인트·스무스 바인드·가중치 페인트·LBS 변형 표시·glTF 스켈레톤/스킨 내보내기·가져오기·.cube 저장)와 M4(자체 바이너리 FBX 7.4 writer: 메시/머티리얼·텍스처/조인트/스킨/라이트, cm 단위 베이크)가 구현되어 있다. 전체 계획과 M2~M4 범위는 `C:\Users\minkyu\.claude\plans\maya-adaptive-glade.md` 참고.
 
 ## 엔진 및 도구 환경
 
@@ -28,7 +28,7 @@ dotnet test tests/Cube.Core.Tests --filter "FullyQualifiedName~MeshOps"   # 단�
 & $godot --path .                     # 앱 실행 (scenes/Shell.tscn)
 & $godot --path . -- --with-cube      # 기본 큐브 하나를 만들고 시작 (개발용)
 & $godot -e --path .                  # 에디터
-.\tools\smoke-export.ps1              # 헤드리스 glTF 내보내기→가져오기 왕복 스모크 (종료 코드 0이면 성공)
+.\tools\smoke-export.ps1              # 헤드리스 glTF + FBX 내보내기→가져오기 왕복 스모크 (종료 코드 0이면 성공)
 ```
 
 ### 자동 조작으로 검증하기 (DebugDriver)
@@ -57,6 +57,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - `Selection/SelectionState.cs`: 모드(Object/Vertex/Edge/Face/Uv) + 노드별 `ComponentSet`. 선택 변경은 `SelectionCommand`로 Undo 가능(Maya 동일). `SelectionOps`는 Grow/Shrink/Convert.
 - `Commands/`: 자체 `UndoStack`(Godot UndoRedo 미사용). 드래그는 문서를 직접 갱신(프리뷰)하고 놓을 때 `Push(cmd, alreadyApplied: true)`. `MeshEditCommand`는 전체 메시 스냅샷(before/after)이며 위상 변경 통지 동안 해당 노드의 컴포넌트 선택을 비웠다가 복원한다(옛 ID 참조 방지).
 - `Picking/`: `CameraProjection`(투영/역투영), `RayPicker`(면=레이, 엣지/정점=화면 거리 임계, camera-based 가림, 마키). `Camera/OrbitCamera`: 피벗 기반 텀블/트랙/돌리/프레임. `Geometry/DragMath`: 조작기 수학. `IO/`: `TriangleSoupToPolyMesh`(용접, 하드엣지 추론, 공면 삼각형→쿼드), `CubeFileFormat`(.cube JSON), 익스포터/임포터 인터페이스.
+- **FBX writer**(`IO/Fbx/`, M4, Godot 의존 없음): `FbxNode`(이름+속성+자식; 속성 타입 = 바이너리 타입 코드 Y/C/I/F/D/L/S/R/f/d/l/i/b, 식별자는 `FbxNode.Id(cls, name)` = `name\0\x01cls`), `FbxBinaryWriter`(7400, 32비트 오프셋, 자식이 있거나 속성이 없는 노드 뒤 13바이트 NULL 레코드, 64바이트 이상 배열 zlib, Blender와 같은 푸터), `FbxBinaryReader`(검증/테스트용), `FbxSceneBuilder`(Document → 노드 트리: GlobalSettings Y-up/UnitScaleFactor 1에 **정점·이동·피벗·행렬 이동 성분 ×100(cm)**, Model = Lcl T/R/S + RotationPivot/ScalingPivot(우리 `Transform3`와 같은 XYZ 오일러·행벡터 규약이라 변환 없음), Geometry = Vertices/PolygonVertexIndex(마지막 `~i`, CCW 그대로)/Normal·UV ByPolygonVertex(UV 하단 원점 그대로)/Material AllSame, Material Lambert/Phong + Texture/Video(DiffuseColor OP 연결, RelativeFilename은 FBX 위치 기준), 조인트 = Model LimbNode + NodeAttribute Skeleton, 라이트 = NodeAttribute Light, 스킨 = Deformer Skin/Cluster(Transform = 메시 월드, TransformLink = 조인트 월드, 바인드 포즈 = 내보내는 시점 포즈) + Pose BindPose; 선택 내보내기에서 스킨이 참조하는 조인트 체인은 자동 포함), `FbxExporter : IExporter`(.fbx). 가져오기는 그대로 Godot FbxDocument(ufbx). 스모크(`tools/smoke-export.ps1`)가 glb 다음에 fbx 왕복도 검사한다.
 
 ### App (`src/Cube.App`)
 - `App/CubeApp.cs`(autoload): Document, Settings, Hi-DPI 배율, 디버그 인자. `App/DebugDriver.cs`, `App/SmokeExportRunner.cs`.
@@ -96,7 +97,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - GUI 동작: 위 DebugDriver 스크립트 + 스크린샷. Unity 확인은 `tools/unity-check.md` 체크리스트(수동).
 
 ## 버전 및 릴리즈 워크플로
-- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.6`). v0.0.1~v0.0.6은 공개 릴리즈됨.
+- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.7`). v0.0.1~v0.0.7은 공개 릴리즈됨.
 - **수정 작업을 완료할 때마다** 패치 버전을 하나 올리고(공개된 태그는 재사용 불가) 커밋 → `origin/main` 푸시 → `dist/release-notes-v<ver>.md` 작성 → `gh release create v<ver> --target main --title v<ver> --latest --notes-file <file>`로 **바로 public 릴리즈**(2026-10-07 사용자 지시: 드래프트 아님) → `.	oolsuild-release.ps1 -Upload`로 빌드 산출물 첨부. 마이너/메이저 버전은 사용자가 올리라고 할 때만.
 - 푸시: `gh auth setup-git`으로 github.com 자격 증명이 gh(80dots)로 고정되어 있어 `git push origin main`이 팝업 없이 동작한다. 그래도 자동 세션에서는 `GIT_TERMINAL_PROMPT=0`과 `timeout 90`으로 감싼다.
 - 릴리즈 노트는 **UTF-8 파일**(Write 도구로 작성, 이전 버전 노트를 아래에 이어 붙임)을 `--notes-file`로 넘긴다. Python/PowerShell 표준 출력을 파이프로 넘기면 Windows 콘솔 인코딩(cp949) 때문에 한글이 깨진다.
