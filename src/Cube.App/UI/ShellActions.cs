@@ -630,8 +630,8 @@ public partial class Shell
     public void SyncStatusLine()
     {
         _cameraBased.SetPressedNoSignal(Settings.CameraBasedSelection);
-        _snapGrid.SetPressedNoSignal(Settings.SnapToGrid);
-        _snapPoint.SetPressedNoSignal(Settings.SnapToPoints);
+        _snapGrid.SetPressedNoSignal(Settings.SnapToGrid || Hotkeys.HeldKeys.Contains(Key.X));
+        _snapPoint.SetPressedNoSignal(Settings.SnapToPoints || Hotkeys.HeldKeys.Contains(Key.V));
     }
 
     private PopupMenu? _recentMenu;

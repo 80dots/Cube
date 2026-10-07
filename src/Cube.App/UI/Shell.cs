@@ -19,6 +19,9 @@ public partial class Shell : Control
     public HBoxContainer StatusLine { get; private set; } = null!;
     public TabContainer Shelf { get; private set; } = null!;
     public HBoxContainer PolyShelf { get; private set; } = null!;
+    public HBoxContainer UvShelf { get; private set; } = null!;
+    public HBoxContainer RigShelf { get; private set; } = null!;
+    private readonly List<(Button button, string action)> _shelfButtons = new();
     public VBoxContainer ToolBox { get; private set; } = null!;
     public VBoxContainer OutlinerDock { get; private set; } = null!;
     public PanelContainer OutlinerBody { get; private set; } = null!;
@@ -72,11 +75,11 @@ public partial class Shell : Control
         StatusLine = new HBoxContainer { Name = "StatusLine", CustomMinimumSize = new Vector2(0, 28 * s) };
         root.AddChild(Wrap(StatusLine, MayaTheme.PanelDark));
 
-        Shelf = new TabContainer { Name = "Shelf", CustomMinimumSize = new Vector2(0, 86 * s) };
-        var polyScroll = new ScrollContainer { Name = "Polygons", HorizontalScrollMode = ScrollContainer.ScrollMode.Auto, VerticalScrollMode = ScrollContainer.ScrollMode.Disabled };
-        PolyShelf = new HBoxContainer { Name = "Items" };
-        polyScroll.AddChild(PolyShelf);
-        Shelf.AddChild(polyScroll);
+        // 셸프: Maya처럼 탭(Polygons / UV / Rigging)마다 아이콘+텍스트 버튼 줄
+        Shelf = new TabContainer { Name = "Shelf", CustomMinimumSize = new Vector2(0, 108 * s) };
+        PolyShelf = MakeShelfTab("Polygons");
+        UvShelf = MakeShelfTab("UV");
+        RigShelf = MakeShelfTab("Rigging");
         root.AddChild(Shelf);
 
         // --- 중앙
@@ -209,6 +212,8 @@ public partial class Shell : Control
         _snapPoint = Icons.IconButton("snap_point", "Snap to Points (toggle; or hold V)", icon, toggle: true);
         _snapPoint.Pressed += () => Actions.Invoke("snap.point");
         StatusLine.AddChild(_snapPoint);
+        // X/V를 누르고 있는 동안에도 눌린 상태로 표시
+        Hotkeys.HeldKeysChanged += SyncStatusLine;
     }
 
     /// <summary>Preferences의 그리드 간격(cm)을 모든 패널 그리드에 적용한다.</summary>
@@ -254,13 +259,54 @@ public partial class Shell : Control
         ToolBox.AddChild(_redoBtn);
     }
 
+    /// <summary>셸프 탭 하나(가로 스크롤 + 버튼 줄). 탭 제목은 ScrollContainer의 이름.</summary>
+    private HBoxContainer MakeShelfTab(string title)
+    {
+        var scroll = new ScrollContainer { Name = title, HorizontalScrollMode = ScrollContainer.ScrollMode.Auto, VerticalScrollMode = ScrollContainer.ScrollMode.Disabled };
+        var row = new HBoxContainer { Name = "Items" };
+        scroll.AddChild(row);
+        Shelf.AddChild(scroll);
+        return row;
+    }
+
     private void BuildShelf(float s)
     {
-        foreach (var (action, label, icon) in new[] { ("create.cube", "Cube", "shelf_cube"), ("create.sphere", "Sphere", "shelf_sphere"), ("create.cylinder", "Cylinder", "shelf_cylinder"), ("create.cone", "Cone", "shelf_cone"), ("create.plane", "Plane", "shelf_plane"), ("create.torus", "Torus", "shelf_torus") })
-            PolyShelf.AddChild(ShelfButton(action, label, icon, s));
-        PolyShelf.AddChild(new VSeparator());
-        foreach (var (action, label, icon) in new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.merge", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevel", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") })
-            PolyShelf.AddChild(ShelfButton(action, label, icon, s));
+        void Fill(HBoxContainer row, params (string action, string label, string icon)[][] groups)
+        {
+            bool first = true;
+            foreach (var g in groups)
+            {
+                if (!first) row.AddChild(new VSeparator());
+                first = false;
+                foreach (var (action, label, icon) in g) row.AddChild(ShelfButton(action, label, icon, s));
+            }
+        }
+        Fill(PolyShelf,
+            new[] { ("create.cube", "Cube", "shelf_cube"), ("create.sphere", "Sphere", "shelf_sphere"), ("create.cylinder", "Cylinder", "shelf_cylinder"), ("create.cone", "Cone", "shelf_cone"), ("create.plane", "Plane", "shelf_plane"), ("create.torus", "Torus", "shelf_torus") },
+            new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.merge", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevel", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") });
+        Fill(UvShelf,
+            new[] { ("windows.uvEditor", "UV Editor", "mode_uv") },
+            new[] { ("uv.planarBest", "Planar", "uv_planar"), ("uv.planarX", "Planar X", "uv_planar_x"), ("uv.planarY", "Planar Y", "uv_planar_y"), ("uv.planarZ", "Planar Z", "uv_planar_z"), ("uv.cylindrical", "Cylindrical", "uv_cylindrical"), ("uv.spherical", "Spherical", "uv_spherical") },
+            new[] { ("uv.unfold", "Unfold", "uv_unfold"), ("uv.layout", "Layout", "uv_layout"), ("uv.cut", "Cut UV", "uv_cut"), ("uv.sew", "Sew UV", "uv_sew"), ("uv.flipU", "Flip U", "uv_flip_u"), ("uv.flipV", "Flip V", "uv_flip_v") },
+            new[] { ("uv.autoSeams", "Auto Seams", "uv_autoseam"), ("uv.autoWrap", "Auto Wrap", "uv_autowrap") });
+        Fill(RigShelf,
+            new[] { ("skeleton.jointTool", "Joint Tool", "rig_joint"), ("skeleton.insertJointTool", "Insert Joint", "rig_insert_joint"), ("skeleton.mirror", "Mirror Joint", "rig_mirror"), ("skeleton.orient", "Orient Joint", "rig_orient"), ("skeleton.orientApply", "Orient Now", "rig_orient") },
+            new[] { ("skin.bind", "Bind Skin", "skin_bind"), ("skin.detach", "Detach Skin", "skin_detach"), ("skin.paintTool", "Paint Weights", "skin_paint"), ("skin.normalize", "Normalize", "skin_normalize"), ("skin.rebind", "Reset Weights", "skin_rebind") });
+        Document.Selection.Changed += RefreshShelf;
+        Document.Selection.ModeChanged += RefreshShelf;
+        Tools.ToolChanged += _ => RefreshShelf();
+        RefreshShelf();
+    }
+
+    /// <summary>셸프 버튼 활성/체크 상태를 액션의 CanExecute/IsChecked로 맞춘다.</summary>
+    private void RefreshShelf()
+    {
+        foreach (var (b, id) in _shelfButtons)
+        {
+            var a = Actions.Get(id); if (a == null) continue;
+            b.Disabled = !a.Enabled;
+            if (a.IsChecked != null) b.SetPressedNoSignal(a.IsChecked());
+        }
     }
 
     /// <summary>셸프 버튼: 아이콘 위, 텍스트 아래.</summary>
@@ -271,8 +317,10 @@ public partial class Shell : Control
         b.AddThemeFontSizeOverride("font_size", (int)(11 * s));
         var tex = Icons.Get(icon, (int)(22 * s));
         if (tex != null) b.Icon = tex;
-        b.Pressed += () => Actions.Invoke(action);
+        if (a?.IsChecked != null) b.ToggleMode = true;
+        b.Pressed += () => { Actions.Invoke(action); RefreshShelf(); };
         if (a == null) b.Disabled = true;
+        _shelfButtons.Add((b, action));
         return b;
     }
 
@@ -288,11 +336,7 @@ public partial class Shell : Control
         _redoBtn.Disabled = !Document.Undo.CanRedo;
         _undoBtn.TooltipText = Document.Undo.UndoName != null ? $"Undo {Document.Undo.UndoName}" : "Undo";
         _redoBtn.TooltipText = Document.Undo.RedoName != null ? $"Redo {Document.Undo.RedoName}" : "Redo";
-        foreach (var b in PolyShelf.GetChildren().OfType<Button>())
-        {
-            var a = Actions.All.FirstOrDefault(x => x.Label == b.TooltipText);
-            if (a != null) b.Disabled = !a.Enabled;
-        }
+        RefreshShelf();
     }
 
     private void RefreshToolButtons()

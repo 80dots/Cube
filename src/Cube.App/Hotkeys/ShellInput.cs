@@ -12,6 +12,8 @@ public partial class ShellInput : Node
     public ActionRegistry Actions { get; set; } = null!;
     public Func<bool>? IsViewportContext;
     public readonly HashSet<Key> HeldKeys = new();
+    /// <summary>홀드 키 집합이 바뀜(상태 라인 스냅 버튼 표시 등).</summary>
+    public event Action? HeldKeysChanged;
 
     public override void _Ready()
     {
@@ -31,12 +33,12 @@ public partial class ShellInput : Node
         bool textFocused = focus is LineEdit or TextEdit || (focus != null && focus.GetParent() is SpinBox);
         if (!k.Pressed)
         {
-            HeldKeys.Remove(k.Keycode); HeldKeys.Remove(k.PhysicalKeycode);
+            if (HeldKeys.Remove(k.Keycode) | HeldKeys.Remove(k.PhysicalKeycode)) HeldKeysChanged?.Invoke();
             if (k.Keycode == Key.Space && _spaceHeld) { _spaceHeld = false; SpaceUp?.Invoke(); GetViewport().SetInputAsHandled(); }
             return;
         }
         if (k.Echo) return;
-        HeldKeys.Add(k.Keycode);
+        if (HeldKeys.Add(k.Keycode)) HeldKeysChanged?.Invoke();
         if (textFocused)
         {
             if (k.Keycode == Key.Escape) { focus!.ReleaseFocus(); Actions.Invoke("app.escape"); GetViewport().SetInputAsHandled(); }

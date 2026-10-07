@@ -44,6 +44,7 @@ public partial class Shell
             UvEditorWindow = new UvEditor.UvEditorWindow { Name = "UvEditor", Visible = false };
             AddChild(UvEditorWindow);
             UvEditorWindow.Setup(this);
+            UvEditorWindow.Closed += RefreshShelf;
         }
         UvEditorWindow.Toggle();
     }

@@ -290,6 +290,12 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] mattex {id} -> {after.TexturePath ?? "(none)"}");
                     break;
                 }
+            case "shelf":
+                {
+                    // shelf N : 셸프 탭 전환(0 Polygons, 1 UV, 2 Rigging)
+                    UI.Shell.Instance.Shelf.CurrentTab = int.Parse(p[1]);
+                    break;
+                }
             case "matassign":
                 {
                     // matassign ID : 선택 오브젝트에 머티리얼 할당(0 = lambert1)

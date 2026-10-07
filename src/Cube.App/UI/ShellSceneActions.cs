@@ -51,6 +51,7 @@ public partial class Shell
             MaterialEditor = new MaterialEditorWindow { Name = "MaterialEditor", Visible = false };
             AddChild(MaterialEditor);
             MaterialEditor.Setup(this);
+            MaterialEditor.Closed += RefreshShelf;
         }
         MaterialEditor.Toggle();
     }
