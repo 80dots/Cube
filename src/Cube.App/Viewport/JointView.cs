@@ -18,6 +18,8 @@ public partial class JointView : Node3D
     public SceneNode Node { get; }
     private MeshInstance3D _sphere = null!, _bones = null!;
     private readonly ArrayMesh _boneMesh = new();
+    private readonly ArrayMesh _axesMesh = new();
+    private MeshInstance3D _axes = null!;
     private StandardMaterial3D _mat = null!;
     private static SphereMesh? _sphereMesh;
 
@@ -31,6 +33,9 @@ public partial class JointView : Node3D
         AddChild(_sphere);
         _bones = new MeshInstance3D { Name = "Bones", Mesh = _boneMesh, MaterialOverride = _mat, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
         AddChild(_bones);
+        var axesMat = new StandardMaterial3D { ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded, NoDepthTest = true, VertexColorUseAsAlbedo = true, RenderPriority = 41 };
+        _axes = new MeshInstance3D { Name = "Axes", Mesh = _axesMesh, MaterialOverride = axesMat, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off, Visible = false };
+        AddChild(_axes);
         Refresh();
     }
 
@@ -42,6 +47,19 @@ public partial class JointView : Node3D
         if (_sphere == null) return;
         float r = Radius;
         _sphere.Scale = new Vector3(r * 2, r * 2, r * 2);
+        // 로컬 회전 축(Display → Joint Local Rotation Axes)
+        bool showAxes = CubeApp.Instance.Settings.ShowJointAxes;
+        _axes.Visible = showAxes;
+        if (showAxes)
+        {
+            _axesMesh.ClearSurfaces();
+            float alen = r * 3.5f;
+            var av = new[] { Vector3.Zero, Vector3.Right * alen, Vector3.Zero, Vector3.Up * alen, Vector3.Zero, Vector3.Back * alen };
+            var ac = new[] { MathConvert.Rgb(0xff2a2a), MathConvert.Rgb(0xff2a2a), MathConvert.Rgb(0x5aff2a), MathConvert.Rgb(0x5aff2a), MathConvert.Rgb(0x2a6aff), MathConvert.Rgb(0x2a6aff) };
+            var aa = new GArray(); aa.Resize((int)Mesh.ArrayType.Max);
+            aa[(int)Mesh.ArrayType.Vertex] = av; aa[(int)Mesh.ArrayType.Color] = ac;
+            _axesMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Lines, aa);
+        }
         _boneMesh.ClearSurfaces();
         var verts = new List<Vector3>();
         foreach (var c in Node.Children)

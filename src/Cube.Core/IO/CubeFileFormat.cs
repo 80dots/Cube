@@ -43,13 +43,38 @@ public static class CubeFileFormat
         [JsonPropertyName("visible")] public bool Visible { get; set; } = true;
         [JsonPropertyName("mesh")] public MeshDto? Mesh { get; set; }
         [JsonPropertyName("jointRadius")] public float? JointRadius { get; set; }   // null이 아니면 조인트
+        [JsonPropertyName("light")] public LightDto? Light { get; set; }
+        [JsonPropertyName("material")] public int Material { get; set; }            // 0 = 기본
         [JsonPropertyName("skin")] public SkinDto? Skin { get; set; }
+    }
+
+    private sealed class LightDto
+    {
+        [JsonPropertyName("type")] public string Type { get; set; } = "point";
+        [JsonPropertyName("color")] public float[] Color { get; set; } = { 1, 1, 1 };
+        [JsonPropertyName("intensity")] public float Intensity { get; set; } = 1;
+        [JsonPropertyName("range")] public float Range { get; set; } = 10;
+        [JsonPropertyName("spotAngle")] public float SpotAngle { get; set; } = 45;
+    }
+
+    private sealed class MaterialDto
+    {
+        [JsonPropertyName("id")] public int Id { get; set; }
+        [JsonPropertyName("name")] public string Name { get; set; } = "material";
+        [JsonPropertyName("type")] public string Type { get; set; } = "lambert";
+        [JsonPropertyName("color")] public float[] Color { get; set; } = { 0.5f, 0.5f, 0.5f };
+        [JsonPropertyName("specular")] public float[] Specular { get; set; } = { 0.5f, 0.5f, 0.5f };
+        [JsonPropertyName("shininess")] public float Shininess { get; set; } = 32;
+        [JsonPropertyName("metallic")] public float Metallic { get; set; }
+        [JsonPropertyName("roughness")] public float Roughness { get; set; } = 0.5f;
+        [JsonPropertyName("matcap")] public string? Matcap { get; set; }
     }
 
     private sealed class FileDto
     {
         [JsonPropertyName("format")] public string Format { get; set; } = "cube";
         [JsonPropertyName("version")] public int Version { get; set; } = CubeFileFormat.Version;
+        [JsonPropertyName("materials")] public List<MaterialDto> Materials { get; set; } = new();
         [JsonPropertyName("nodes")] public List<NodeDto> Nodes { get; set; } = new();
     }
 
@@ -69,12 +94,16 @@ public static class CubeFileFormat
                 Visible = n.Visible,
                 Mesh = n.Mesh != null ? ToDto(n.Mesh, out _) : null,
                 JointRadius = n.Joint?.Radius,
+                Light = n.Light is { } lt ? new LightDto { Type = lt.Type.ToString().ToLowerInvariant(), Color = V(lt.Color), Intensity = lt.Intensity, Range = lt.Range, SpotAngle = lt.SpotAngle } : null,
+                Material = n.MaterialId,
             };
             index[n] = dto.Nodes.Count;
             dto.Nodes.Add(nd); order.Add(n);
             foreach (var c in n.Children) Walk(c, index[n]);
         }
         foreach (var c in doc.Root.Children) Walk(c, -1);
+        foreach (var mt in doc.Materials)
+            dto.Materials.Add(new MaterialDto { Id = mt.Id, Name = mt.Name, Type = mt.Type.ToString().ToLowerInvariant(), Color = V(mt.Color), Specular = V(mt.Specular), Shininess = mt.Shininess, Metallic = mt.Metallic, Roughness = mt.Roughness, Matcap = mt.MatcapPath });
         // 스킨은 노드 인덱스가 모두 정해진 뒤에 기록한다(메시는 Compact 리맵 반영)
         for (int i = 0; i < order.Count; i++)
         {
@@ -108,6 +137,8 @@ public static class CubeFileFormat
         if (dto.Format != "cube") throw new InvalidDataException("not a .cube document");
         if (dto.Version > Version) throw new InvalidDataException($"document version {dto.Version} is newer than supported {Version}");
         doc.Clear();
+        foreach (var md in dto.Materials)
+            doc.AddMaterialWithId(new MaterialDef { Id = md.Id, Name = md.Name, Type = Enum.TryParse<MaterialType>(md.Type, true, out var mt) ? mt : MaterialType.Lambert, Color = V3(md.Color, new Vector3(0.5f)), Specular = V3(md.Specular, new Vector3(0.5f)), Shininess = md.Shininess, Metallic = md.Metallic, Roughness = md.Roughness, MatcapPath = md.Matcap });
         var nodes = new List<SceneNode>(dto.Nodes.Count);
         foreach (var nd in dto.Nodes)
         {
@@ -116,7 +147,9 @@ public static class CubeFileFormat
                 Name = nd.Name,
                 Local = new Transform3(V3(nd.Translation), V3(nd.Rotation), V3(nd.Scale, Vector3.One)),
                 Visible = nd.Visible,
-                Shape = nd.Mesh != null ? new MeshShape(FromDto(nd.Mesh)) : nd.JointRadius is { } jr ? new JointShape { Radius = jr } : null,
+                Shape = nd.Mesh != null ? new MeshShape(FromDto(nd.Mesh)) : nd.JointRadius is { } jr ? new JointShape { Radius = jr }
+                    : nd.Light is { } ld ? new LightShape { Type = Enum.TryParse<LightType>(ld.Type, true, out var lt) ? lt : LightType.Point, Color = V3(ld.Color, Vector3.One), Intensity = ld.Intensity, Range = ld.Range, SpotAngle = ld.SpotAngle } : null,
+                MaterialId = nd.Material,
             };
             nodes.Add(n);
         }

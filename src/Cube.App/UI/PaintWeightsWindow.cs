@@ -5,7 +5,7 @@ using Godot;
 namespace Cube.App.UI;
 
 /// <summary>Paint Skin Weights Tool 설정 창: 영향(조인트) 목록, 모드, 값, 반지름, Flood.</summary>
-public partial class PaintWeightsWindow : Window
+public partial class PaintWeightsWindow : FloatingPanel
 {
     private Shell _shell = null!;
     private PaintWeightsTool _tool = null!;
@@ -19,15 +19,14 @@ public partial class PaintWeightsWindow : Window
         _shell = shell; _tool = tool;
         float s = CubeApp.Instance.UiScale;
         Title = "Paint Skin Weights Tool";
-        Visible = false;
-        Size = new Vector2I((int)(300 * s), (int)(420 * s));
-        Theme = shell.Theme;
-        CloseRequested += () => shell.Tools.SetTool("select");
+        Size = new Vector2(300 * s, 420 * s);
+        MinPanelSize = new Vector2(240 * s, 300 * s);
+        Closed += () => { if (shell.Tools.Current?.Id == "paintWeights") shell.Tools.SetTool("select"); };
 
         var root = new VBoxContainer();
-        root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        root.SizeFlagsVertical = Control.SizeFlags.ExpandFill; root.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         root.AddThemeConstantOverride("separation", (int)(6 * s));
-        AddChild(root);
+        Content.AddChild(root);
 
         _target = new Label { Text = "Mesh: -" };
         root.AddChild(_target);
@@ -90,8 +89,8 @@ public partial class PaintWeightsWindow : Window
         if (!Visible)
         {
             var host = shell.GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)(host.X - Size.X - 24), (int)(host.Y * 0.25f));
-            Popup();
+            Open();
+            Position = new Vector2(host.X - Size.X - 24, host.Y * 0.25f);
         }
     }
 }

@@ -36,6 +36,10 @@ public class SceneNode
     public PolyMesh? Mesh => MeshShape?.Mesh;
     public JointShape? Joint => Shape as JointShape;
     public bool IsJoint => Shape is JointShape;
+    public LightShape? Light => Shape as LightShape;
+    public bool IsLight => Shape is LightShape;
+    /// <summary>할당된 머티리얼 ID(0 = 기본 lambert1).</summary>
+    public int MaterialId { get; set; }
     public SkinCluster? Skin => MeshShape?.Skin;
 
     public Matrix4x4 WorldMatrix

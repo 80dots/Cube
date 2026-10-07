@@ -33,6 +33,9 @@ public abstract class TransformToolBase : SelectTool
     /// <summary>마지막으로 적용한 컴포넌트 변형(히스토리 기록용): 종류/피벗/축/기저와 파라미터.</summary>
     private ComponentTransformOp? _lastOp;
     private HistoryParams? _lastParams;
+    /// <summary>Ctrl 드래그: 선택 조인트만 움직이고 자식의 월드 트랜스폼은 유지(자식 로컬 보정).</summary>
+    private bool _isolate;
+    private readonly List<(SceneNode child, Transform3 initial, Matrix4x4 world)> _childComp = new();
 
     protected abstract GizmoBase CreateGizmo();
 
@@ -173,6 +176,7 @@ public abstract class TransformToolBase : SelectTool
         var px = new NVec2(mb.Position.X, mb.Position.Y);
         var part = Gizmo.HitTest(px, proj);
         if (part == GizmoPart.None) return false;
+        _isolate = mb.CtrlPressed;
         BeginDrag(part, px, proj);
         return true;
     }
@@ -222,6 +226,10 @@ public abstract class TransformToolBase : SelectTool
                 Matrix4x4.Invert(parentWorld, out var inv);
                 ObjectTargets.Add((n, n.Local, parentWorld, inv));
             }
+            _childComp.Clear();
+            if (_isolate)
+                foreach (var (n, _, _, _) in ObjectTargets)
+                    if (n.IsJoint) foreach (var c in n.Children) if (!set.Contains(c.Id)) _childComp.Add((c, c.Local, c.WorldMatrix));
         }
         else
         {
@@ -251,12 +259,13 @@ public abstract class TransformToolBase : SelectTool
         var doc = Ctx.Doc;
         if (ObjectTargets.Count > 0)
         {
-            var ids = ObjectTargets.Select(t => t.node.Id).ToArray();
-            var before = ObjectTargets.Select(t => t.initial).ToArray();
-            var after = ObjectTargets.Select(t => t.node.Local).ToArray();
+            var ids = ObjectTargets.Select(t => t.node.Id).Concat(_childComp.Select(c => c.child.Id)).ToArray();
+            var before = ObjectTargets.Select(t => t.initial).Concat(_childComp.Select(c => c.initial)).ToArray();
+            var after = ObjectTargets.Select(t => t.node.Local).Concat(_childComp.Select(c => c.child.Local)).ToArray();
             if (!commit)
             {
-                for (int i = 0; i < ids.Length; i++) { ObjectTargets[i].node.Local = before[i]; doc.Notify(new DocChange(ChangeKind.TransformChanged, ids[i])); }
+                for (int i = 0; i < ObjectTargets.Count; i++) { ObjectTargets[i].node.Local = before[i]; doc.Notify(new DocChange(ChangeKind.TransformChanged, ids[i])); }
+                foreach (var (c, init, _) in _childComp) { c.Local = init; doc.Notify(new DocChange(ChangeKind.TransformChanged, c.Id)); }
             }
             else
             {
@@ -279,9 +288,22 @@ public abstract class TransformToolBase : SelectTool
                 if (!cmd.IsNoop) doc.Undo.Push(cmd, alreadyApplied: true);
             }
         }
-        ObjectTargets.Clear(); ComponentTargets.Clear();
+        ObjectTargets.Clear(); ComponentTargets.Clear(); _childComp.Clear(); _isolate = false;
         _lastOp = null; _lastParams = null;
         RefreshGizmo();
+    }
+
+    /// <summary>Ctrl 드래그: 자식들의 월드 트랜스폼을 유지하도록 로컬을 다시 계산한다.</summary>
+    private void CompensateChildren()
+    {
+        if (_childComp.Count == 0) return;
+        var doc = Ctx.Doc;
+        foreach (var (c, _, world) in _childComp)
+        {
+            Matrix4x4.Invert(c.Parent!.WorldMatrix, out var inv);
+            c.Local = Transform3.FromMatrix(world * inv);
+            doc.Notify(new DocChange(ChangeKind.TransformChanged, c.Id));
+        }
     }
 
     // ---------------------------------------------------------------- 적용 헬퍼
@@ -299,6 +321,7 @@ public abstract class TransformToolBase : SelectTool
             node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
+        CompensateChildren();
         foreach (var (id, verts, init, _, worldInv) in ComponentTargets)
         {
             var d = NVec3.TransformNormal(worldDelta, worldInv);
@@ -329,6 +352,7 @@ public abstract class TransformToolBase : SelectTool
             node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
+        CompensateChildren();
         var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.CreateFromQuaternion(q) * Matrix4x4.CreateTranslation(PivotWorld);
         ApplyComponentsWorldMatrix(m);
     }
@@ -362,6 +386,7 @@ public abstract class TransformToolBase : SelectTool
             node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
+        CompensateChildren();
         var b = new Matrix4x4(gx.X, gx.Y, gx.Z, 0, gy.X, gy.Y, gy.Z, 0, gz.X, gz.Y, gz.Z, 0, 0, 0, 0, 1);
         var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.Transpose(b) * Matrix4x4.CreateScale(scaleInGizmoAxes) * b * Matrix4x4.CreateTranslation(PivotWorld);
         ApplyComponentsWorldMatrix(m);

@@ -28,6 +28,32 @@ public static class MeshBuilder
         return m;
     }
 
+    /// <summary>점 목록으로 n각형 하나(Create Polygon Tool). 점은 순서대로 루프를 이루며, 법선이 normalHint 쪽을 향하도록 뒤집는다.</summary>
+    public static PolyMesh Polygon(IReadOnlyList<Vector3> points, Vector3 normalHint)
+    {
+        var m = new PolyMesh();
+        if (points.Count < 3) return m;
+        var ids = points.Select(p => m.AddVertex(p)).ToArray();
+        // 뉴웰 법선
+        var n = Vector3.Zero;
+        for (int i = 0; i < points.Count; i++) { var a = points[i]; var b = points[(i + 1) % points.Count]; n += new Vector3((a.Y - b.Y) * (a.Z + b.Z), (a.Z - b.Z) * (a.X + b.X), (a.X - b.X) * (a.Y + b.Y)); }
+        if (Vector3.Dot(n, normalHint) < 0) Array.Reverse(ids);
+        // 평면 UV: 가장 큰 범위 두 축으로 0..1
+        var min = new Vector3(float.MaxValue); var max = new Vector3(float.MinValue);
+        foreach (var p in points) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
+        var ext = max - min; var (u, v) = Uv.UvOps.ProjectionBasis(Vector3.Normalize(n.LengthSquared() > 1e-12f ? n : normalHint));
+        int f = m.AddFace(ids);
+        if (f >= 0)
+        {
+            float size = MathF.Max(MathF.Max(ext.X, ext.Y), MathF.Max(ext.Z, 1e-6f));
+            int start = m.Faces[f].HalfEdge, he = start;
+            do { var h = m.Hes[he]; var p = m.Verts[h.Vertex].Position - min; h.Uv0 = new Vector2(Vector3.Dot(p, u), Vector3.Dot(p, v)) / size; m.Hes[he] = h; he = h.Next; } while (he != start);
+        }
+        MeshNormals.Recompute(m);
+        m.BumpTopology();
+        return m;
+    }
+
     /// <summary>XZ 평면(법선 +Y), 원점 중심, 분할 가능.</summary>
     public static PolyMesh Plane(float width = 1f, float depth = 1f, int subdivX = 1, int subdivZ = 1)
     {

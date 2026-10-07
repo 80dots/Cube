@@ -149,6 +149,17 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] histedit {idx} {p[2]}={p[3]}");
                     break;
                 }
+            case "matnew":   // matnew TYPE: 머티리얼을 만들어 선택 오브젝트에 할당
+                {
+                    var doc = CubeApp.Instance.Document;
+                    var type = Enum.TryParse<Core.Scene.MaterialType>(p[1], true, out var mt) ? mt : Core.Scene.MaterialType.Lambert;
+                    var mat = new Core.Scene.MaterialDef { Name = doc.UniqueMaterialName(type.ToString().ToLowerInvariant()), Type = type, Color = new System.Numerics.Vector3(0.9f, 0.3f, 0.2f) };
+                    var cmd = new Core.Commands.AddMaterialCommand(mat); doc.Undo.Push(cmd);
+                    var ids = doc.Selection.Objects.Where(id => doc.Find(id)?.Mesh != null).ToArray();
+                    if (ids.Length > 0) doc.Undo.Push(new Core.Commands.AssignMaterialCommand(ids, cmd.Material.Id));
+                    GD.Print($"[Drive] matnew {type} id={cmd.Material.Id} assigned={ids.Length}");
+                    break;
+                }
             case "action":
                 GD.Print($"[Drive] action {p[1]}: {UI.Shell.Instance.Actions.Invoke(p[1])}");
                 break;
@@ -271,8 +282,11 @@ public partial class DebugDriver : Node
                 {
                     var doc = CubeApp.Instance.Document;
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen}");
+                    var lights = doc.LightNodes().ToList();
+                    if (lights.Count > 0) GD.Print($"[Drive] lights={lights.Count} {string.Join(",", lights.Select(l => $"{l.Name}:{l.Light!.Type}/{l.Light.Intensity:F1}"))} materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");
+                    else if (doc.Materials.Count > 0) GD.Print($"[Drive] materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");
                     var joints = doc.JointNodes().ToList();
-                    if (joints.Count > 0) GD.Print($"[Drive] joints={joints.Count} {string.Join(",", joints.Select(j => $"{j.Name}@<{j.WorldMatrix.Translation.X:F2},{j.WorldMatrix.Translation.Y:F2},{j.WorldMatrix.Translation.Z:F2}>{(j.Parent is { IsRoot: false } p ? "<" + p.Name : "")}"))}");
+                    if (joints.Count > 0) GD.Print($"[Drive] joints={joints.Count} {string.Join(",", joints.Select(j => $"{j.Name}@<{j.WorldMatrix.Translation.X:F2},{j.WorldMatrix.Translation.Y:F2},{j.WorldMatrix.Translation.Z:F2}>R<{j.Local.RotationDegrees.X:F0},{j.Local.RotationDegrees.Y:F0},{j.Local.RotationDegrees.Z:F0}>{(j.Parent is { IsRoot: false } p ? "<" + p.Name : "")}"))}");
                     foreach (var sn in doc.SkinnedNodes())
                     {
                         var sk = sn.Skin!; int weighted = sk.Weights.Count(w => w != null && w.Count > 0);

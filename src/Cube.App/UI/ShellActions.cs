@@ -21,6 +21,8 @@ public partial class Shell
         Tools.Register(new InsertEdgeLoopTool());
         Tools.Register(new JointTool());
         Tools.Register(new PaintWeightsTool());
+        Tools.Register(new CreatePolygonTool());
+        Tools.Register(new InsertJointTool());
     }
 
     private void RegisterActions()
@@ -147,6 +149,7 @@ public partial class Shell
         Actions.Register("app.escape", "Escape", () => { Tools.CancelCurrent(); Viewport.GrabFocus(); });
         RegisterUvActions();
         RegisterRigActions();
+        RegisterSceneActions();
     }
 
     private SelectMode _lastComponentMode = SelectMode.Vertex;
@@ -607,7 +610,9 @@ public partial class Shell
             .Item("edit.preferences");
 
         Menus.Build(Add("Create"))
-            .Submenu("Polygon Primitives", m => m.Item("create.cube", "Cube").Item("create.sphere", "Sphere").Item("create.cylinder", "Cylinder").Item("create.cone", "Cone").Item("create.plane", "Plane").Item("create.torus", "Torus"));
+            .Submenu("Polygon Primitives", m => m.Item("create.cube", "Cube").Item("create.sphere", "Sphere").Item("create.cylinder", "Cylinder").Item("create.cone", "Cone").Item("create.plane", "Plane").Item("create.torus", "Torus"))
+            .Item("create.polygonTool").Separator()
+            .Submenu("Lights", m => m.Item("create.lightDirectional", "Directional Light").Item("create.lightPoint", "Point Light").Item("create.lightSpot", "Spot Light"));
 
         Menus.Build(Add("Select"))
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
@@ -627,16 +632,18 @@ public partial class Shell
             .Item("windows.uvEditor").Separator()
             .Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
             .Item("uv.unfold").Item("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
-        Menus.Build(Add("Skeleton")).Item("skeleton.jointTool");
+        Menus.Build(Add("Skeleton")).Item("skeleton.jointTool").Item("skeleton.insertJointTool").Separator().Item("skeleton.mirror").Item("skeleton.orient").Item("skeleton.orientApply");
         Menus.Build(Add("Skin")).Item("skin.bind").Item("skin.detach").Separator().Item("skin.paintTool").Item("skin.normalize").Item("skin.rebind");
 
         Menus.Build(Add("Display"))
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
+            .Item("display.jointAxes").Separator()
             .Item("display.grid").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
-        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor");
+        Menus.Build(Add("Material")).Item("windows.materialEditor");
+        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor");
         Menus.Build(Add("Help")).Item("help.about");
     }
 }

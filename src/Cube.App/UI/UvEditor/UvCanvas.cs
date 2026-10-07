@@ -382,6 +382,15 @@ public partial class UvCanvas : Control
         return null;
     }
 
+    private static bool RectIntersectsSegment(Rect2 r, GVec2 a, GVec2 b)
+    {
+        if (r.HasPoint(a) || r.HasPoint(b)) return true;
+        var p0 = r.Position; var p1 = r.End;
+        var corners = new[] { p0, new GVec2(p1.X, p0.Y), p1, new GVec2(p0.X, p1.Y) };
+        for (int i = 0; i < 4; i++) if (Geometry2D.SegmentIntersectsSegment(a, b, corners[i], corners[(i + 1) % 4]).VariantType != Variant.Type.Nil) return true;
+        return false;
+    }
+
     private static Rect2 RectFrom(GVec2 a, GVec2 b)
     {
         var min = new GVec2(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y));
@@ -517,6 +526,38 @@ public partial class UvCanvas : Control
         return poly;
     }
 
+    /// <summary>Island 모드: 점(8px) → 엣지(6px) → 면 안 순으로 집어 그 요소가 속한 섬의 대표 UV 점을 돌려준다.</summary>
+    private SelItem? PickIsland(GVec2 px, SceneNode node, ref float best)
+    {
+        float s = CubeApp.Instance.UiScale;
+        var m = node.Mesh!; var topo = Topo(node);
+        SelItem? hit = null;
+        for (int i = 0; i < topo.Points.Count; i++)
+        {
+            float d = UvToPx(topo.Points[i].Uv).DistanceTo(px);
+            if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); }
+        }
+        if (hit != null) return hit;
+        for (int e = 0; e < m.EdgeCount; e++)
+        {
+            var ed = m.Edges[e]; if (!ed.Alive) continue;
+            foreach (int he in new[] { ed.He0, ed.He1 })
+            {
+                if (he < 0) continue;
+                var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
+                float d = Geometry2D.GetClosestPointToSegment(px, a, b).DistanceTo(px);
+                if (d <= 6 * s && d < best) { best = d; hit = new SelItem(node.Id, topo.HeToPoint[he]); }
+            }
+        }
+        if (hit != null) return hit;
+        for (int f = 0; f < m.FaceCount; f++)
+        {
+            if (!m.Faces[f].Alive) continue;
+            if (Geometry2D.IsPointInPolygon(px, FacePoly(m, f, UvToPx).ToArray())) { best = 0; return new SelItem(node.Id, topo.HeToPoint[m.Faces[f].HalfEdge]); }
+        }
+        return null;
+    }
+
     /// <summary>현재 모드에서 커서 아래 항목(UV 모드: 점 id, 엣지/면: id, 오브젝트: 면 안의 오브젝트 → Component -1).</summary>
     private SelItem? Pick(GVec2 px)
     {
@@ -526,6 +567,7 @@ public partial class UvCanvas : Control
         foreach (var node in TargetNodes())
         {
             var m = node.Mesh!; var topo = Topo(node);
+            if (sel.Mode == SelectMode.Uv && IslandMode) { var ih = PickIsland(px, node, ref best); if (ih != null) hit = ih; continue; }
             switch (sel.Mode)
             {
                 case SelectMode.Uv:
@@ -597,6 +639,19 @@ public partial class UvCanvas : Control
                         var shells = new HashSet<int>();
                         for (int i = 0; i < topo.Points.Count; i++)
                             if (r.HasPoint(UvToPx(topo.Points[i].Uv))) { if (IslandMode) shells.Add(topo.Points[i].Shell); else items.Add(new SelItem(node.Id, i)); }
+                        if (IslandMode)
+                        {
+                            // 섬 모드: 사각형이 엣지를 가로지르거나 면 중심을 포함해도 그 섬
+                            for (int f = 0; f < m.FaceCount; f++)
+                            {
+                                if (!m.Faces[f].Alive) continue;
+                                var poly = FacePoly(m, f, UvToPx);
+                                var c = GVec2.Zero; foreach (var p in poly) c += p; c /= poly.Count;
+                                bool inside = r.HasPoint(c);
+                                for (int i = 0; i < poly.Count && !inside; i++) if (RectIntersectsSegment(r, poly[i], poly[(i + 1) % poly.Count])) inside = true;
+                                if (inside) shells.Add(topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell);
+                            }
+                        }
                         foreach (int sh in shells) foreach (int p in topo.PointsInShell(sh)) items.Add(new SelItem(node.Id, p));
                         break;
                     }

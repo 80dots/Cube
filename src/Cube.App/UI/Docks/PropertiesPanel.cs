@@ -21,6 +21,12 @@ public partial class PropertiesPanel : VBoxContainer
     private NodeId _node;
 
     private ItemList _history = null!;
+    private Control _lightGroup = null!;
+    private OptionButton _lightType = null!;
+    private ColorPickerButton _lightColor = null!;
+    private SpinBox _lightIntensity = null!, _lightRange = null!, _lightAngle = null!;
+    private Control _lightRangeRow = null!, _lightAngleRow = null!;
+    private Label _materialLabel = null!;
     private VBoxContainer _paramBox = null!;
     private Label _historyEmpty = null!;
     private int _historyIndex = -1;          // 선택된 히스토리 항목(오래된 것부터 센 인덱스)
@@ -33,7 +39,7 @@ public partial class PropertiesPanel : VBoxContainer
         doc.Selection.ModeChanged += Refresh;
         doc.Changed += c =>
         {
-            if (c.Kind is ChangeKind.TransformChanged or ChangeKind.NodeRenamed or ChangeKind.Reset or ChangeKind.NodeRemoved) Refresh();
+            if (c.Kind is ChangeKind.TransformChanged or ChangeKind.NodeRenamed or ChangeKind.Reset or ChangeKind.NodeRemoved or ChangeKind.LightChanged or ChangeKind.MaterialChanged) Refresh();
             else if (c.Kind is ChangeKind.MeshTopology or ChangeKind.HistoryChanged or ChangeKind.MeshGeometry) RefreshHistory();
         };
         Refresh();
@@ -65,6 +71,28 @@ public partial class PropertiesPanel : VBoxContainer
         }
         AddChild(grid);
 
+        _materialLabel = new Label { Text = "", Modulate = new Color(1, 1, 1, 0.7f) };
+        AddChild(_materialLabel);
+
+        // Light 그룹
+        var lightBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        lightBox.AddChild(Header("Light", s));
+        _lightType = new OptionButton { FocusMode = FocusModeEnum.None, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        foreach (var t in Enum.GetNames<Core.Scene.LightType>()) _lightType.AddItem(t);
+        _lightType.ItemSelected += i => CommitLight(l => l.Type = (Core.Scene.LightType)(int)i);
+        lightBox.AddChild(LabeledRow("Type", _lightType, s));
+        _lightColor = new ColorPickerButton { EditAlpha = false, SizeFlagsHorizontal = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(0, 22 * s) };
+        _lightColor.PopupClosed += () => CommitLight(l => l.Color = new NVec3(_lightColor.Color.R, _lightColor.Color.G, _lightColor.Color.B));
+        lightBox.AddChild(LabeledRow("Color", _lightColor, s));
+        _lightIntensity = Spin(s); _lightIntensity.MinValue = 0; _lightIntensity.Step = 0.01; _lightIntensity.ValueChanged += v => CommitLight(l => l.Intensity = (float)v);
+        lightBox.AddChild(LabeledRow("Intensity", _lightIntensity, s));
+        _lightRange = Spin(s); _lightRange.MinValue = 0.01; _lightRange.Step = 0.1; _lightRange.ValueChanged += v => CommitLight(l => l.Range = (float)v);
+        _lightRangeRow = LabeledRow("Range", _lightRange, s); lightBox.AddChild(_lightRangeRow);
+        _lightAngle = Spin(s); _lightAngle.MinValue = 1; _lightAngle.MaxValue = 179; _lightAngle.Step = 0.5; _lightAngle.ValueChanged += v => CommitLight(l => l.SpotAngle = (float)v);
+        _lightAngleRow = LabeledRow("Cone Angle", _lightAngle, s); lightBox.AddChild(_lightAngleRow);
+        _lightGroup = lightBox;
+        AddChild(lightBox);
+
         AddChild(Header("History", s));
         _historyEmpty = new Label { Text = "(no construction history)", Modulate = new Color(1, 1, 1, 0.6f) };
         AddChild(_historyEmpty);
@@ -94,6 +122,36 @@ public partial class PropertiesPanel : VBoxContainer
 
     private static void ReturnFocus() => Shell.Instance?.Viewport.GrabFocus();
 
+    private static Control LabeledRow(string label, Control c, float s)
+    {
+        var row = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        row.AddChild(new Label { Text = label, CustomMinimumSize = new Vector2(70 * s, 0) });
+        c.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        row.AddChild(c);
+        return row;
+    }
+
+    private void CommitLight(Action<Core.Scene.LightShape> change)
+    {
+        if (_updating || _node.IsNone) return;
+        var node = _doc.Find(_node); if (node?.Light == null) return;
+        var after = node.Light.Clone(); change(after);
+        if (after.Type == node.Light.Type && after.Color == node.Light.Color && after.Intensity == node.Light.Intensity && after.Range == node.Light.Range && after.SpotAngle == node.Light.SpotAngle) return;
+        _doc.Undo.Push(new SetLightCommand(_node, after));
+    }
+
+    private void RefreshLight(SceneNode? node)
+    {
+        var l = node?.Light;
+        _lightGroup.Visible = l != null;
+        if (l == null) return;
+        _lightType.Selected = (int)l.Type;
+        _lightColor.Color = new Color(l.Color.X, l.Color.Y, l.Color.Z);
+        _lightIntensity.Value = l.Intensity; _lightRange.Value = l.Range; _lightAngle.Value = l.SpotAngle;
+        _lightRangeRow.Visible = l.Type != Core.Scene.LightType.Directional;
+        _lightAngleRow.Visible = l.Type == Core.Scene.LightType.Spot;
+    }
+
     /// <summary>표시 대상 노드: 오브젝트 모드면 활성 오브젝트, 컴포넌트 모드면 활성 오브젝트 또는 컴포넌트가 선택된 노드.</summary>
     private SceneNode? TargetNode()
     {
@@ -117,6 +175,8 @@ public partial class PropertiesPanel : VBoxContainer
             _node = NodeId.None;
             _title.Text = sel.IsComponentMode ? "(component mode)" : "";
             foreach (var f in _fields) { f.Editable = false; f.Value = 0; }
+            _materialLabel.Text = "";
+            RefreshLight(null);
         }
         else
         {
@@ -126,6 +186,8 @@ public partial class PropertiesPanel : VBoxContainer
             Set(0, t.Translation); Set(1, t.RotationDegrees); Set(2, t.Scale);
             bool editable = sel.Mode == SelectMode.Object;
             foreach (var f in _fields) f.Editable = editable;
+            _materialLabel.Text = node.Mesh != null ? "Material: " + (_doc.FindMaterial(node.MaterialId)?.Name ?? "lambert1") : "";
+            RefreshLight(node);
         }
         _updating = false;
         RefreshHistory();

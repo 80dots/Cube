@@ -42,6 +42,12 @@ public sealed class ViewportDisplay
             bool hovered = !selected && Hover is { } h && h.node == id && h.mode == SelectMode.Object;
             jv.SetColor(active ? JointView.JointActive : selected ? JointView.JointSelected : hovered ? JointView.JointHover : JointView.JointNormal);
         }
+        foreach (var (id, lv) in _panel.Scene.LightViews)
+        {
+            bool selected = sel != null && sel.IsObjectSelected(id);
+            bool active = sel != null && sel.ActiveObject == id;
+            lv.SetColor(active ? LightView.IconActive : selected ? LightView.IconSelected : LightView.IconNormal);
+        }
     }
 
     public void Bind(Document doc)
@@ -99,7 +105,8 @@ public sealed class ViewportDisplay
         var hover = Hover is { } h && h.node == id ? h : ((NodeId, SelectMode, int)?)null;
 
         s.ShowSurface = Mode != ShadingMode.Wireframe;
-        s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : null;
+        var matDef = _doc?.FindMaterial(mv.Node.MaterialId);
+        s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : matDef != null ? MaterialCache.Get(matDef) : null;
         var wd = UI.Shell.Instance?.WeightDisplay;
         s.WeightOf = wd is { } w && w.node == id ? w.weight : null;
         s.ShowWire = Mode == ShadingMode.Wireframe || WireOnShaded || objSelected || compMode;

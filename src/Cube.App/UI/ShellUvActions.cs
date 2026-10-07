@@ -33,6 +33,8 @@ public partial class Shell
         Actions.Register("uv.cycleBackground", "Cycle Background (UV)", () => UvEditorWindow?.CycleBackground(), canExecute: () => UvEditorWindow?.Visible ?? false);
         Actions.Register("uv.flipU", "Flip U", () => Flip(true), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.flipV", "Flip V", () => Flip(false), canExecute: HasTargets, repeatable: true);
+        Actions.Register("uv.autoSeams", "Auto Seam Select", AutoSeamSelect, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
+        Actions.Register("uv.autoWrap", "Auto Wrap", AutoWrap, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
     }
 
     private void ToggleUvEditor()
@@ -55,12 +57,77 @@ public partial class Shell
         foreach (var id in ids)
         {
             var n = Document.Find(id); if (n?.Mesh == null) continue;
-            var m = n.Mesh;
-            List<int> faces;
-            if (sel.Mode == SelectMode.Face && sel.Components.TryGetValue(id, out var comps) && comps.Faces.Count > 0) faces = comps.Faces.ToList();
-            else faces = Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive).ToList();
-            yield return (n, faces);
+            var faces = TargetFaces(n, sel);
+            if (faces.Count > 0) yield return (n, faces);
         }
+    }
+
+    /// <summary>
+    /// 선택에 한정한 대상 면: 면 모드 = 선택 면, 엣지/정점/UV(Island) 모드 = 선택 요소의 UV 점을 모두 포함하는 면
+    /// (하나도 없으면 선택 UV를 하나라도 포함하는 면), 오브젝트 모드 = 전체.
+    /// </summary>
+    private List<int> TargetFaces(SceneNode n, SelectionState sel)
+    {
+        var m = n.Mesh!;
+        List<int> All() => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive).ToList();
+        if (sel.Mode == SelectMode.Object || !sel.Components.TryGetValue(n.Id, out var comps)) return All();
+        if (sel.Mode == SelectMode.Face) return comps.Faces.Count > 0 ? comps.Faces.ToList() : All();
+        var topo = UvTopology.Build(m);
+        var selPts = new HashSet<int>();
+        switch (sel.Mode)
+        {
+            case SelectMode.Uv: selPts.UnionWith(comps.Uvs.Where(p => p < topo.Points.Count)); break;
+            case SelectMode.Edge:
+                foreach (int e in comps.Edges) { if (e >= m.EdgeCount || !m.Edges[e].Alive) continue; var ed = m.Edges[e]; foreach (int he in new[] { ed.He0, ed.He1 }) { if (he < 0) continue; selPts.Add(topo.HeToPoint[he]); selPts.Add(topo.HeToPoint[m.Hes[he].Next]); } }
+                break;
+            case SelectMode.Vertex:
+                for (int p = 0; p < topo.Points.Count; p++) if (comps.Verts.Contains(topo.Points[p].Vertex)) selPts.Add(p);
+                break;
+        }
+        if (selPts.Count == 0) return All();
+        var full = new List<int>(); var partial = new List<int>();
+        var hes = new List<int>();
+        for (int f = 0; f < m.FaceCount; f++)
+        {
+            if (!m.Faces[f].Alive) continue;
+            m.GetFaceHalfEdges(f, hes);
+            int hit = 0; foreach (int he in hes) if (selPts.Contains(topo.HeToPoint[he])) hit++;
+            if (hit == hes.Count) full.Add(f); else if (hit > 0) partial.Add(f);
+        }
+        return full.Count > 0 ? full : partial;
+    }
+
+    /// <summary>Auto Seam Select: 선택 오브젝트의 최적 심 엣지를 찾아 엣지 모드로 선택한다(심 적용은 Cut으로).</summary>
+    private void AutoSeamSelect()
+    {
+        var targets = Document.Selection.Objects.Select(id => Document.Find(id)).Where(n => n?.Mesh != null).Cast<SceneNode>().ToList();
+        if (targets.Count == 0) return;
+        int total = 0;
+        RecordSelection(s =>
+        {
+            s.Mode = SelectMode.Edge;
+            bool first = true;
+            foreach (var n in targets)
+            {
+                var seams = AutoSeams.Select(n.Mesh!);
+                total += seams.Count;
+                s.SelectComponents(n.Id, SelectMode.Edge, seams, replace: first); first = false;
+            }
+        });
+        HelpLine.Text = $"Auto Seam Select: {total} edge(s) selected. Use Cut UV Edges to apply, or Auto Wrap to cut, unfold and layout.";
+    }
+
+    /// <summary>Auto Wrap: 자동 심 → Cut → 섬별 투영 → Unfold → Layout.</summary>
+    private void AutoWrap()
+    {
+        var targets = Document.Selection.Objects.Select(id => Document.Find(id)).Where(n => n?.Mesh != null).Cast<SceneNode>().ToList();
+        if (targets.Count == 0) return;
+        int seams = 0;
+        using (Document.Undo.BeginGroup("Auto Wrap"))
+            foreach (var n in targets)
+                Document.Undo.Push(new UvEditCommand("Auto Wrap", n.Id, m => seams += UvOps.AutoWrap(m)));
+        UvEditorWindow?.Canvas.Invalidate();
+        HelpLine.Text = $"Auto Wrap: {seams} seam edge(s), islands unfolded and laid out.";
     }
 
     private void Project(string name, Action<PolyMesh, IEnumerable<int>> op)

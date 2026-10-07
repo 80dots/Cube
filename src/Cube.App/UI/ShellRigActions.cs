@@ -29,7 +29,7 @@ public partial class Shell
         _paintWindow.Show(this);
     }
 
-    public void HidePaintWeightsWindow() { if (_paintWindow != null && _paintWindow.Visible) _paintWindow.Hide(); }
+    public void HidePaintWeightsWindow() { if (_paintWindow != null && _paintWindow.Visible) _paintWindow.Visible = false; }
 
     private void RegisterRigActions()
     {

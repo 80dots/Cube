@@ -17,6 +17,8 @@ public enum ChangeKind
     MeshAttributes,   // 노멀/UV/하드엣지 등 → 전체 재빌드(위상 동일)
     SkinChanged,      // skinCluster 부착/제거/가중치 변경 → 변형·가중치 표시 갱신
     HistoryChanged,   // 구성 이력 목록 변경(메시는 그대로)
+    LightChanged,     // 라이트 속성 변경
+    MaterialChanged,  // 머티리얼 라이브러리(Node=None) 또는 노드 할당/속성 변경
     DisplayChanged,   // 표시 옵션(스무스 프리뷰 등) 변경 → 뷰 재빌드
     Selection,
 }
@@ -35,6 +37,18 @@ public sealed class Document
     public IReadOnlyDictionary<NodeId, SceneNode> Nodes => _nodes;
     public SelectionState Selection { get; }
     public UndoStack Undo { get; }
+    /// <summary>문서 머티리얼 라이브러리(ID 1부터; 0은 기본 lambert1).</summary>
+    public List<MaterialDef> Materials { get; } = new();
+    private int _nextMaterialId = 1;
+    public int NextMaterialId() => _nextMaterialId++;
+    public string UniqueMaterialName(string baseName)
+    {
+        var used = new HashSet<string>(Materials.Select(m => m.Name));
+        for (int i = 1; ; i++) { string cand = baseName + i; if (!used.Contains(cand)) return cand; }
+    }
+    public MaterialDef? FindMaterial(int id) => id <= 0 ? null : Materials.FirstOrDefault(m => m.Id == id);
+    /// <summary>파일 로드 등 ID가 이미 있는 머티리얼을 넣을 때.</summary>
+    public void AddMaterialWithId(MaterialDef m) { Materials.Add(m); if (m.Id >= _nextMaterialId) _nextMaterialId = m.Id + 1; }
     public string? FilePath { get; set; }
     public bool IsDirty { get; set; }
 
@@ -113,12 +127,19 @@ public sealed class Document
         Root.Children.Clear();
         _nodes.Clear();
         _nextId = 1;
+        Materials.Clear(); _nextMaterialId = 1;
         Selection.ClearAll(silent: true);
         Undo.Clear();
         FilePath = null;
         IsDirty = false;
         Notify(new DocChange(ChangeKind.Reset, NodeId.None));
         IsDirty = false;
+    }
+
+    /// <summary>모든 라이트 노드.</summary>
+    public IEnumerable<SceneNode> LightNodes()
+    {
+        foreach (var n in _nodes.Values) if (n.IsLight) yield return n;
     }
 
     /// <summary>모든 조인트 노드.</summary>

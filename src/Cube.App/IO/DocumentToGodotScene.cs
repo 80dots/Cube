@@ -90,10 +90,39 @@ public static class DocumentToGodotScene
         AddBone(rootJoint, -1);
     }
 
+    private static readonly Dictionary<int, StandardMaterial3D> MaterialCacheExport = new();
+
+    /// <summary>MaterialDef → 내보내기용 StandardMaterial3D(glTF PBR로 기록됨).</summary>
+    private static Material MaterialFor(SceneNode n)
+    {
+        var def = CubeApp.Instance.Document.FindMaterial(n.MaterialId);
+        if (def == null) return DefaultMaterial;
+        var m = new StandardMaterial3D { ResourceName = def.Name, AlbedoColor = new Color(def.Color.X, def.Color.Y, def.Color.Z) };
+        switch (def.Type)
+        {
+            case MaterialType.Pbr: m.Metallic = def.Metallic; m.Roughness = def.Roughness; break;
+            case MaterialType.BlinnPhong: m.Metallic = 0; m.Roughness = Math.Clamp(MathF.Sqrt(2f / (def.Shininess + 2f)), 0.05f, 1f); break;
+            case MaterialType.Unlit: case MaterialType.Matcap: m.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded; m.Roughness = 1; break;
+            default: m.Roughness = 1; m.Metallic = 0; break;
+        }
+        return m;
+    }
+
     private static void BuildNode(Ctx ctx, SceneNode n, Node3D parent, bool bakeWorld)
     {
         if (n.IsJoint) return;
         Node3D g;
+        if (n.Light is { } light)
+        {
+            Light3D gl = light.Type switch { LightType.Directional => new DirectionalLight3D(), LightType.Spot => new SpotLight3D { SpotRange = light.Range, SpotAngle = light.SpotAngle * 0.5f }, _ => new OmniLight3D { OmniRange = light.Range } };
+            gl.LightColor = new Color(light.Color.X, light.Color.Y, light.Color.Z); gl.LightEnergy = light.Intensity;
+            gl.Name = n.Name;
+            gl.Transform = bakeWorld ? n.WorldMatrix.ToGodot() : n.Local.ToGodot();
+            parent.AddChild(gl);
+            ctx.Count++;
+            foreach (var c in n.Children) BuildNode(ctx, c, gl, false);
+            return;
+        }
         if (n.Mesh != null && n.Skin != null && TryBuildSkinned(ctx, n, out var skinned)) { g = skinned; ctx.Count++; foreach (var c in n.Children) BuildNode(ctx, c, ctx.Root, bakeWorld: true); return; }
         if (n.Mesh != null)
         {
@@ -103,7 +132,7 @@ public static class DocumentToGodotScene
             var render = MeshTessellator.Build(mesh);
             var arr = new ArrayMesh { ResourceName = n.Name + "Shape" };
             new GodotMeshBridge().UploadSurface(arr, render);
-            if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, DefaultMaterial);
+            if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(n));
             ctx.Tris += render.TriangleCount;
             g = new MeshInstance3D { Mesh = arr };
         }
@@ -160,7 +189,7 @@ public static class DocumentToGodotScene
         }
         var arr = new ArrayMesh { ResourceName = n.Name + "Shape" };
         new GodotMeshBridge().UploadSurface(arr, render, null, bones4, weights4);
-        if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, DefaultMaterial);
+        if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(n));
         ctx.Tris += render.TriangleCount;
 
         // Skin: 본마다 역바인드(스켈레톤 공간) = skelWorld · inv(jointWorld)

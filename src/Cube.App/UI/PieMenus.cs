@@ -70,7 +70,7 @@ public static class PieMenus
             Mode("Object Mode", "mode.object", sel.Mode == SelectMode.Object),
             Item(shell, "select.none", "Deselect All"),
             Item(shell, "select.all", "Select All"),
-            Item(shell, "uv.frameSelected", "Frame"),
+            Item(shell, "uv.frameSelected", "Frame Selected"),
         };
     }
 
@@ -101,7 +101,7 @@ public static class PieMenus
             Item(shell, "uv.cut", "Cut UV"),
             Item(shell, "uv.sew", "Sew UV"),
             Item(shell, "uv.frameAll", "Frame All"),
-            Item(shell, "uv.frameSelected", "Frame"),
+            Item(shell, "uv.frameSelected", "Frame Selected"),
             Item(shell, "uv.planarX", "Planar X"),
             Item(shell, "uv.planarY", "Planar Y"),
             Item(shell, "uv.planarZ", "Planar Z"),
@@ -109,6 +109,8 @@ public static class PieMenus
             Item(shell, "uv.flipU", "Flip U"),
             Item(shell, "uv.flipV", "Flip V"),
             Item(shell, "uv.cycleBackground", "Background"),
+            Item(shell, "uv.autoSeams", "Auto Seam Select"),
+            Item(shell, "uv.autoWrap", "Auto Wrap"),
         };
     }
 

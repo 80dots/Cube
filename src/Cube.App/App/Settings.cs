@@ -22,6 +22,8 @@ public sealed class Settings
     [JsonPropertyName("wireOnShaded")] public bool WireOnShaded { get; set; } = true;
     [JsonPropertyName("showGrid")] public bool ShowGrid { get; set; } = true;
     [JsonPropertyName("quadView")] public bool QuadView { get; set; }
+    /// <summary>Display → Joint Local Rotation Axes.</summary>
+    [JsonPropertyName("showJointAxes")] public bool ShowJointAxes { get; set; }
     [JsonPropertyName("lastExportDir")] public string? LastExportDir { get; set; }
     [JsonPropertyName("lastSceneDir")] public string? LastSceneDir { get; set; }
 

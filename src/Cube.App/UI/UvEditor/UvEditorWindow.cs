@@ -3,8 +3,8 @@ using Godot;
 
 namespace Cube.App.UI.UvEditor;
 
-/// <summary>UV 편집기 창(임베디드 서브윈도우). 아이콘 툴바(모드/투영/편집/배경) + UvCanvas.</summary>
-public partial class UvEditorWindow : Window
+/// <summary>UV 편집기(플로팅 패널). 아이콘 툴바(모드/투영/편집/Auto Seam·Wrap/Frame/배경) + UvCanvas.</summary>
+public partial class UvEditorWindow : FloatingPanel
 {
     private Shell _shell = null!;
     public UvCanvas Canvas { get; private set; } = null!;
@@ -17,17 +17,9 @@ public partial class UvEditorWindow : Window
         _shell = shell;
         float s = CubeApp.Instance.UiScale;
         Title = "UV Editor";
-        Visible = false;
         var host = shell.GetViewport().GetVisibleRect().Size;
-        Size = new Vector2I((int)MathF.Min(820 * s, host.X * 0.8f), (int)MathF.Min(700 * s, host.Y * 0.85f));
-        MinSize = new Vector2I((int)(400 * s), (int)(300 * s));
-        Unresizable = false;
-        Theme = shell.Theme;
-        CloseRequested += Hide;
-
-        var root = new VBoxContainer();
-        root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        AddChild(root);
+        Size = new Vector2(MathF.Min(820 * s, host.X * 0.8f), MathF.Min(700 * s, host.Y * 0.85f));
+        MinPanelSize = new Vector2(400 * s, 300 * s);
 
         Canvas = new UvCanvas();
         Canvas.Setup(shell);
@@ -52,6 +44,9 @@ public partial class UvEditorWindow : Window
         foreach (var (action, iconName) in new[] { ("uv.unfold", "uv_unfold"), ("uv.layout", "uv_layout"), ("uv.cut", "uv_cut"), ("uv.sew", "uv_sew"), ("uv.flipU", "uv_flip_u"), ("uv.flipV", "uv_flip_v") })
             bar.AddChild(ActionButton(action, iconName, icon));
         bar.AddChild(new VSeparator());
+        foreach (var (action, iconName) in new[] { ("uv.autoSeams", "uv_autoseam"), ("uv.autoWrap", "uv_autowrap") })
+            bar.AddChild(ActionButton(action, iconName, icon));
+        bar.AddChild(new VSeparator());
         var frame = Icons.IconButton("uv_frame", "Frame selection (F) / all (A)", icon);
         frame.Pressed += () => Canvas.FrameSelected();
         bar.AddChild(frame);
@@ -61,8 +56,8 @@ public partial class UvEditorWindow : Window
         _background.Selected = (int)UvBackground.UvTexture;
         _background.ItemSelected += i => { Canvas.Background = (UvBackground)(int)i; };
         bar.AddChild(_background);
-        root.AddChild(bar);
-        root.AddChild(Canvas);
+        Content.AddChild(bar);
+        Content.AddChild(Canvas);
 
         shell.Document.Selection.ModeChanged += RefreshModes;
         Canvas.IslandModeChanged += RefreshModes;
@@ -106,7 +101,8 @@ public partial class UvEditorWindow : Window
 
     public void Toggle()
     {
-        if (Visible) Hide();
-        else { PopupCentered(); Canvas.Invalidate(); Canvas.CallDeferred(nameof(UvCanvas.FrameAll)); }
+        if (Visible) { Close(); return; }
+        Open();
+        Canvas.Invalidate(); Canvas.CallDeferred(nameof(UvCanvas.FrameAll));
     }
 }

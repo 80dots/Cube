@@ -82,11 +82,53 @@ public sealed class Picker
         return result;
     }
 
+    /// <summary>본 피킹: (parent, child, 본 위 비율 t). Insert Joint Tool용.</summary>
+    public bool PickBone(NVec2 p, out NodeId parent, out NodeId child, out float t)
+    {
+        parent = child = NodeId.None; t = 0.5f;
+        var proj = Projection();
+        float best = 8f * Scale;
+        foreach (var (id, jv) in _panel.Scene.JointViews)
+        {
+            if (!jv.Visible) continue;
+            var sp = proj.Project(jv.GlobalPosition.ToNumerics(), out _);
+            if (sp == null) continue;
+            foreach (var c in jv.Node.Children)
+            {
+                if (!c.IsJoint || !_panel.Scene.JointViews.TryGetValue(c.Id, out var cv)) continue;
+                var cp = proj.Project(cv.GlobalPosition.ToNumerics(), out _);
+                if (cp == null) continue;
+                float tt = RayPicker.ClosestParam(sp.Value, cp.Value, p);
+                float d = NVec2.Distance(sp.Value + (cp.Value - sp.Value) * tt, p);
+                if (d < best) { best = d; parent = id; child = c.Id; t = tt; }
+            }
+        }
+        return !parent.IsNone;
+    }
+
+    /// <summary>라이트 아이콘 피킹(아이콘 중심 12px).</summary>
+    public PickHit? PickLight(NVec2 p)
+    {
+        var proj = Projection();
+        float best = 12f * Scale; PickHit? hit = null;
+        foreach (var (id, lv) in _panel.Scene.LightViews)
+        {
+            if (!lv.Visible) continue;
+            var w = lv.GlobalPosition.ToNumerics();
+            var sp = proj.Project(w, out float depth);
+            if (sp == null) continue;
+            float d = NVec2.Distance(sp.Value, p);
+            if (d < best) { best = d; hit = new PickHit(id, -1, depth, w); }
+        }
+        return hit;
+    }
+
     public PickHit? Pick(GVec2 px, SelectMode mode, bool cameraBased)
     {
         var p = new NVec2(px.X, px.Y);
         var targets = Targets();
         if (mode == SelectMode.Object && PickJoint(p) is { } jh) return jh;
+        if (mode == SelectMode.Object && PickLight(p) is { } lh) return lh;
         return mode switch
         {
             SelectMode.Vertex or SelectMode.Uv => RayPicker.PickVertex(targets, Projection(), p, cameraBased, RayPicker.VertexThresholdPx * Scale),
@@ -108,6 +150,12 @@ public sealed class Picker
             {
                 if (!jv.Visible) continue;
                 var sp = proj.Project(jv.GlobalPosition.ToNumerics(), out _);
+                if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
+            }
+            foreach (var (id, lv) in _panel.Scene.LightViews)
+            {
+                if (!lv.Visible) continue;
+                var sp = proj.Project(lv.GlobalPosition.ToNumerics(), out _);
                 if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
             }
         }

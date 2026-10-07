@@ -150,16 +150,23 @@ public static class UvOps
     }
 
     /// <summary>Y축 원통 투영. u = 각도/2π, v = 높이 정규화. 각도 경계(심)에서 u가 0과 1로 갈리는 면은 짧은 쪽으로 맞춘다.</summary>
-    public static void CylindricalProject(PolyMesh m, IEnumerable<int> faces)
+    public static void CylindricalProject(PolyMesh m, IEnumerable<int> faces) => CylindricalProject(m, faces, Vector3.UnitY, null);
+
+    /// <summary>임의 축 원통 투영. originPoint가 있으면 그 점의 각도가 u=0(랩 경계)이 된다 — 자동 심 경로에 맞출 때 쓴다.</summary>
+    public static void CylindricalProject(PolyMesh m, IEnumerable<int> faces, Vector3 axis, Vector3? originPoint)
     {
         var list = faces.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive).ToList();
         if (list.Count == 0) return;
+        axis = axis.LengthSquared() > 1e-12f ? Vector3.Normalize(axis) : Vector3.UnitY;
+        var (bu, bv) = ProjectionBasis(axis); // axis에 수직인 두 축
         var center = Vector3.Zero; int cnt = 0;
         foreach (int f in list) foreach (int he in FaceHalfEdges(m, f)) { center += m.Verts[m.Hes[he].Vertex].Position; cnt++; }
         center /= Math.Max(cnt, 1);
-        float ymin = float.MaxValue, ymax = float.MinValue;
-        foreach (int f in list) foreach (int he in FaceHalfEdges(m, f)) { float y = m.Verts[m.Hes[he].Vertex].Position.Y; ymin = MathF.Min(ymin, y); ymax = MathF.Max(ymax, y); }
-        float h = MathF.Max(ymax - ymin, 1e-6f);
+        float hmin = float.MaxValue, hmax = float.MinValue;
+        foreach (int f in list) foreach (int he in FaceHalfEdges(m, f)) { float hh = Vector3.Dot(m.Verts[m.Hes[he].Vertex].Position - center, axis); hmin = MathF.Min(hmin, hh); hmax = MathF.Max(hmax, hh); }
+        float h = MathF.Max(hmax - hmin, 1e-6f);
+        float Angle(Vector3 p) => MathF.Atan2(Vector3.Dot(p, bv), Vector3.Dot(p, bu));
+        float a0 = originPoint is { } op ? Angle(op - center) : 0f;
         foreach (int f in list)
         {
             var corners = FaceHalfEdges(m, f).ToList();
@@ -167,14 +174,14 @@ public static class UvOps
             for (int i = 0; i < corners.Count; i++)
             {
                 var p = m.Verts[m.Hes[corners[i]].Vertex].Position - center;
-                us[i] = (MathF.Atan2(-p.Z, p.X) / MathF.Tau + 1f) % 1f;
+                us[i] = ((Angle(p) - a0) / MathF.Tau + 2f) % 1f;
             }
             // 면 내부에서 u 불연속(0.5 이상 차이)이면 작은 쪽을 +1
             float uref = us[0];
             for (int i = 0; i < corners.Count; i++)
             {
                 if (us[i] - uref > 0.5f) us[i] -= 1f; else if (uref - us[i] > 0.5f) us[i] += 1f;
-                float v = (m.Verts[m.Hes[corners[i]].Vertex].Position.Y - ymin) / h;
+                float v = (Vector3.Dot(m.Verts[m.Hes[corners[i]].Vertex].Position - center, axis) - hmin) / h;
                 SetUv(m, corners[i], new Vector2(us[i], v));
             }
         }
@@ -236,6 +243,55 @@ public static class UvOps
                 ed.Seam = boundary || mismatch;
                 m.Edges[h.Edge] = ed;
             }
+    }
+
+    /// <summary>
+    /// Auto Wrap: 자동 심 선택 → 심 적용 → 섬마다 최적 평면 투영으로 초기화 → 이완(Unfold) → Layout.
+    /// 반환값은 심 엣지 수.
+    /// </summary>
+    public static int AutoWrap(PolyMesh m, float angleDeg = 55f, int unfoldIterations = 120)
+    {
+        var seams = AutoSeams.Select(m, angleDeg);
+        for (int e = 0; e < m.EdgeCount; e++) { if (!m.Edges[e].Alive) continue; var ed = m.Edges[e]; ed.Seam = seams.Contains(e); m.Edges[e] = ed; }
+        float cosLimit = MathF.Cos(angleDeg * MathF.PI / 180f);
+        foreach (var region in AutoSeams.Regions(m, seams))
+        {
+            // 법선이 서로 상쇄되는(둘러싸는) 영역은 원통 투영, 아니면 최적 평면 투영
+            var sum = Vector3.Zero; float total = 0;
+            foreach (int f in region) { var n = MeshNormals.FaceNormalUnnormalized(m, f); sum += n; total += n.Length(); }
+            bool wraps = total > 1e-9f && sum.Length() / total < 0.5f && region.Count >= 6;
+            if (!wraps) { PlanarProjectBestFit(m, region); continue; }
+            // 축 = 면 법선과 가장 직교하는 월드 축
+            Vector3 best = Vector3.UnitY; float bestScore = float.MaxValue;
+            foreach (var ax in new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ })
+            {
+                float score = 0; foreach (int f in region) score += MathF.Abs(Vector3.Dot(MeshNormals.FaceNormalUnnormalized(m, f), ax));
+                if (score < bestScore) { bestScore = score; best = ax; }
+            }
+            // 랩 경계를 잘린(날카롭지 않은) 심 경로에 맞춘다
+            Vector3? origin = null;
+            var set = new HashSet<int>(region); var hes = new List<int>();
+            foreach (int f in region)
+            {
+                m.GetFaceHalfEdges(f, hes);
+                foreach (int he in hes)
+                {
+                    var hh = m.Hes[he];
+                    if (hh.Twin < 0 || !seams.Contains(hh.Edge) || !set.Contains(m.Hes[hh.Twin].Face)) continue;
+                    var n0 = Vector3.Normalize(MeshNormals.FaceNormalUnnormalized(m, f)); var n1 = Vector3.Normalize(MeshNormals.FaceNormalUnnormalized(m, m.Hes[hh.Twin].Face));
+                    if (Vector3.Dot(n0, n1) >= cosLimit && !m.Edges[hh.Edge].Hard) { origin = (m.Verts[hh.Vertex].Position + m.Verts[m.Hes[hh.Next].Vertex].Position) * 0.5f; break; }
+                }
+                if (origin != null) break;
+            }
+            CylindricalProject(m, region, best, origin);
+        }
+        // 투영이 심을 다시 쓰므로 자동 심을 복원
+        for (int e = 0; e < m.EdgeCount; e++) { if (!m.Edges[e].Alive) continue; var ed = m.Edges[e]; ed.Seam = seams.Contains(e); m.Edges[e] = ed; }
+        var topo = UvTopology.Build(m);
+        UnfoldRelax(m, topo, Enumerable.Range(0, topo.ShellCount), unfoldIterations);
+        topo = UvTopology.Build(m);
+        Layout(m, topo, Enumerable.Range(0, topo.ShellCount));
+        return seams.Count;
     }
 
     /// <summary>Cut UV Edges: 선택 엣지를 심으로 만든다.</summary>

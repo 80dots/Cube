@@ -11,6 +11,8 @@ public partial class ViewportOverlay : Control
     public Rect2? Marquee;
     /// <summary>페인트 브러시 원(중심 픽셀, 반지름 픽셀).</summary>
     public (Vector2 center, float radiusPx)? Brush;
+    /// <summary>Create Polygon Tool 미리보기(화면 점 목록).</summary>
+    public List<Vector2>? Polyline;
 
     public override void _Ready()
     {
@@ -59,6 +61,12 @@ public partial class ViewportOverlay : Control
         {
             DrawArc(br.center, Mathf.Max(br.radiusPx, 2f), 0, Mathf.Tau, 48, new Color(1f, 0.35f, 0.35f, 0.9f), 1.5f * s, true);
             DrawCircle(br.center, 2 * s, new Color(1f, 0.35f, 0.35f, 0.9f));
+        }
+        if (Polyline is { Count: > 0 } pl)
+        {
+            for (int i = 0; i + 1 < pl.Count; i++) DrawLine(pl[i], pl[i + 1], MathConvert.Rgb(0xffe034), 1.5f * s, true);
+            if (pl.Count > 2) DrawLine(pl[^1], pl[0], new Color(1f, 0.88f, 0.2f, 0.4f), 1f * s, true);
+            foreach (var p in pl) DrawCircle(p, 3.5f * s, MathConvert.Rgb(0xffe034));
         }
         // 마키
         if (Marquee is { } r)
