@@ -15,8 +15,8 @@ public static partial class MeshOps
     /// </summary>
     public static List<int> BevelEdges(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments = 1)
     {
-        var result = BevelEdgesCore(m, edgeIds, distance, segments);
-        if (segments >= 2 && result.Count > 0) PostProcessRoundBevel(m, result);
+        var result = BevelEdgesCore(m, edgeIds, distance, segments, out var strips);
+        if (segments >= 2 && result.Count > 0) PostProcessRoundBevel(m, result, strips);
         return result;
     }
 
@@ -26,7 +26,7 @@ public static partial class MeshOps
     ///    — 별도의 얇은 D자 캡 면이 생겨 면이 잘게 쪼개져 보이지 않게.
     /// ② 스트립 사이/스트립과 이웃 면 사이 엣지를 30° 스무딩 각(60°)으로 소프트/하드 처리해 둥근 면이 부드럽게 음영된다.
     /// </summary>
-    private static void PostProcessRoundBevel(PolyMesh m, List<int> result)
+    private static void PostProcessRoundBevel(PolyMesh m, List<int> result, HashSet<int> strips)
     {
         var newSet = new HashSet<int>(result);
         var hes = new List<int>();
@@ -37,6 +37,7 @@ public static partial class MeshOps
             foreach (int f in result.ToArray())
             {
                 if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive) { result.Remove(f); continue; }
+                if (strips.Contains(f)) continue; // 띠는 그대로(같은 평면 이웃 면이 있어도 합치지 않음), 캡만 끝 면에 흡수
                 var nf = MeshNormals.FaceNormalUnnormalized(m, f);
                 if (nf.LengthSquared() < 1e-20f) continue;
                 nf = Vector3.Normalize(nf);
@@ -77,9 +78,11 @@ public static partial class MeshOps
         m.BumpTopology();
     }
 
-    private static List<int> BevelEdgesCore(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments)
+    private static List<int> BevelEdgesCore(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments, out HashSet<int> strips)
     {
         var result = new List<int>();
+        strips = new HashSet<int>();
+        var stripSet = strips;
         var selected = new HashSet<int>(edgeIds.Where(e => e >= 0 && e < m.EdgeCount && m.Edges[e].Alive && !m.IsBoundaryEdge(e)));
         if (selected.Count == 0) return result;
         distance = MathF.Max(distance, 1e-5f);
@@ -211,7 +214,20 @@ public static partial class MeshOps
         }
 
         // 한 끝의 프로파일: 면 f0의 오프셋 점 → (중간 점 segments-1개) → 면 f1의 오프셋 점. 정점 ID와 UV(프로파일을 따라 보간).
-        (int[] verts, Vector2[] uvs) Profile((int vert, Vector2 uv) s0, int f0, (int vert, Vector2 uv) s1, int f1)
+        // 같은 정점에서 같은 두 끝점을 쓰는 프로파일(엣지 루프처럼 Bevel 엣지 두 개가 이어지는 정점)은 한 번만 만들어 공유한다:
+        // 엣지마다 따로 만들면 이웃 면 법선이 달라 중간 점이 어긋나고, 그 사이에 얇은 틈 면(뒷면)이 생겨 Bevel 방향과 직각으로 쪼개져 보인다.
+        // 공유 프로파일의 원호는 그 정점을 지나는 모든 Bevel 엣지의 면 법선 평균으로 만든다.
+        var profNormals = new Dictionary<(int v, int lo, int hi), (Vector3 nlo, Vector3 nhi)>();
+        var profCache = new Dictionary<(int v, int lo, int hi), int[]>();
+        void Gather(int v, (int vert, Vector2 uv) s0, int f0, (int vert, Vector2 uv) s1, int f1)
+        {
+            if (segments == 1 || s0.vert == s1.vert) return;
+            bool fwd = s0.vert < s1.vert;
+            var key = (v, fwd ? s0.vert : s1.vert, fwd ? s1.vert : s0.vert);
+            var nlo = fwd ? faceNormal[f0] : faceNormal[f1]; var nhi = fwd ? faceNormal[f1] : faceNormal[f0];
+            profNormals[key] = profNormals.TryGetValue(key, out var acc) ? (acc.nlo + nlo, acc.nhi + nhi) : (nlo, nhi);
+        }
+        (int[] verts, Vector2[] uvs) Profile(int v, (int vert, Vector2 uv) s0, int f0, (int vert, Vector2 uv) s1, int f1)
         {
             var verts = new int[segments + 1]; var uvs = new Vector2[segments + 1];
             verts[0] = s0.vert; uvs[0] = s0.uv; verts[segments] = s1.vert; uvs[segments] = s1.uv;
@@ -221,13 +237,31 @@ public static partial class MeshOps
                 for (int k = 1; k < segments; k++) { verts[k] = s0.vert; uvs[k] = s0.uv; }
                 return (verts, uvs);
             }
-            var pts = ArcPoints(m.Verts[s0.vert].Position, faceNormal[f0], m.Verts[s1.vert].Position, faceNormal[f1], segments);
+            bool fwd = s0.vert < s1.vert;
+            var key = (v, fwd ? s0.vert : s1.vert, fwd ? s1.vert : s0.vert);
+            if (!profCache.TryGetValue(key, out var mids))
+            {
+                var (nlo, nhi) = profNormals.TryGetValue(key, out var acc) ? acc : (fwd ? faceNormal[f0] : faceNormal[f1], fwd ? faceNormal[f1] : faceNormal[f0]);
+                nlo = nlo.LengthSquared() > 1e-12f ? Vector3.Normalize(nlo) : nlo; nhi = nhi.LengthSquared() > 1e-12f ? Vector3.Normalize(nhi) : nhi;
+                var pts = ArcPoints(m.Verts[key.Item2].Position, nlo, m.Verts[key.Item3].Position, nhi, segments);
+                mids = new int[segments - 1];
+                for (int k = 0; k < segments - 1; k++) mids[k] = m.AddVertex(pts[k]);
+                profCache[key] = mids;
+            }
             for (int k = 1; k < segments; k++)
             {
+                verts[k] = fwd ? mids[k - 1] : mids[segments - 1 - k];
                 var uv = Vector2.Lerp(s0.uv, s1.uv, (float)k / segments);
-                verts[k] = m.AddVertex(pts[k - 1]); uvs[k] = uv; uvOf[verts[k]] = uv;
+                uvs[k] = uv; uvOf.TryAdd(verts[k], uv);
             }
             return (verts, uvs);
+        }
+
+        foreach (var (e, f0, f1, a, b) in selInfo)
+        {
+            if (!side.TryGetValue((f0, e, a), out var a0) || !side.TryGetValue((f0, e, b), out var b0) ||
+                !side.TryGetValue((f1, e, a), out var a1) || !side.TryGetValue((f1, e, b), out var b1)) continue;
+            Gather(a, a0, f0, a1, f1); Gather(b, b0, f0, b1, f1);
         }
 
         // 베벨 쿼드 띠: 엣지마다 segments개의 쿼드가 양끝 프로파일의 k번째 점끼리 잇는다
@@ -236,14 +270,14 @@ public static partial class MeshOps
             if (!side.TryGetValue((f0, e, a), out var a0) || !side.TryGetValue((f0, e, b), out var b0) ||
                 !side.TryGetValue((f1, e, a), out var a1) || !side.TryGetValue((f1, e, b), out var b1)) continue;
             if (a0.vert == a1.vert && b0.vert == b1.vert) continue;
-            var (pa, uva) = Profile(a0, f0, a1, f1);
-            var (pb, uvb) = Profile(b0, f0, b1, f1);
+            var (pa, uva) = Profile(a, a0, f0, a1, f1);
+            var (pb, uvb) = Profile(b, b0, f0, b1, f1);
             for (int k = 0; k < segments; k++)
             {
                 var quad = new List<Corner> { new(pb[k], uvb[k], Vector3.Zero), new(pa[k], uva[k], Vector3.Zero), new(pa[k + 1], uva[k + 1], Vector3.Zero), new(pb[k + 1], uvb[k + 1], Vector3.Zero) };
                 if (quad.Select(c => c.Vertex).Distinct().Count() < 3) continue;
                 int q = AddFaceWithCorners(m, quad);
-                if (q >= 0) result.Add(q);
+                if (q >= 0) { result.Add(q); stripSet.Add(q); }
             }
             for (int k = segments; k >= 1; k--) capEdges[a].Add((pa[k], pa[k - 1]));
             for (int k = 0; k < segments; k++) capEdges[b].Add((pb[k], pb[k + 1]));

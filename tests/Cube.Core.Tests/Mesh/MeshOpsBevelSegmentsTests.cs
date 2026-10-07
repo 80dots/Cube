@@ -139,4 +139,35 @@ public class MeshOpsBevelSegmentsTests
         var c3 = MeshBuilder.Cube(); Assert.Equal(4, MeshOps.BevelEdges(c3, EdgesAt(c3, 2), 0.1f, 1).Count); Assert.Equal(10, c3.AliveFaceCount); Assert.Equal(13, c3.AliveVertexCount);
         var cAll = MeshBuilder.Cube(); Assert.Equal(20, MeshOps.BevelEdges(cAll, Enumerable.Range(0, cAll.EdgeCount).ToList(), 0.1f, 1).Count); Assert.Equal(26, cAll.AliveFaceCount); Assert.Equal(24, cAll.AliveVertexCount);
     }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void Bevel_EdgeLoop_Segments_SharesProfilesWithoutSliverFaces(int s)
+    {
+        // 원기둥 옆면 가운데에 엣지 루프를 넣고 그 루프를 Bevel: 엣지 두 개가 이어지는 정점마다 프로파일을 공유해야 한다
+        var m = MeshBuilder.Cylinder(0.5f, 1f, 12, caps: true);
+        int vertical = -1;
+        for (int e = 0; e < m.EdgeCount; e++)
+        {
+            if (!m.Edges[e].Alive) continue;
+            var (a, b) = m.EdgeVertices(e);
+            var d = m.Verts[a].Position - m.Verts[b].Position;
+            if (MathF.Abs(d.Y) > 0.9f) { vertical = e; break; }
+        }
+        Assert.True(vertical >= 0);
+        var loop = MeshOps.InsertEdgeLoop(m, vertical, 0.5f);
+        Assert.Equal(12, loop.Count);
+        int facesBefore = m.AliveFaceCount, vertsBefore = m.AliveVertexCount;
+        var newFaces = MeshOps.BevelEdges(m, loop, 0.1f, s);
+        Assert.Empty(MeshValidator.Check(m));
+        Assert.Equal(2, Euler(m));
+        // 루프 엣지마다 띠 s개, 캡(틈 면) 없음
+        Assert.Equal(12 * s, newFaces.Count);
+        Assert.Equal(facesBefore + 12 * s, m.AliveFaceCount);
+        // 정점: 루프 정점 12개가 프로파일 (s+1)개로 바뀐다
+        Assert.Equal(vertsBefore - 12 + 12 * (s + 1), m.AliveVertexCount);
+        foreach (int f in newFaces) Assert.True(FaceArea(m, f) > 1e-6f, $"face {f} is a sliver");
+        for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Alive) Assert.False(m.IsBoundaryEdge(e));
+    }
 }
