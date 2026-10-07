@@ -80,7 +80,7 @@ public sealed class ViewportDisplay
     public void SetMode(ShadingMode mode)
     {
         Mode = mode;
-        _panel.HeadLight.Visible = mode != ShadingMode.Lit;
+        _panel.HeadLight.Visible = mode != ShadingMode.Lit && CubeApp.Instance.Settings.Render.Headlight;
         RefreshAll();
         ModeChanged?.Invoke();
     }

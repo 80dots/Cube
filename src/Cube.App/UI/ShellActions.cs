@@ -25,6 +25,7 @@ public partial class Shell
         Tools.Register(new InsertJointTool());
         Tools.Register(new EditPivotTool());
         Tools.Register(new MultiCutTool());
+        Tools.Register(new CreaseTool());
         Tools.Register(new TargetWeldTool());
         Tools.Register(new AppendPolygonTool());
         Tools.Register(new CutSewUvTool());
@@ -106,6 +107,7 @@ public partial class Shell
         Actions.Register("mesh.reverse", "Reverse", ReverseSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
         Actions.Register("mesh.bridge", "Bridge", BridgeSelection, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
         Actions.Register("mesh.insertLoop", "Insert Edge Loop Tool", () => Tools.SetTool("insertLoop"), isChecked: () => Tools.Current?.Id == "insertLoop");
+        Actions.Register("mesh.creaseTool", "Crease Tool", () => Tools.SetTool("creaseTool"), isChecked: () => Tools.Current?.Id == "creaseTool");
 
         // --- 파일
         Files = new IO.FileActions(doc, Settings, this, msg => HelpLine.Text = msg);
@@ -160,6 +162,8 @@ public partial class Shell
         RegisterRigActions();
         RegisterSceneActions();
         RegisterMeshActions();
+        RegisterRenderActions();
+        RegisterBridgeActions();
     }
 
     private SelectMode _lastComponentMode = SelectMode.Vertex;
@@ -371,10 +375,11 @@ public partial class Shell
         if (doc.Selection.Mode == SelectMode.Edge)
         {
             // Maya Extrude(엣지): 경계 엣지에서 쿼드를 뽑는다(내부 엣지는 비매니폴드가 되므로 제외)
-            ForEachComponentNode("Extrude Edges", SelectMode.Edge, (id, comps) => new MeshOpCommand("Extrude Edges", id, m => { var nf = MeshOps.ExtrudeEdges(m, comps.Edges); return (nf.Count > 0, SelectMode.Face, nf); }));
+            // 새 엣지(바깥쪽)만 선택해 두면 조작기로 면 Extrude처럼 바로 밀어낼 수 있다(원래 엣지는 제자리)
+            ForEachComponentNode("Extrude Edges", SelectMode.Edge, (id, comps) => new MeshOpCommand("Extrude Edges", id, m => { var nf = MeshOps.ExtrudeEdges(m, comps.Edges, out var ne); return (nf.Count > 0, SelectMode.Edge, ne); }));
             ToolContext.AxisOrientation = AxisOrientation.Normal;
             Tools.SetTool("move");
-            HelpLine.Text = "Extrude: drag the manipulator to offset the new faces (border edges only).";
+            HelpLine.Text = "Extrude: drag the manipulator to pull the new edge out (border edges only).";
             return;
         }
         var newSel = new Dictionary<NodeId, List<int>>();
@@ -604,7 +609,7 @@ public partial class Shell
             .Item("mesh.duplicateFaces").Item("mesh.extractFaces").Op("mesh.poke").Op("mesh.wedge");
 
         Menus.Build(Add("Mesh Tools"))
-            .Item("mesh.appendPolygon").Op("mesh.crease").Item("mesh.uncrease").Item("create.polygonTool").Item("mesh.insertLoop").Item("mesh.multiCut")
+            .Item("mesh.appendPolygon").Op("mesh.crease").Item("mesh.creaseTool").Item("mesh.uncrease").Item("create.polygonTool").Item("mesh.insertLoop").Item("mesh.multiCut")
             .Op("mesh.offsetEdgeLoop").Op("mesh.slideEdge").Item("mesh.targetWeld");
 
         Menus.Build(Add("Mesh Display"))
@@ -626,7 +631,18 @@ public partial class Shell
             .Item("display.grid").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
-        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor");
+        Menus.Build(Add("Render"))
+            .Item("windows.renderSettings").Separator()
+            .Item("render.ibl").Item("render.background").Item("render.nextHdri").Separator()
+            .Item("render.headlight").Item("render.shadows");
+
+        Menus.Build(Add("Bridge"))
+            .Item("bridge.blender").Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()
+            .Item("bridge.tripo").Separator()
+            .Item("bridge.reload").Item("bridge.autoReload").Item("bridge.openFolder").Separator()
+            .Item("bridge.settings");
+
+        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor").Item("windows.renderSettings");
         Menus.Build(Add("Help")).Item("help.about");
     }
 }

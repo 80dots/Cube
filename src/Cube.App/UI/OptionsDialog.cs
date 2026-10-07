@@ -89,6 +89,8 @@ public partial class OptionsDialog : ConfirmationDialog
         Confirmed += () => { Store(); _onApply(); };
     }
 
+    public override void _Ready() => ResizeGrip.AttachToWindow(this);
+
     private void Store()
     {
         foreach (var (f, c) in _controls)

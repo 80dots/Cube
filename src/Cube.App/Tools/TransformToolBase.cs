@@ -26,6 +26,9 @@ public abstract class TransformToolBase : SelectTool
     protected GizmoPart DragPart { get; private set; }
     protected NVec2 PressPx;
     protected Ray PressRay;
+    /// <summary>Shift 정밀 조정: 실제 커서 대신 느리게 따라오는 가상 포인터를 드래그 수학에 넘긴다.</summary>
+    private NVec2 _virtualPx, _lastPx;
+    public const float PrecisionFactor = 0.1f;
 
     protected readonly List<(SceneNode node, Transform3 initial, Matrix4x4 parentWorld, Matrix4x4 parentInv)> ObjectTargets = new();
     protected readonly List<(NodeId node, int[] verts, NVec3[] initial, Matrix4x4 world, Matrix4x4 worldInv)> ComponentTargets = new();
@@ -143,7 +146,7 @@ public abstract class TransformToolBase : SelectTool
                         var tmp = new List<int>();
                         if (sel.Mode == SelectMode.Vertex) foreach (int v in sel.GetComponents(id).Verts) { m.GetVertexFaces(v, tmp); faces.UnionWith(tmp); }
                         if (sel.Mode == SelectMode.Edge) foreach (int e in sel.GetComponents(id).Edges) { var (f0, f1) = m.EdgeFaces(e); if (f0 >= 0) faces.Add(f0); if (f1 >= 0) faces.Add(f1); }
-                        foreach (int f in faces) normal += NVec3.Normalize(NVec3.TransformNormal(m.Faces[f].Normal, w));
+                        foreach (int f in faces) normal += FaceNormalOrNeighbors(m, f, w);
                     }
                     if (normal.LengthSquared() > 1e-8f) return DragMath.BasisFromNormal(normal);
                     var node2 = doc.Find(sel.NodesWithComponents(sel.Mode).FirstOrDefault());
@@ -152,6 +155,26 @@ public abstract class TransformToolBase : SelectTool
                 }
         }
         return (NVec3.UnitX, NVec3.UnitY, NVec3.UnitZ);
+    }
+
+    /// <summary>면의 월드 법선. 면적이 0인 퇴화 면(엣지 Extrude 직후의 쿼드)은 트윈 면들의 법선 합으로 대신한다.</summary>
+    private static NVec3 FaceNormalOrNeighbors(Core.Mesh.PolyMesh m, int f, Matrix4x4 w)
+    {
+        if (Core.Mesh.MeshNormals.FaceNormalUnnormalized(m, f).LengthSquared() > 1e-14f)
+            return NVec3.Normalize(NVec3.TransformNormal(m.Faces[f].Normal, w));
+        var sum = NVec3.Zero;
+        int start = m.Faces[f].HalfEdge, he = start;
+        do
+        {
+            int t = m.Hes[he].Twin;
+            if (t >= 0)
+            {
+                int nf = m.Hes[t].Face;
+                if (Core.Mesh.MeshNormals.FaceNormalUnnormalized(m, nf).LengthSquared() > 1e-14f) sum += NVec3.Normalize(NVec3.TransformNormal(m.Faces[nf].Normal, w));
+            }
+            he = m.Hes[he].Next;
+        } while (he != start);
+        return sum;
     }
 
     public static HashSet<int> SelectedVertices(Core.Mesh.PolyMesh mesh, ComponentSet comps, SelectMode mode)
@@ -184,7 +207,13 @@ public abstract class TransformToolBase : SelectTool
     protected override bool OnHoverMotion(InputEventMouseMotion mm)
     {
         var px = new NVec2(mm.Position.X, mm.Position.Y);
-        if (Dragging) { UpdateDrag(px, Picker.Projection()); return true; }
+        if (Dragging)
+        {
+            var d = px - _lastPx; _lastPx = px;
+            _virtualPx += mm.ShiftPressed ? d * PrecisionFactor : d;
+            UpdateDrag(_virtualPx, Picker.Projection());
+            return true;
+        }
         if (Gizmo.Visible) Gizmo.SetHover(Gizmo.HitTest(px, Picker.Projection()));
         return false;
     }
@@ -209,6 +238,7 @@ public abstract class TransformToolBase : SelectTool
     protected virtual void BeginDrag(GizmoPart part, NVec2 px, CameraProjection proj)
     {
         Dragging = true; DragPart = part; PressPx = px; PressRay = proj.Unproject(px);
+        _virtualPx = px; _lastPx = px;
         Gizmo.SetActive(part);
         PivotWorld = Gizmo.Pivot;
         ObjectTargets.Clear(); ComponentTargets.Clear();

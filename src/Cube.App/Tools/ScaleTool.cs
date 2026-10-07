@@ -14,6 +14,8 @@ public sealed class ScaleTool : TransformToolBase
     public override string Label => "Scale";
     public override string HelpText => "Scale Tool: drag an axis handle to scale along it, the center to scale uniformly.";
 
+    /// <summary>마우스 이동 대비 스케일 변화량(사용자 요청: 기존의 40%).</summary>
+    public const float Sensitivity = 0.4f;
     private NVec2 _centerPx;
     private float _startT;
     private float _startDist;
@@ -36,7 +38,7 @@ public sealed class ScaleTool : TransformToolBase
         NVec3 scale;
         if (DragPart == GizmoPart.Center)
         {
-            float ratio = MathF.Max(NVec2.Distance(_centerPx, px), 1f) / _startDist;
+            float ratio = 1f + (MathF.Max(NVec2.Distance(_centerPx, px), 1f) / _startDist - 1f) * Sensitivity;
             scale = new NVec3(ratio);
         }
         else
@@ -52,6 +54,7 @@ public sealed class ScaleTool : TransformToolBase
                 if (!DragMath.ClosestParamOnAxis(PivotWorld, Gizmo.AxisOf(DragPart), proj.Unproject(px), out float t)) return;
                 ratio = t / _startT;
             }
+            ratio = 1f + (ratio - 1f) * Sensitivity;
             if (MathF.Abs(ratio) < 1e-3f) ratio = 1e-3f;
             scale = DragPart switch { GizmoPart.X => new NVec3(ratio, 1, 1), GizmoPart.Y => new NVec3(1, ratio, 1), _ => new NVec3(1, 1, ratio) };
         }

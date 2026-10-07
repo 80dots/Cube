@@ -49,7 +49,7 @@ public partial class LightView : Node3D
         var col = new Color(l.Color.X, l.Color.Y, l.Color.Z);
         _light!.LightColor = col;
         _light.LightEnergy = l.Intensity;
-        _light.ShadowEnabled = false;
+        _light.ShadowEnabled = CubeApp.Instance.Settings.Render.Shadows;
         if (_light is OmniLight3D o) o.OmniRange = l.Range;
         if (_light is SpotLight3D s) { s.SpotRange = l.Range; s.SpotAngle = l.SpotAngle * 0.5f; }
         BuildIcon(l);

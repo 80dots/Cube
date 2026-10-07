@@ -113,7 +113,7 @@ public partial class Shell
             () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null));
         RegisterOptionPair("mesh.merge", "Merge Vertices", new OptionSpec("Merge Vertices Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Threshold", 0, 1000, 0.0001) }, "Merge"), MergeSelectedVertices,
             () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any());
-        RegisterOptionPair("mesh.bevel", "Bevel", new OptionSpec("Bevel Options", v => v.Set("distance", 0.1f), new[] { OptionField.F("distance", "Distance", 0.0001, 1000, 0.001) }, "Bevel"), BevelSelection,
+        RegisterOptionPair("mesh.bevel", "Bevel", new OptionSpec("Bevel Options", v => { v.Set("distance", 0.1f); v.Set("segments", 1); }, new[] { OptionField.F("distance", "Distance", 0.0001, 1000, 0.001), OptionField.I("segments", "Segments", 1, 16, "1 = chamfer, 2+ = rounded profile with that many strips") }, "Bevel"), BevelSelection,
             () => sel.Mode is SelectMode.Edge or SelectMode.Face && sel.NodesWithComponents(sel.Mode).Any());
         RegisterOptionPair("mesh.quadrangulate", "Quadrangulate", new OptionSpec("Quadrangulate Options", v => v.Set("angle", 30f), new[] { OptionField.F("angle", "Angle threshold (deg)", 0, 180, 1) }), () =>
         {
@@ -258,16 +258,17 @@ public partial class Shell
 
     private void BevelSelection()
     {
-        float dist = Options("mesh.bevel").Float("distance");
+        var o = Options("mesh.bevel");
+        float dist = o.Float("distance"); int segments = Math.Max(1, o.Int("segments", 1));
         var mode = Document.Selection.Mode;
         ForEachComponentNode("Bevel", mode, (id, comps) =>
         {
             var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
             var edges = mode == SelectMode.Edge ? comps.Edges.ToArray() : SelectionOps.Convert(mesh, comps, mode, SelectMode.Edge).ToArray();
-            return ParamOp("Bevel", id, HistoryParam.F("Distance", dist, 0.0001f, 1000f, 0.001f),
-                (m, p) => { var faces = MeshOps.BevelEdges(m, edges, p.Float("Distance")); return (faces.Count > 0, SelectMode.Face, faces); });
+            return new MeshOpCommand("Bevel", id, new HistoryParams(HistoryParam.F("Distance", dist, 0.0001f, 1000f, 0.001f), HistoryParam.I("Segments", segments, 1, 16)),
+                (m, p) => { var faces = MeshOps.BevelEdges(m, edges, p.Float("Distance"), p.Int("Segments")); return (faces.Count > 0, SelectMode.Face, faces); });
         });
-        HelpLine.Text = $"Bevel: distance {dist:0.###}.";
+        HelpLine.Text = $"Bevel: distance {dist:0.###}, {segments} segment(s).";
     }
 
     private void AddDivisionsSelection()

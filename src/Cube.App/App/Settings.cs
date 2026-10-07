@@ -5,6 +5,38 @@ using Godot;
 namespace Cube.App;
 
 /// <summary>user://settings.json 에 저장되는 사용자 설정.</summary>
+/// <summary>뷰포트 렌더 설정(Render → Render Settings). 모든 패널의 Environment에 적용된다.</summary>
+public sealed class RenderSettings
+{
+    [JsonPropertyName("iblEnabled")] public bool IblEnabled { get; set; } = true;
+    /// <summary>내장 HDRI id(HdriLibrary.BuiltIn) 또는 "custom".</summary>
+    [JsonPropertyName("hdri")] public string Hdri { get; set; } = "studio_small_09";
+    [JsonPropertyName("hdriPath")] public string? HdriPath { get; set; }
+    [JsonPropertyName("iblIntensity")] public float IblIntensity { get; set; } = 0.6f;
+    [JsonPropertyName("iblRotation")] public float IblRotation { get; set; }
+    [JsonPropertyName("showBackground")] public bool ShowBackground { get; set; }
+    /// <summary>0 Linear, 1 Reinhard, 2 Filmic, 3 ACES, 4 AgX.</summary>
+    [JsonPropertyName("tonemap")] public int Tonemap { get; set; }
+    [JsonPropertyName("exposure")] public float Exposure { get; set; } = 1f;
+    [JsonPropertyName("headlight")] public bool Headlight { get; set; } = true;
+    [JsonPropertyName("shadows")] public bool Shadows { get; set; }
+    [JsonPropertyName("ssao")] public bool Ssao { get; set; }
+    /// <summary>0 off, 1 2x, 2 4x, 3 8x.</summary>
+    [JsonPropertyName("msaa")] public int Msaa { get; set; } = 2;
+    [JsonPropertyName("fxaa")] public bool Fxaa { get; set; }
+}
+
+/// <summary>Bridge(외부 앱 연동) 설정: 실행 파일 경로, Tripo3D API 키, 자동 다시 읽기.</summary>
+public sealed class BridgeSettings
+{
+    [JsonPropertyName("blenderPath")] public string? BlenderPath { get; set; }
+    [JsonPropertyName("rizomUvPath")] public string? RizomUvPath { get; set; }
+    [JsonPropertyName("marmosetPath")] public string? MarmosetPath { get; set; }
+    [JsonPropertyName("cascadeurPath")] public string? CascadeurPath { get; set; }
+    [JsonPropertyName("tripoApiKey")] public string? TripoApiKey { get; set; }
+    [JsonPropertyName("autoReload")] public bool AutoReload { get; set; } = true;
+}
+
 public sealed class Settings
 {
     public const string Path = "user://settings.json";
@@ -40,6 +72,10 @@ public sealed class Settings
     [JsonPropertyName("materialThumbnails")] public bool MaterialThumbnails { get; set; }
     [JsonPropertyName("lastExportDir")] public string? LastExportDir { get; set; }
     [JsonPropertyName("lastSceneDir")] public string? LastSceneDir { get; set; }
+    /// <summary>Render → Render Settings(IBL/톤 매핑/AA).</summary>
+    [JsonPropertyName("render")] public RenderSettings Render { get; set; } = new();
+    /// <summary>Bridge 메뉴(외부 앱 연동) 설정.</summary>
+    [JsonPropertyName("bridge")] public BridgeSettings Bridge { get; set; } = new();
 
     public static Settings Load()
     {

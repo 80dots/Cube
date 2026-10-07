@@ -14,6 +14,7 @@ public partial class ViewportHud : VBoxContainer
     private ViewCube _cube = null!;
     private Button _proj = null!;
     private Button _through = null!;
+    private Button _grid = null!, _jointAxes = null!;
     private readonly Dictionary<ShadingMode, Button> _modeButtons = new();
 
     public void Setup(ViewportPanel panel)
@@ -62,6 +63,13 @@ public partial class ViewportHud : VBoxContainer
             foreach (var p in UI.Shell.Instance.Layout.Panels) p.Hud.Refresh();
         };
         row.AddChild(_through);
+        row.AddChild(new VSeparator());
+        _grid = Icons.IconButton("view_grid", "Grid (Display → Grid)", icon, toggle: true);
+        _grid.Pressed += () => { UI.Shell.Instance.Actions.Invoke("display.grid"); RefreshAllHuds(); };
+        row.AddChild(_grid);
+        _jointAxes = Icons.IconButton("view_joint_axes", "Joint Local Rotation Axes", icon, toggle: true);
+        _jointAxes.Pressed += () => { UI.Shell.Instance.Actions.Invoke("display.jointAxes"); RefreshAllHuds(); };
+        row.AddChild(_jointAxes);
         AddChild(row);
 
         panel.Display.ModeChanged += Refresh;
@@ -77,8 +85,12 @@ public partial class ViewportHud : VBoxContainer
         _proj.Icon = Icons.Get(ortho ? "ortho" : "persp", (int)(18 * CubeApp.Instance.UiScale));
         _proj.TooltipText = ortho ? "Orthographic (click for Perspective)" : "Perspective (click for Orthographic)";
         _through.SetPressedNoSignal(CubeApp.Instance.Settings.MarqueeSelectThrough);
+        _grid.SetPressedNoSignal(_panel.Display.ShowGrid);
+        _jointAxes.SetPressedNoSignal(CubeApp.Instance.Settings.ShowJointAxes);
         _cube.QueueRedraw();
     }
+
+    private static void RefreshAllHuds() { foreach (var p in UI.Shell.Instance.Layout.Panels) p.Hud.Refresh(); }
 }
 
 /// <summary>카메라 방향을 따라 도는 뷰 큐브. 면을 클릭하면 해당 정면 뷰로 전환한다.</summary>

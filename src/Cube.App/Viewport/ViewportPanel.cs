@@ -74,7 +74,7 @@ public partial class ViewportPanel : SubViewportContainer
         _background.SetAnchorsPreset(LayoutPreset.FullRect);
         Viewport.AddChild(_background);
 
-        var env = new Godot.Environment
+        _env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Canvas,
             AmbientLightSource = Godot.Environment.AmbientSource.Color,
@@ -82,7 +82,7 @@ public partial class ViewportPanel : SubViewportContainer
             AmbientLightEnergy = 0.18f,
             TonemapMode = Godot.Environment.ToneMapper.Linear,
         };
-        Viewport.AddChild(new WorldEnvironment { Name = "Env", Environment = env });
+        Viewport.AddChild(new WorldEnvironment { Name = "Env", Environment = _env });
 
         Camera = new Camera3D { Name = "Camera", Fov = 45, Near = 0.05f, Far = 10000f, Current = true };
         Viewport.AddChild(Camera);
@@ -118,6 +118,44 @@ public partial class ViewportPanel : SubViewportContainer
         Hud.Setup(this);
 
         if (_doc != null) { Scene.Bind(_doc); Display.Bind(_doc); }
+        ApplyRenderSettings();
+    }
+
+    private Godot.Environment _env = null!;
+    private Sky? _sky;
+    private PanoramaSkyMaterial? _skyMat;
+
+    /// <summary>Settings.Render(IBL HDRI/세기/회전/배경, 톤 매핑/노출, SSAO, MSAA/FXAA, 헤드라이트/그림자)를 이 패널에 적용한다.</summary>
+    public void ApplyRenderSettings()
+    {
+        var r = CubeApp.Instance.Settings.Render;
+        var tex = r.IblEnabled ? HdriLibrary.Load(r) : null;
+        bool ibl = tex != null;
+        if (ibl)
+        {
+            _skyMat ??= new PanoramaSkyMaterial { Filter = true };
+            _skyMat.Panorama = tex;
+            _sky ??= new Sky { SkyMaterial = _skyMat, RadianceSize = Sky.RadianceSizeEnum.Size256, ProcessMode = Sky.ProcessModeEnum.Realtime };
+            _env.Sky = _sky;
+        }
+        else _env.Sky = null;
+        _env.AmbientLightSource = ibl ? Godot.Environment.AmbientSource.Sky : Godot.Environment.AmbientSource.Color;
+        _env.AmbientLightSkyContribution = 1f;
+        _env.AmbientLightEnergy = ibl ? r.IblIntensity : 0.18f;
+        _env.ReflectedLightSource = ibl ? Godot.Environment.ReflectionSource.Sky : Godot.Environment.ReflectionSource.Disabled;
+        bool showSky = ibl && r.ShowBackground;
+        _env.BackgroundMode = showSky ? Godot.Environment.BGMode.Sky : Godot.Environment.BGMode.Canvas;
+        _env.BackgroundEnergyMultiplier = ibl ? MathF.Max(r.IblIntensity, 0.01f) : 1f;
+        _env.SkyRotation = new Vector3(0, Mathf.DegToRad(r.IblRotation), 0);
+        _background.Visible = !showSky;
+        _env.TonemapMode = (Godot.Environment.ToneMapper)Math.Clamp(r.Tonemap, 0, 4);
+        _env.TonemapExposure = r.Exposure;
+        _env.SsaoEnabled = r.Ssao;
+        Viewport.Msaa3D = r.Msaa switch { 0 => Godot.Viewport.Msaa.Disabled, 1 => Godot.Viewport.Msaa.Msaa2X, 2 => Godot.Viewport.Msaa.Msaa4X, _ => Godot.Viewport.Msaa.Msaa8X };
+        Viewport.ScreenSpaceAA = r.Fxaa ? Godot.Viewport.ScreenSpaceAAEnum.Fxaa : Godot.Viewport.ScreenSpaceAAEnum.Disabled;
+        HeadLight.Visible = r.Headlight && Display.Mode != ShadingMode.Lit;
+        HeadLight.ShadowEnabled = r.Shadows;
+        foreach (var lv in Scene.LightViews.Values) lv.Refresh();
     }
 
     /// <summary>front/side/back/left 같은 측면 프리셋 뷰에서는 그리드를 뷰 평면에 세운다(Maya와 동일). 텀블하면 바닥으로 돌아간다.</summary>

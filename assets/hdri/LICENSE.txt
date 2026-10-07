@@ -1,0 +1,5 @@
+The .hdrbin files in this folder are Radiance RGBE (.hdr) images from Poly Haven (https://polyhaven.com/hdris),
+1k resolution, renamed to .hdrbin so the Godot importer skips them (they are decoded at runtime by Cube.Core.IO.RgbeImage).
+License: CC0 1.0 Universal (public domain) - https://polyhaven.com/license
+Files: studio_small_03, studio_small_09, brown_photostudio_02, photo_studio_01, kloppenheim_06, venice_sunset,
+       spruit_sunrise, lebombo, qwantani_dusk_2, autumn_field_puresky

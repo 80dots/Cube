@@ -15,8 +15,8 @@ public partial class FloatingPanel : PanelContainer
     public VBoxContainer Content { get; private set; } = null!;
     public Vector2 MinPanelSize = new(300, 200);
     private Label _title = null!;
-    private Control _grip = null!;
-    private bool _dragging, _resizing;
+    private ResizeGrip _grip = null!;
+    private bool _dragging;
     private Vector2 _dragOffset;
 
     public override void _Ready()
@@ -31,11 +31,12 @@ public partial class FloatingPanel : PanelContainer
         outer.AddThemeConstantOverride("separation", 0);
         outer.SetAnchorsPreset(LayoutPreset.FullRect);
         hostCtl.AddChild(outer);
-        _grip = new Control { MouseFilter = MouseFilterEnum.Stop, MouseDefaultCursorShape = CursorShape.Fdiagsize, TooltipText = "Resize" };
+        _grip = new ResizeGrip();
+        hostCtl.AddChild(_grip);
         _grip.SetAnchorsPreset(LayoutPreset.BottomRight);
         _grip.OffsetLeft = -18 * s; _grip.OffsetTop = -18 * s; _grip.OffsetRight = 0; _grip.OffsetBottom = 0;
-        _grip.GuiInput += OnGripInput;
-        hostCtl.AddChild(_grip);
+        _grip.Began += MoveToFront;
+        _grip.Dragged += d => Size = new Vector2(Mathf.Max(MinPanelSize.X, Size.X + d.X), Mathf.Max(MinPanelSize.Y, Size.Y + d.Y));
         var bar = new PanelContainer { CustomMinimumSize = new Vector2(0, 26 * s), MouseFilter = MouseFilterEnum.Stop };
         bar.AddThemeStyleboxOverride("panel", new StyleBoxFlat { BgColor = MayaTheme.PanelDark, ContentMarginLeft = 8 * s });
         var barBox = new HBoxContainer();
@@ -69,41 +70,10 @@ public partial class FloatingPanel : PanelContainer
         }
     }
 
-    private void OnGripInput(InputEvent e)
-    {
-        float s = CubeApp.Instance.UiScale;
-        switch (e)
-        {
-            case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
-                if (mb.Pressed) { MoveToFront(); _resizing = true; }
-                else _resizing = false;
-                _grip.AcceptEvent();
-                break;
-            case InputEventMouseMotion mm when _resizing:
-                {
-                    // 주입된 입력(DebugDriver)에서도 맞도록 OS 커서 대신 이벤트 좌표를 쓴다
-                    var local = mm.GlobalPosition - GlobalPosition;
-                    Size = new Vector2(Mathf.Max(MinPanelSize.X, local.X + 8 * s), Mathf.Max(MinPanelSize.Y, local.Y + 8 * s));
-                    _grip.AcceptEvent();
-                    break;
-                }
-        }
-    }
-
     public override void _GuiInput(InputEvent e)
     {
         if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true }) MoveToFront();
     }
-
-    public override void _Draw()
-    {
-        float s = CubeApp.Instance.UiScale;
-        // 우하단 크기 조절 핸들
-        var c = Size - new Vector2(3 * s, 3 * s);
-        for (int i = 1; i <= 3; i++) DrawLine(c - new Vector2(i * 4 * s, 0), c - new Vector2(0, i * 4 * s), MayaTheme.TextDim, 1 * s);
-    }
-
-    public override void _Notification(int what) { if (what == NotificationResized) QueueRedraw(); }
 
     /// <summary>처음이면 호스트 가운데에, 이후에는 마지막 위치에 연다.</summary>
     public void Open(Vector2? size = null)

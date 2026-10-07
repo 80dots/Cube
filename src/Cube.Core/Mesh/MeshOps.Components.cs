@@ -394,9 +394,13 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Extrude edges
 
     /// <summary>Extrude(엣지): 경계 엣지마다 새 정점 쌍을 만들어 쿼드를 붙인다(이동 0, 이어진 엣지는 정점 공유). 반환값은 새 면들.</summary>
-    public static List<int> ExtrudeEdges(PolyMesh m, IEnumerable<int> edgeIds)
+    public static List<int> ExtrudeEdges(PolyMesh m, IEnumerable<int> edgeIds) => ExtrudeEdges(m, edgeIds, out _);
+
+    /// <summary>Extrude(엣지) + 새로 생긴 바깥쪽 엣지(a2-b2) 목록. 조작기로 바로 밀어낼 수 있도록 호출자가 이 엣지들을 선택한다.</summary>
+    public static List<int> ExtrudeEdges(PolyMesh m, IEnumerable<int> edgeIds, out List<int> newEdges)
     {
         var result = new List<int>();
+        newEdges = new List<int>();
         var edges = AliveEdges(m, edgeIds).Where(e => m.IsBoundaryEdge(e)).ToList();
         if (edges.Count == 0) return result;
         var dup = new Dictionary<int, int>();
@@ -410,7 +414,7 @@ public static partial class MeshOps
             int a2 = D(a), b2 = D(b);
             var flags = GetFlags(m, a, b);
             int q = AddFaceWithCorners(m, new[] { new Corner(b, uvB, h.Normal), new Corner(a, uvA, h.Normal), new Corner(a2, uvA, h.Normal), new Corner(b2, uvB, h.Normal) }, m.Faces[h.Face].Material);
-            if (q >= 0) { result.Add(q); SetFlags(m, a2, b2, flags); }
+            if (q >= 0) { result.Add(q); SetFlags(m, a2, b2, flags); int ne = m.FindEdge(a2, b2); if (ne >= 0) newEdges.Add(ne); }
         }
         m.BumpTopology();
         return result;

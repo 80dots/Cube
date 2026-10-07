@@ -112,6 +112,8 @@ public partial class Shell : Control
 
         _rightSplit.SplitOffsets = new[] { (int)(10000 * s) };
         _mainSplit.SplitOffsets = new[] { (int)(240 * s) };
+        AttachDockGrip(OutlinerBody, leftSide: false, dx => _mainSplit.SplitOffsets = new[] { _mainSplit.SplitOffsets[0] + (int)dx });
+        AttachDockGrip(PropertiesBody, leftSide: true, dx => _rightSplit.SplitOffsets = new[] { _rightSplit.SplitOffsets[0] + (int)dx });
 
         Layout.Bind(Document);
         Outliner.Bind(Document);
@@ -285,7 +287,7 @@ public partial class Shell : Control
             new[] { ("create.cube", "Cube", "shelf_cube"), ("create.sphere", "Sphere", "shelf_sphere"), ("create.cylinder", "Cylinder", "shelf_cylinder"), ("create.cone", "Cone", "shelf_cone"), ("create.plane", "Plane", "shelf_plane"), ("create.torus", "Torus", "shelf_torus") },
             new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.mergeApply", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevelApply", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") },
             new[] { ("mesh.addDivisionsApply", "Add Divisions", "shelf_adddiv"), ("mesh.connect", "Connect", "shelf_connect"), ("mesh.pokeApply", "Poke", "shelf_poke"), ("mesh.fillHole", "Fill Hole", "shelf_fillhole"), ("mesh.mirrorApply", "Mirror", "shelf_mirror") },
-            new[] { ("mesh.multiCut", "Multi-Cut", "shelf_multicut"), ("mesh.targetWeld", "Target Weld", "shelf_targetweld"), ("mesh.insertLoop", "Insert Loop", "uv_cut") });
+            new[] { ("mesh.multiCut", "Multi-Cut", "shelf_multicut"), ("mesh.targetWeld", "Target Weld", "shelf_targetweld"), ("mesh.insertLoop", "Insert Loop", "uv_cut"), ("mesh.creaseTool", "Crease", "shelf_crease") });
         Fill(UvShelf,
             new[] { ("windows.uvEditor", "UV Editor", "mode_uv") },
             new[] { ("uv.planarBest", "Planar", "uv_planar"), ("uv.planarX", "Planar X", "uv_planar_x"), ("uv.planarY", "Planar Y", "uv_planar_y"), ("uv.planarZ", "Planar Z", "uv_planar_z"), ("uv.cylindrical", "Cylindrical", "uv_cylindrical"), ("uv.spherical", "Spherical", "uv_spherical") },
@@ -376,6 +378,14 @@ public partial class Shell : Control
         if (expandH) { inner.SizeFlagsHorizontal = SizeFlags.ExpandFill; pc.SizeFlagsHorizontal = SizeFlags.ExpandFill; }
         pc.AddChild(inner);
         return pc;
+    }
+
+    /// <summary>도크 본문 모서리에 크기 조절 그립을 겹친다(PanelContainer는 Shrink 플래그 자식을 모서리에 둔다). 드래그 가로 델타를 스플릿 오프셋에 더한다.</summary>
+    private static void AttachDockGrip(PanelContainer body, bool leftSide, Action<float> dx)
+    {
+        var grip = new ResizeGrip { LeftSide = leftSide, Name = "Grip" };
+        body.AddChild(grip);
+        grip.Dragged += d => dx(d.X);
     }
 
     private static (VBoxContainer dock, PanelContainer body) MakeDock(string title, float width)
