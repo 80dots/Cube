@@ -69,6 +69,19 @@ public sealed class Picker
         return hit;
     }
 
+    /// <summary>정점 항목을 그 정점의 모든 UV 점 항목으로 바꾼다(뷰포트 UV 모드 선택).</summary>
+    public List<SelItem> ExpandUv(IEnumerable<SelItem> vertexItems)
+    {
+        var result = new List<SelItem>();
+        foreach (var it in vertexItems)
+        {
+            var mv = _panel.Scene.GetMeshView(it.Node); if (mv == null) continue;
+            var topo = mv.UvTopo;
+            for (int p = 0; p < topo.Points.Count; p++) if (topo.Points[p].Vertex == it.Component) result.Add(new SelItem(it.Node, p));
+        }
+        return result;
+    }
+
     public PickHit? Pick(GVec2 px, SelectMode mode, bool cameraBased)
     {
         var p = new NVec2(px.X, px.Y);
@@ -76,7 +89,7 @@ public sealed class Picker
         if (mode == SelectMode.Object && PickJoint(p) is { } jh) return jh;
         return mode switch
         {
-            SelectMode.Vertex => RayPicker.PickVertex(targets, Projection(), p, cameraBased, RayPicker.VertexThresholdPx * Scale),
+            SelectMode.Vertex or SelectMode.Uv => RayPicker.PickVertex(targets, Projection(), p, cameraBased, RayPicker.VertexThresholdPx * Scale),
             SelectMode.Edge => RayPicker.PickEdge(targets, Projection(), p, cameraBased, RayPicker.EdgeThresholdPx * Scale),
             _ => RayPicker.Pick(targets, Projection(), p, mode, cameraBased),
         };
@@ -86,7 +99,8 @@ public sealed class Picker
     {
         var min = new NVec2(rect.Position.X, rect.Position.Y);
         var max = new NVec2(rect.End.X, rect.End.Y);
-        var items = RayPicker.Marquee(Targets(), Projection(), min, max, mode, cameraBased);
+        var items = RayPicker.Marquee(Targets(), Projection(), min, max, mode == SelectMode.Uv ? SelectMode.Vertex : mode, cameraBased);
+        if (mode == SelectMode.Uv) items = ExpandUv(items);
         if (mode == SelectMode.Object)
         {
             var proj = Projection();

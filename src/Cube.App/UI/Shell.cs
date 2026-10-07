@@ -227,6 +227,9 @@ public partial class Shell : Control
         var spacer = new Control { SizeFlagsVertical = SizeFlags.ExpandFill, MouseFilter = MouseFilterEnum.Ignore };
         ToolBox.AddChild(spacer);
         ToolBox.AddChild(new HSeparator());
+        var prefs = Icons.IconButton("preferences", "Preferences (Ctrl+,)", icon);
+        prefs.Pressed += () => Actions.Invoke("edit.preferences");
+        ToolBox.AddChild(prefs);
         _undoBtn = Icons.IconButton("undo", "Undo (Ctrl+Z)", icon);
         _undoBtn.Pressed += () => Actions.Invoke("edit.undo");
         _redoBtn = Icons.IconButton("redo", "Redo (Ctrl+Y)", icon);

@@ -3,12 +3,14 @@ using Godot;
 
 namespace Cube.App.UI.UvEditor;
 
-/// <summary>UV 편집기 창(임베디드 서브윈도우). 툴바(모드/투영/편집) + UvCanvas.</summary>
+/// <summary>UV 편집기 창(임베디드 서브윈도우). 아이콘 툴바(모드/투영/편집/배경) + UvCanvas.</summary>
 public partial class UvEditorWindow : Window
 {
     private Shell _shell = null!;
     public UvCanvas Canvas { get; private set; } = null!;
-    private readonly Dictionary<SelectMode, Button> _modeButtons = new();
+    private readonly Dictionary<string, Button> _modeButtons = new();
+    private readonly List<(Button b, string action)> _actionButtons = new();
+    private OptionButton _background = null!;
 
     public void Setup(Shell shell)
     {
@@ -27,22 +29,30 @@ public partial class UvEditorWindow : Window
         root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         AddChild(root);
 
+        Canvas = new UvCanvas();
+        Canvas.Setup(shell);
+
+        int icon = (int)(18 * s);
         var bar = new HBoxContainer();
         bar.AddThemeConstantOverride("separation", (int)(2 * s));
-        foreach (var (mode, label, action) in new[] { (SelectMode.Object, "Obj", "mode.object"), (SelectMode.Uv, "UV", "mode.uv"), (SelectMode.Edge, "Edge", "mode.edge"), (SelectMode.Face, "Face", "mode.face") })
+        // 모드: Obj / UV / Edge / Face / Island
+        foreach (var (key, iconName, action, tip) in new[] {
+            ("object", "mode_object", "mode.object", "Object Mode"), ("uv", "mode_uv", "mode.uv", "UV Mode (F12)"),
+            ("edge", "mode_edge", "mode.edge", "Edge Mode (F10)"), ("face", "mode_face", "mode.face", "Face Mode (F11)"),
+            ("island", "mode_island", "mode.uvIsland", "UV Island Mode (select whole islands separated by seams)") })
         {
-            var b = new Button { Text = label, ToggleMode = true, FocusMode = Control.FocusModeEnum.None, TooltipText = shell.Actions.Get(action)?.Label };
+            var b = Icons.IconButton(iconName, tip, icon, toggle: true);
             string a = action; b.Pressed += () => shell.Actions.Invoke(a);
-            _modeButtons[mode] = b; bar.AddChild(b);
+            _modeButtons[key] = b; bar.AddChild(b);
         }
         bar.AddChild(new VSeparator());
-        foreach (var (action, label) in new[] { ("uv.planarBest", "Planar"), ("uv.planarX", "X"), ("uv.planarY", "Y"), ("uv.planarZ", "Z"), ("uv.cylindrical", "Cylindrical"), ("uv.spherical", "Spherical") })
-            bar.AddChild(ActionButton(action, label));
+        foreach (var (action, iconName) in new[] { ("uv.planarBest", "uv_planar"), ("uv.planarX", "uv_planar_x"), ("uv.planarY", "uv_planar_y"), ("uv.planarZ", "uv_planar_z"), ("uv.cylindrical", "uv_cylindrical"), ("uv.spherical", "uv_spherical") })
+            bar.AddChild(ActionButton(action, iconName, icon));
         bar.AddChild(new VSeparator());
-        foreach (var (action, label) in new[] { ("uv.unfold", "Unfold"), ("uv.layout", "Layout"), ("uv.cut", "Cut"), ("uv.sew", "Sew"), ("uv.flipU", "Flip U"), ("uv.flipV", "Flip V") })
-            bar.AddChild(ActionButton(action, label));
+        foreach (var (action, iconName) in new[] { ("uv.unfold", "uv_unfold"), ("uv.layout", "uv_layout"), ("uv.cut", "uv_cut"), ("uv.sew", "uv_sew"), ("uv.flipU", "uv_flip_u"), ("uv.flipV", "uv_flip_v") })
+            bar.AddChild(ActionButton(action, iconName, icon));
         bar.AddChild(new VSeparator());
-        var frame = new Button { Text = "Frame", FocusMode = Control.FocusModeEnum.None, TooltipText = "Frame selection (F) / all (A)" };
+        var frame = Icons.IconButton("uv_frame", "Frame selection (F) / all (A)", icon);
         frame.Pressed += () => Canvas.FrameSelected();
         bar.AddChild(frame);
         bar.AddChild(new VSeparator());
@@ -52,19 +62,14 @@ public partial class UvEditorWindow : Window
         _background.ItemSelected += i => { Canvas.Background = (UvBackground)(int)i; };
         bar.AddChild(_background);
         root.AddChild(bar);
-
-        Canvas = new UvCanvas();
-        Canvas.Setup(shell);
         root.AddChild(Canvas);
 
         shell.Document.Selection.ModeChanged += RefreshModes;
+        Canvas.IslandModeChanged += RefreshModes;
         shell.Document.Undo.Changed += RefreshEnabled;
         shell.Document.Selection.Changed += RefreshEnabled;
         RefreshModes(); RefreshEnabled();
     }
-
-    private readonly List<(Button b, string action)> _actionButtons = new();
-    private OptionButton _background = null!;
 
     /// <summary>배경 옵션 순환(파이 메뉴용): None → Grid → UV Texture → Mapped → ...</summary>
     public void CycleBackground()
@@ -74,10 +79,10 @@ public partial class UvEditorWindow : Window
         _background.Selected = (int)next;
     }
 
-    private Button ActionButton(string action, string label)
+    private Button ActionButton(string action, string iconName, int icon)
     {
         var a = _shell.Actions.Get(action);
-        var b = new Button { Text = label, FocusMode = Control.FocusModeEnum.None, TooltipText = a?.Label ?? action };
+        var b = Icons.IconButton(iconName, a?.Label ?? action, icon);
         b.Pressed += () => _shell.Actions.Invoke(action);
         _actionButtons.Add((b, action));
         return b;
@@ -86,7 +91,12 @@ public partial class UvEditorWindow : Window
     private void RefreshModes()
     {
         var mode = _shell.Document.Selection.Mode;
-        foreach (var (m, b) in _modeButtons) b.SetPressedNoSignal(m == mode);
+        bool island = Canvas.IslandMode && mode == SelectMode.Uv;
+        _modeButtons["object"].SetPressedNoSignal(mode == SelectMode.Object);
+        _modeButtons["uv"].SetPressedNoSignal(mode == SelectMode.Uv && !island);
+        _modeButtons["edge"].SetPressedNoSignal(mode == SelectMode.Edge);
+        _modeButtons["face"].SetPressedNoSignal(mode == SelectMode.Face);
+        _modeButtons["island"].SetPressedNoSignal(island);
     }
 
     private void RefreshEnabled()

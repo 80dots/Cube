@@ -103,7 +103,7 @@ public sealed class ViewportDisplay
         var wd = UI.Shell.Instance?.WeightDisplay;
         s.WeightOf = wd is { } w && w.node == id ? w.weight : null;
         s.ShowWire = Mode == ShadingMode.Wireframe || WireOnShaded || objSelected || compMode;
-        s.ShowVertices = compMode && mode == SelectMode.Vertex;
+        s.ShowVertices = compMode && mode is SelectMode.Vertex or SelectMode.Uv;
         s.ShowFaceCenters = compMode && mode == SelectMode.Face;
 
         // 오브젝트 와이어 색: 활성 초록, 선택 흰색, 그 외 어두운 회색
@@ -120,6 +120,19 @@ public sealed class ViewportDisplay
                 if (mesh != null && !mesh.Edges[e].Hard) return MeshView.WireSoft;
                 return baseColor;
             };
+            if (mode == SelectMode.Uv)
+            {
+                // UV 모드: 정점 위치에 UV 점(파랑). 그 정점의 UV 점 중 하나라도 선택되면 빨강
+                var topo = mv.UvTopo;
+                var selectedVerts = new HashSet<int>();
+                if (comps != null) foreach (int p in comps.Uvs) if (p < topo.Points.Count) selectedVerts.Add(topo.Points[p].Vertex);
+                s.VertexColor = v =>
+                {
+                    if (hover is { } hv && hv.Item2 == SelectMode.Uv && hv.Item3 == v) return MeshView.Hover;
+                    return selectedVerts.Contains(v) ? MeshView.UvSelected : MeshView.UvNormal;
+                };
+            }
+            else
             s.VertexColor = v =>
             {
                 if (hover is { } hv && hv.Item2 == SelectMode.Vertex && hv.Item3 == v) return MeshView.Hover;

@@ -45,7 +45,8 @@ public partial class Shell
         Actions.Register("mode.vertex", "Vertex", () => SetComponentMode(SelectMode.Vertex), isChecked: () => sel.Mode == SelectMode.Vertex);
         Actions.Register("mode.edge", "Edge", () => SetComponentMode(SelectMode.Edge), isChecked: () => sel.Mode == SelectMode.Edge);
         Actions.Register("mode.face", "Face", () => SetComponentMode(SelectMode.Face), isChecked: () => sel.Mode == SelectMode.Face);
-        Actions.Register("mode.uv", "UV", () => SetComponentMode(SelectMode.Uv), isChecked: () => sel.Mode == SelectMode.Uv);
+        Actions.Register("mode.uv", "UV", () => { SetComponentMode(SelectMode.Uv); UvEditorWindow?.Canvas.SetIslandMode(false); }, isChecked: () => sel.Mode == SelectMode.Uv && !(UvEditorWindow?.Canvas.IslandMode ?? false));
+        Actions.Register("mode.uvIsland", "UV Island", () => { SetComponentMode(SelectMode.Uv); UvEditorWindow?.Canvas.SetIslandMode(true); }, isChecked: () => sel.Mode == SelectMode.Uv && (UvEditorWindow?.Canvas.IslandMode ?? false));
 
         Actions.Register("select.all", "Select All", () => RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); }));
         Actions.Register("select.none", "Deselect All", () => RecordSelection(s => s.ClearAll()), canExecute: () => !sel.IsEmpty);
@@ -65,6 +66,15 @@ public partial class Shell
         Actions.Register("edit.delete", "Delete", DeleteSelection, canExecute: () => !sel.IsEmpty, repeatable: true);
         Actions.Register("edit.duplicate", "Duplicate", DuplicateSelection, canExecute: () => sel.Objects.Count > 0, repeatable: true);
         Actions.Register("edit.preferences", "Preferences...", ShowPreferences);
+        Actions.Register("edit.deleteHistory", "Delete History", () => { var ids = sel.Objects.Where(id => doc.Find(id)?.MeshShape?.History.Count > 0).ToArray(); if (ids.Length > 0) doc.Undo.Push(new DeleteHistoryCommand(ids)); },
+            canExecute: () => sel.Objects.Any(id => doc.Find(id)?.MeshShape?.History.Count > 0));
+        Actions.Register("mesh.smooth", "Smooth...", ShowSmoothDialog, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null));
+        Actions.Register("mesh.smoothApply", "Smooth", SmoothSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
+        foreach (var (level, id, label) in new[] { (0, "display.smoothPreviewOff", "Smooth Mesh Preview: Cage (1)"), (1, "display.smoothPreviewBoth", "Smooth Mesh Preview: Cage + Smooth (2)"), (2, "display.smoothPreviewOn", "Smooth Mesh Preview: Smooth (3)") })
+        {
+            int lv = level;
+            Actions.Register(id, label, () => SetSmoothPreview(lv), canExecute: () => sel.Objects.Any(x => doc.Find(x)?.Mesh != null) || sel.NodesWithComponents(sel.Mode).Any());
+        }
 
         // --- 생성
         Actions.Register("create.cube", "Polygon Cube", () => doc.Undo.Push(CreatePrimitiveCommand.Cube(doc)), repeatable: true);
@@ -340,6 +350,54 @@ public partial class Shell
         _mergeDialog.PopupCentered();
     }
 
+    private ConfirmationDialog? _smoothDialog;
+    private SpinBox? _smoothSpin;
+    private int _smoothLevels = 1;
+
+    private void ShowSmoothDialog()
+    {
+        if (_smoothDialog == null)
+        {
+            _smoothDialog = new ConfirmationDialog { Title = "Smooth", OkButtonText = "Smooth" };
+            var row = new HBoxContainer();
+            row.AddChild(new Label { Text = "Division levels" });
+            _smoothSpin = new SpinBox { MinValue = 1, MaxValue = 4, Step = 1, Value = _smoothLevels, CustomMinimumSize = new Vector2(100, 0) };
+            row.AddChild(_smoothSpin);
+            _smoothDialog.AddChild(row);
+            _smoothDialog.Confirmed += () => { _smoothLevels = (int)_smoothSpin.Value; Actions.Invoke("mesh.smoothApply"); };
+            AddChild(_smoothDialog);
+        }
+        _smoothSpin!.Value = _smoothLevels;
+        _smoothDialog.PopupCentered();
+    }
+
+    /// <summary>Mesh → Smooth: Catmull-Clark 서브디비전(히스토리에서 단계 수 편집 가능).</summary>
+    private void SmoothSelection()
+    {
+        int levels = _smoothLevels;
+        var targets = Document.Selection.Objects.Where(id => Document.Find(id)?.Mesh != null).ToArray();
+        using (Document.Undo.BeginGroup("Smooth"))
+            foreach (var id in targets)
+                Document.Undo.Push(new MeshOpCommand("Smooth", id, new HistoryParams(HistoryParam.I("Levels", levels, 0, 4)),
+                    (m, p) => { MeshOps.Smooth(m, p.Int("Levels")); return (true, null, null); }));
+        HelpLine.Text = $"Smooth: {levels} level(s).";
+    }
+
+    /// <summary>1/2/3 키: 선택 오브젝트의 Smooth Mesh Preview(표시 전용, 케이지는 그대로 편집).</summary>
+    private void SetSmoothPreview(int level)
+    {
+        var sel = Document.Selection;
+        var ids = new HashSet<NodeId>(sel.Objects);
+        foreach (var id in sel.NodesWithComponents(sel.Mode)) ids.Add(id);
+        foreach (var id in ids)
+        {
+            var shape = Document.Find(id)?.MeshShape; if (shape == null) continue;
+            shape.SmoothPreview = level;
+            Document.Notify(new DocChange(ChangeKind.DisplayChanged, id));
+        }
+        HelpLine.Text = level switch { 0 => "Smooth Mesh Preview off (cage).", 1 => "Smooth Mesh Preview: cage + smooth.", _ => "Smooth Mesh Preview: smooth." };
+    }
+
     private ConfirmationDialog? _bevelDialog;
     private SpinBox? _bevelSpin;
     private float _bevelDistance = 0.1f;
@@ -369,7 +427,8 @@ public partial class Shell
         {
             var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
             var edges = mode == SelectMode.Edge ? comps.Edges.ToArray() : SelectionOps.Convert(mesh, comps, mode, SelectMode.Edge).ToArray();
-            return new MeshOpCommand("Bevel", id, m => { var faces = MeshOps.BevelEdges(m, edges, dist); return (faces.Count > 0, SelectMode.Face, faces); });
+            return new MeshOpCommand("Bevel", id, new HistoryParams(HistoryParam.F("Distance", dist, 0.0001f, 1000f, 0.001f)),
+                (m, p) => { var faces = MeshOps.BevelEdges(m, edges, p.Float("Distance")); return (faces.Count > 0, SelectMode.Face, faces); });
         });
         HelpLine.Text = $"Bevel: distance {dist:0.###}.";
     }
@@ -543,7 +602,7 @@ public partial class Shell
 
         Menus.Build(Add("Edit"))
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
-            .Item("edit.delete").Item("edit.duplicate").Separator()
+            .Item("edit.delete").Item("edit.duplicate").Separator().Item("edit.deleteHistory").Separator()
             .Item("select.all").Item("select.none").Separator()
             .Item("edit.preferences");
 
@@ -556,7 +615,7 @@ public partial class Shell
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
 
         Menus.Build(Add("Mesh"))
-            .Item("mesh.combine").Item("mesh.separate").Separator().Item("mesh.soften").Item("mesh.harden").Item("mesh.reverse");
+            .Item("mesh.combine").Item("mesh.separate").Separator().Item("mesh.smooth").Separator().Item("mesh.soften").Item("mesh.harden").Item("mesh.reverse");
 
         Menus.Build(Add("Edit Mesh"))
             .Item("mesh.extrude").Item("mesh.merge").Item("mesh.bevel").Item("mesh.bridge").Separator().Item("mesh.deleteComponents");
@@ -573,6 +632,7 @@ public partial class Shell
 
         Menus.Build(Add("Display"))
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
+            .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
             .Item("display.grid").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 

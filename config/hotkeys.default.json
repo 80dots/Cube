@@ -43,6 +43,9 @@
     { "action": "display.textured", "chord": "6", "context": "viewport" },
     { "action": "display.lit", "chord": "7", "context": "viewport" },
     { "action": "display.wireOnShaded", "chord": "8", "context": "viewport" },
+    { "action": "display.smoothPreviewOff", "chord": "1", "context": "viewport" },
+    { "action": "display.smoothPreviewBoth", "chord": "2", "context": "viewport" },
+    { "action": "display.smoothPreviewOn", "chord": "3", "context": "viewport" },
     { "action": "display.background", "chord": "Alt+B", "context": "viewport" },
     { "action": "view.maximize", "chord": "Ctrl+Space" },
     { "action": "app.escape", "chord": "Escape" }

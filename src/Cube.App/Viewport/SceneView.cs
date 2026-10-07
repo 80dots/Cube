@@ -74,6 +74,7 @@ public partial class SceneView : Node3D
                 break;
             case ChangeKind.MeshTopology:
             case ChangeKind.MeshAttributes:
+            case ChangeKind.DisplayChanged:
                 if (_meshViews.TryGetValue(c.Node, out var mv)) mv.Rebuild();
                 break;
             case ChangeKind.MeshGeometry:

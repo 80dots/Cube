@@ -9,3 +9,9 @@ public interface ICommand
     void Do(Document doc);
     void Undo(Document doc);
 }
+
+/// <summary>alreadyApplied로 스택에 들어갈 때(드래그 결과 등) Do 대신 호출되는 훅. 히스토리 항목 등록 등에 쓴다.</summary>
+public interface IAppliedHook
+{
+    void OnPushedApplied(Document doc);
+}

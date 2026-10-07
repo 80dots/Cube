@@ -1,11 +1,17 @@
 using Cube.Core.Commands;
 using Cube.Core.Scene;
+using Cube.Core.Selection;
 using Godot;
 using NVec3 = System.Numerics.Vector3;
 
 namespace Cube.App.UI.Docks;
 
-/// <summary>Properties 패널(Maya Channel Box 역할): 활성 오브젝트의 Translate/Rotate/Scale XYZ. 편집은 TransformNodesCommand로 기록.</summary>
+/// <summary>
+/// Properties 패널(Maya Channel Box + INPUTS 역할).
+/// Transformation 그룹: 활성 오브젝트의 Translate/Rotate/Scale(편집은 TransformNodesCommand).
+/// History 그룹: 메시 구성 이력 스택(최신이 위). 항목을 고르면 그 연산의 파라미터(Bevel Distance, Translate 등)를 수정할 수 있고
+/// 수정은 EditHistoryCommand로 그 항목부터 다시 실행된다.
+/// </summary>
 public partial class PropertiesPanel : VBoxContainer
 {
     private Document _doc = null!;
@@ -14,12 +20,22 @@ public partial class PropertiesPanel : VBoxContainer
     private bool _updating;
     private NodeId _node;
 
+    private ItemList _history = null!;
+    private VBoxContainer _paramBox = null!;
+    private Label _historyEmpty = null!;
+    private int _historyIndex = -1;          // 선택된 히스토리 항목(오래된 것부터 센 인덱스)
+    private readonly List<Control> _paramControls = new();
+
     public void Bind(Document doc)
     {
         _doc = doc;
         doc.Selection.Changed += Refresh;
         doc.Selection.ModeChanged += Refresh;
-        doc.Changed += c => { if (c.Kind is ChangeKind.TransformChanged or ChangeKind.NodeRenamed or ChangeKind.Reset or ChangeKind.NodeRemoved) Refresh(); };
+        doc.Changed += c =>
+        {
+            if (c.Kind is ChangeKind.TransformChanged or ChangeKind.NodeRenamed or ChangeKind.Reset or ChangeKind.NodeRemoved) Refresh();
+            else if (c.Kind is ChangeKind.MeshTopology or ChangeKind.HistoryChanged or ChangeKind.MeshGeometry) RefreshHistory();
+        };
         Refresh();
     }
 
@@ -29,7 +45,8 @@ public partial class PropertiesPanel : VBoxContainer
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         _title = new Label { Text = "" };
         AddChild(_title);
-        // 패널 폭을 넓히면 필드 열이 같이 늘어나도록 그리드와 필드에 가로 확장 플래그를 준다
+
+        AddChild(Header("Transformation", s));
         var grid = new GridContainer { Columns = 4, SizeFlagsHorizontal = SizeFlags.ExpandFill };
         grid.AddChild(new Label { Text = "" });
         foreach (var h in new[] { "X", "Y", "Z" }) grid.AddChild(new Label { Text = h, HorizontalAlignment = HorizontalAlignment.Center, SizeFlagsHorizontal = SizeFlags.ExpandFill });
@@ -39,10 +56,7 @@ public partial class PropertiesPanel : VBoxContainer
             grid.AddChild(new Label { Text = rows[r] });
             for (int c = 0; c < 3; c++)
             {
-                var sb = new SpinBox { Step = 0.001, MinValue = -1e9, MaxValue = 1e9, AllowGreater = true, AllowLesser = true, CustomMinimumSize = new Vector2(56 * s, 0), UpdateOnTextChanged = false, SizeFlagsHorizontal = SizeFlags.ExpandFill };
-                sb.GetLineEdit().ContextMenuEnabled = false;
-                // Enter로 확정하면 Maya처럼 포커스를 뷰포트로 돌린다
-                sb.GetLineEdit().TextSubmitted += _ => CallDeferred(nameof(ReturnFocus));
+                var sb = Spin(s);
                 int idx = r * 3 + c;
                 sb.ValueChanged += v => OnValueChanged(idx, (float)v);
                 _fields[idx] = sb;
@@ -50,14 +64,53 @@ public partial class PropertiesPanel : VBoxContainer
             }
         }
         AddChild(grid);
+
+        AddChild(Header("History", s));
+        _historyEmpty = new Label { Text = "(no construction history)", Modulate = new Color(1, 1, 1, 0.6f) };
+        AddChild(_historyEmpty);
+        _history = new ItemList { CustomMinimumSize = new Vector2(0, 110 * s), SizeFlagsHorizontal = SizeFlags.ExpandFill, FocusMode = FocusModeEnum.Click };
+        _history.ItemSelected += i => { _historyIndex = HistoryCount - 1 - (int)i; RefreshParams(); };
+        AddChild(_history);
+        _paramBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        AddChild(_paramBox);
+    }
+
+    private static Control Header(string text, float s)
+    {
+        var box = new PanelContainer();
+        box.AddThemeStyleboxOverride("panel", new StyleBoxFlat { BgColor = MayaTheme.PanelDark, ContentMarginLeft = 6 * s, ContentMarginTop = 2 * s, ContentMarginBottom = 2 * s });
+        box.AddChild(new Label { Text = text });
+        return box;
+    }
+
+    private SpinBox Spin(float s)
+    {
+        var sb = new SpinBox { Step = 0.001, MinValue = -1e9, MaxValue = 1e9, AllowGreater = true, AllowLesser = true, CustomMinimumSize = new Vector2(56 * s, 0), UpdateOnTextChanged = false, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        sb.GetLineEdit().ContextMenuEnabled = false;
+        // Enter로 확정하면 Maya처럼 포커스를 뷰포트로 돌린다
+        sb.GetLineEdit().TextSubmitted += _ => CallDeferred(nameof(ReturnFocus));
+        return sb;
     }
 
     private static void ReturnFocus() => Shell.Instance?.Viewport.GrabFocus();
 
+    /// <summary>표시 대상 노드: 오브젝트 모드면 활성 오브젝트, 컴포넌트 모드면 활성 오브젝트 또는 컴포넌트가 선택된 노드.</summary>
+    private SceneNode? TargetNode()
+    {
+        var sel = _doc.Selection;
+        var n = _doc.Find(sel.ActiveObject);
+        if (n == null && sel.IsComponentMode)
+        {
+            var id = sel.NodesWithComponents(sel.Mode).FirstOrDefault();
+            if (!id.IsNone) n = _doc.Find(id);
+        }
+        return n;
+    }
+
     private void Refresh()
     {
         var sel = _doc.Selection;
-        var node = sel.Mode == Core.Selection.SelectMode.Object ? _doc.Find(sel.ActiveObject) : null;
+        var node = TargetNode();
         _updating = true;
         if (node == null)
         {
@@ -71,9 +124,93 @@ public partial class PropertiesPanel : VBoxContainer
             _title.Text = node.Name;
             var t = node.Local;
             Set(0, t.Translation); Set(1, t.RotationDegrees); Set(2, t.Scale);
-            foreach (var f in _fields) f.Editable = true;
+            bool editable = sel.Mode == SelectMode.Object;
+            foreach (var f in _fields) f.Editable = editable;
         }
         _updating = false;
+        RefreshHistory();
+    }
+
+    private int HistoryCount => _doc.Find(_node)?.MeshShape?.History.Count ?? 0;
+
+    private void RefreshHistory()
+    {
+        var entries = _doc.Find(_node)?.MeshShape?.History;
+        int prevSel = _historyIndex;
+        _history.Clear();
+        if (entries == null || entries.Count == 0)
+        {
+            _history.Visible = false; _historyEmpty.Visible = true; _historyIndex = -1; RefreshParams(); return;
+        }
+        _history.Visible = true; _historyEmpty.Visible = false;
+        for (int i = entries.Count - 1; i >= 0; i--)
+        {
+            var e = entries[i];
+            string label = e.Name + (e.Editable ? "  (" + string.Join(", ", e.Params.Items.Select(p => p.Name + "=" + FormatParam(p))) + ")" : "");
+            _history.AddItem(label);
+        }
+        if (prevSel < 0 || prevSel >= entries.Count) _historyIndex = entries.Count - 1;
+        _history.Select(entries.Count - 1 - _historyIndex);
+        RefreshParams();
+    }
+
+    private static string FormatParam(HistoryParam p) => p.Kind switch
+    {
+        HistoryParamKind.Vector3 => $"{p.Value.X:0.###},{p.Value.Y:0.###},{p.Value.Z:0.###}",
+        HistoryParamKind.Int => p.Int.ToString(),
+        HistoryParamKind.Bool => p.Bool ? "on" : "off",
+        _ => p.Float.ToString("0.###"),
+    };
+
+    private void RefreshParams()
+    {
+        foreach (var c in _paramControls) c.QueueFree();
+        _paramControls.Clear();
+        var entries = _doc.Find(_node)?.MeshShape?.History;
+        if (entries == null || _historyIndex < 0 || _historyIndex >= entries.Count) return;
+        var entry = entries[_historyIndex];
+        float s = CubeApp.Instance.UiScale;
+        if (!entry.Editable)
+        {
+            var l = new Label { Text = $"{entry.Name}: no editable parameters", Modulate = new Color(1, 1, 1, 0.6f) };
+            _paramBox.AddChild(l); _paramControls.Add(l);
+            return;
+        }
+        int entryIndex = _historyIndex;
+        foreach (var p in entry.Params.Items)
+        {
+            var row = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            row.AddChild(new Label { Text = p.Name, CustomMinimumSize = new Vector2(70 * s, 0) });
+            int comps = p.Kind == HistoryParamKind.Vector3 ? 3 : 1;
+            for (int c = 0; c < comps; c++)
+            {
+                var sb = Spin(s);
+                sb.Step = p.Kind == HistoryParamKind.Int ? 1 : p.Step;
+                sb.MinValue = Math.Max(p.Min, -1e9); sb.MaxValue = Math.Min(p.Max, 1e9);
+                sb.AllowGreater = p.Max >= 1e9; sb.AllowLesser = p.Min <= -1e9;
+                sb.Value = c == 0 ? p.Value.X : c == 1 ? p.Value.Y : p.Value.Z;
+                string pname = p.Name; int comp = c;
+                sb.ValueChanged += v => OnParamChanged(entryIndex, pname, comp, (float)v);
+                row.AddChild(sb);
+            }
+            _paramBox.AddChild(row); _paramControls.Add(row);
+        }
+    }
+
+    private void OnParamChanged(int entryIndex, string name, int comp, float value)
+    {
+        if (_updating) return;
+        var shape = _doc.Find(_node)?.MeshShape;
+        if (shape == null || entryIndex < 0 || entryIndex >= shape.History.Count) return;
+        var entry = shape.History[entryIndex];
+        var np = entry.Params.Clone();
+        var p = np[name];
+        var v = p.Value;
+        if (comp == 0) v.X = value; else if (comp == 1) v.Y = value; else v.Z = value;
+        p.Value = v;
+        if (np.ValuesEqual(entry.Params)) return;
+        _historyIndex = entryIndex;
+        _doc.Undo.Push(new EditHistoryCommand(_node, entryIndex, np, $"Edit {entry.Name}"));
     }
 
     private void Set(int row, NVec3 v)

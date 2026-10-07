@@ -32,6 +32,7 @@ public sealed class UndoStack
     public void Push(ICommand cmd, bool alreadyApplied = false)
     {
         if (!alreadyApplied) cmd.Do(_doc);
+        else if (cmd is IAppliedHook hook) hook.OnPushedApplied(_doc);
         if (_group != null) { _group.Add(cmd); return; }
         _undo.Add(cmd);
         _redo.Clear();

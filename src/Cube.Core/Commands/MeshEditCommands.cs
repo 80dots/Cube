@@ -20,6 +20,8 @@ public sealed class ExtrudeFacesCommand : MeshEditCommand
         doc.Selection.SelectComponents(NodeId, SelectMode.Face, NewFaces, replace: true);
         return true;
     }
+
+    protected override HistoryEntry? MakeHistoryEntry() { var faces = _faces; return new HistoryEntry { Replay = (m, _) => MeshOps.ExtrudeFaces(m, faces).Count > 0 }; }
 }
 
 /// <summary>현재 모드의 컴포넌트 삭제(면/엣지/정점).</summary>
@@ -43,6 +45,12 @@ public sealed class DeleteComponentsCommand : MeshEditCommand
         doc.Selection.ClearCurrentMode();
         return true;
     }
+
+    protected override HistoryEntry? MakeHistoryEntry()
+    {
+        var mode = _mode; var ids = _ids;
+        return new HistoryEntry { Replay = (m, _) => { switch (mode) { case SelectMode.Face: MeshOps.DeleteFaces(m, ids); break; case SelectMode.Edge: MeshOps.DeleteEdges(m, ids); break; case SelectMode.Vertex: MeshOps.DeleteVertices(m, ids); break; } return true; } };
+    }
 }
 
 public sealed class MergeVerticesCommand : MeshEditCommand
@@ -59,6 +67,12 @@ public sealed class MergeVerticesCommand : MeshEditCommand
         doc.Selection.ClearCurrentMode();
         return true;
     }
+
+    protected override HistoryEntry? MakeHistoryEntry()
+    {
+        var verts = _verts;
+        return new HistoryEntry { Params = new HistoryParams(HistoryParam.F("Threshold", _threshold, 0, 1000, 0.0001f)), Replay = (m, p) => MeshOps.MergeVertices(m, verts, p.Float("Threshold")) >= 0 };
+    }
 }
 
 public sealed class SetEdgesHardCommand : MeshEditCommand
@@ -72,6 +86,8 @@ public sealed class SetEdgesHardCommand : MeshEditCommand
         MeshOps.SetEdgesHard(mesh, _edges, _hard);
         return true;
     }
+
+    protected override HistoryEntry? MakeHistoryEntry() { var edges = _edges; bool hard = _hard; return new HistoryEntry { Replay = (m, _) => { MeshOps.SetEdgesHard(m, edges, hard); return true; } }; }
 }
 
 public sealed class ReverseFacesCommand : MeshEditCommand
@@ -85,6 +101,8 @@ public sealed class ReverseFacesCommand : MeshEditCommand
         MeshOps.ReverseFaces(mesh, _faces);
         return true;
     }
+
+    protected override HistoryEntry? MakeHistoryEntry() { var faces = _faces; return new HistoryEntry { Replay = (m, _) => { MeshOps.ReverseFaces(m, faces); return true; } }; }
 }
 
 /// <summary>Mesh → Combine: 선택 오브젝트들을 월드 공간 정점을 가진 새 메시 하나로 합친다(Maya와 동일하게 원점 트랜스폼).</summary>

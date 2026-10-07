@@ -13,6 +13,11 @@ public sealed class MeshShape : Shape
     public PolyMesh Mesh { get; }
     /// <summary>Bind Skin 된 경우의 skinCluster. 없으면 null.</summary>
     public SkinCluster? Skin { get; set; }
+    /// <summary>구성 이력(오래된 것부터). 메시 편집 명령이 넣고 Undo가 뺀다.</summary>
+    public List<Commands.HistoryEntry> History { get; } = new();
+    /// <summary>Smooth Mesh Preview: 0 = 케이지(1키), 1 = 케이지 + 스무스(2키), 2 = 스무스(3키). 표시 전용.</summary>
+    public int SmoothPreview { get; set; }
+    public int SmoothPreviewLevels { get; set; } = 2;
     public MeshShape(PolyMesh mesh) { Mesh = mesh; }
 }
 

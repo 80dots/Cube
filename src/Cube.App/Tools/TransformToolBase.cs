@@ -30,6 +30,9 @@ public abstract class TransformToolBase : SelectTool
     protected readonly List<(SceneNode node, Transform3 initial, Matrix4x4 parentWorld, Matrix4x4 parentInv)> ObjectTargets = new();
     protected readonly List<(NodeId node, int[] verts, NVec3[] initial, Matrix4x4 world, Matrix4x4 worldInv)> ComponentTargets = new();
     protected NVec3 PivotWorld;
+    /// <summary>마지막으로 적용한 컴포넌트 변형(히스토리 기록용): 종류/피벗/축/기저와 파라미터.</summary>
+    private ComponentTransformOp? _lastOp;
+    private HistoryParams? _lastParams;
 
     protected abstract GizmoBase CreateGizmo();
 
@@ -270,11 +273,14 @@ public abstract class TransformToolBase : SelectTool
                 var after = new NVec3[verts.Length];
                 for (int i = 0; i < verts.Length; i++) after[i] = mesh.Verts[verts[i]].Position;
                 if (!commit) { MoveVerticesCommand.Preview(doc, id, verts, init); continue; }
-                var cmd = new MoveVerticesCommand(Label, id, verts, init, after);
+                ComponentTransformOp? op = null;
+                if (_lastOp != null) op = new ComponentTransformOp { Type = _lastOp.Type, Pivot = _lastOp.Pivot, Axis = _lastOp.Axis, BasisX = _lastOp.BasisX, BasisY = _lastOp.BasisY, BasisZ = _lastOp.BasisZ, MeshWorld = doc.Get(id).WorldMatrix };
+                var cmd = new MoveVerticesCommand(Label, id, verts, init, after, op, _lastParams?.Clone());
                 if (!cmd.IsNoop) doc.Undo.Push(cmd, alreadyApplied: true);
             }
         }
         ObjectTargets.Clear(); ComponentTargets.Clear();
+        _lastOp = null; _lastParams = null;
         RefreshGizmo();
     }
 
@@ -284,6 +290,8 @@ public abstract class TransformToolBase : SelectTool
     protected void ApplyTranslation(NVec3 worldDelta)
     {
         var doc = Ctx.Doc;
+        _lastOp = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Move, Pivot = PivotWorld };
+        _lastParams = _lastOp.DefaultParams(worldDelta, 0, NVec3.One);
         foreach (var (node, initial, _, parentInv) in ObjectTargets)
         {
             var local = initial;
@@ -306,6 +314,8 @@ public abstract class TransformToolBase : SelectTool
     protected void ApplyRotation(NVec3 worldAxis, float angle)
     {
         var doc = Ctx.Doc;
+        _lastOp = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Rotate, Pivot = PivotWorld, Axis = NVec3.Normalize(worldAxis) };
+        _lastParams = _lastOp.DefaultParams(NVec3.Zero, angle * 180f / MathF.PI, NVec3.One);
         var q = NQuat.CreateFromAxisAngle(NVec3.Normalize(worldAxis), angle);
         foreach (var (node, initial, parentWorld, parentInv) in ObjectTargets)
         {
@@ -328,6 +338,8 @@ public abstract class TransformToolBase : SelectTool
     {
         var doc = Ctx.Doc;
         var gx = Gizmo.AxisX; var gy = Gizmo.AxisY; var gz = Gizmo.AxisZ;
+        _lastOp = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Scale, Pivot = PivotWorld, BasisX = gx, BasisY = gy, BasisZ = gz };
+        _lastParams = _lastOp.DefaultParams(NVec3.Zero, 0, scaleInGizmoAxes);
         foreach (var (node, initial, parentWorld, parentInv) in ObjectTargets)
         {
             var (lx, ly, lz) = DragMath.OrthonormalAxes(initial.ToMatrix() * parentWorld);

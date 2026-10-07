@@ -16,6 +16,8 @@ public enum ChangeKind
     MeshGeometry,     // 위치만 변경 → 포지션 갱신
     MeshAttributes,   // 노멀/UV/하드엣지 등 → 전체 재빌드(위상 동일)
     SkinChanged,      // skinCluster 부착/제거/가중치 변경 → 변형·가중치 표시 갱신
+    HistoryChanged,   // 구성 이력 목록 변경(메시는 그대로)
+    DisplayChanged,   // 표시 옵션(스무스 프리뷰 등) 변경 → 뷰 재빌드
     Selection,
 }
 

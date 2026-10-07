@@ -10,24 +10,37 @@ namespace Cube.Core.Commands;
 /// </summary>
 public sealed class MeshOpCommand : MeshEditCommand
 {
-    private readonly Func<PolyMesh, (bool changed, SelectMode? selectMode, IEnumerable<int>? select)> _op;
+    private readonly Func<PolyMesh, HistoryParams, (bool changed, SelectMode? selectMode, IEnumerable<int>? select)> _op;
+    private readonly HistoryParams _params;
     public override string Name { get; }
     public List<int> NewComponents { get; private set; } = new();
 
     public MeshOpCommand(string name, NodeId node, Func<PolyMesh, (bool changed, SelectMode? selectMode, IEnumerable<int>? select)> op) : base(node)
     {
-        Name = name; _op = op;
+        Name = name; _op = (m, _) => op(m); _params = new HistoryParams();
     }
 
     /// <summary>선택 변경 없이 메시만 바꾸는 간단한 형태.</summary>
     public MeshOpCommand(string name, NodeId node, Func<PolyMesh, bool> op) : base(node)
     {
-        Name = name; _op = m => (op(m), null, null);
+        Name = name; _op = (m, _) => (op(m), null, null); _params = new HistoryParams();
+    }
+
+    /// <summary>편집 가능한 파라미터가 있는 형태(Bevel 거리, Insert Edge Loop 위치, Smooth 단계 등). 히스토리에서 파라미터를 바꾸면 다시 실행된다.</summary>
+    public MeshOpCommand(string name, NodeId node, HistoryParams parameters, Func<PolyMesh, HistoryParams, (bool changed, SelectMode? selectMode, IEnumerable<int>? select)> op) : base(node)
+    {
+        Name = name; _op = op; _params = parameters;
+    }
+
+    protected override HistoryEntry? MakeHistoryEntry()
+    {
+        var op = _op;
+        return new HistoryEntry { Params = _params.Clone(), Replay = (m, p) => op(m, p).changed };
     }
 
     protected override bool Execute(Document doc, SceneNode node, PolyMesh mesh)
     {
-        var (changed, mode, select) = _op(mesh);
+        var (changed, mode, select) = _op(mesh, _params);
         if (!changed) return false;
         if (mode != null && select != null)
         {

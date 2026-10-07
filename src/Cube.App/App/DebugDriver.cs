@@ -132,6 +132,23 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] shot {p[1]}: {img.SavePng(p[1])}");
                     break;
                 }
+            case "histedit":  // histedit INDEX PARAM VALUE[,Y,Z]: 활성 노드 히스토리 항목의 파라미터를 바꿔 재평가(EditHistoryCommand)
+                {
+                    var doc = CubeApp.Instance.Document;
+                    var node = doc.Find(doc.Selection.ActiveObject) ?? doc.MeshNodes().FirstOrDefault();
+                    if (node?.MeshShape == null) { GD.Print("[Drive] histedit: no mesh"); break; }
+                    int idx = int.Parse(p[1]);
+                    var np = node.MeshShape.History[idx].Params.Clone();
+                    var parts2 = p[3].Split(',');
+                    var val = np[p[2]].Value;
+                    val.X = float.Parse(parts2[0], System.Globalization.CultureInfo.InvariantCulture);
+                    if (parts2.Length > 1) val.Y = float.Parse(parts2[1], System.Globalization.CultureInfo.InvariantCulture);
+                    if (parts2.Length > 2) val.Z = float.Parse(parts2[2], System.Globalization.CultureInfo.InvariantCulture);
+                    np[p[2]].Value = val;
+                    doc.Undo.Push(new Core.Commands.EditHistoryCommand(node.Id, idx, np));
+                    GD.Print($"[Drive] histedit {idx} {p[2]}={p[3]}");
+                    break;
+                }
             case "action":
                 GD.Print($"[Drive] action {p[1]}: {UI.Shell.Instance.Actions.Invoke(p[1])}");
                 break;
@@ -265,6 +282,12 @@ public partial class DebugDriver : Node
                         GD.Print($"[Drive] skin {sn.Name}: joints={sk.Joints.Count} weighted={weighted} w(v0)={(sk.Weights.Length > 0 && sk.Weights[0] != null ? string.Join("|", sk.Weights[0]!.Select(w => $"{w.joint}:{w.weight:F2}")) : "-")} deformedMax=<{dmax.X:F3},{dmax.Y:F3},{dmax.Z:F3}>");
                     }
                     var active = doc.Find(doc.Selection.ActiveObject) ?? doc.MeshNodes().FirstOrDefault();
+                    if (active?.MeshShape is { } ms0)
+                    {
+                        var hist = string.Join(" | ", ms0.History.Select((h, i) => $"{i}:{h.Name}" + (h.Editable ? "(" + string.Join(",", h.Params.Items.Select(pp => pp.Name + "=" + (pp.Kind == Core.Commands.HistoryParamKind.Vector3 ? $"{pp.Value.X:F2},{pp.Value.Y:F2},{pp.Value.Z:F2}" : pp.Value.X.ToString("F3")))) + ")" : "")));
+                        var uv0 = ms0.Mesh.Hes.Count > 0 ? ms0.Mesh.Hes[0].Uv0 : default;
+                        GD.Print($"[Drive] mesh {active.Name}: faces={ms0.Mesh.AliveFaceCount} verts={ms0.Mesh.AliveVertexCount} smoothPreview={ms0.SmoothPreview} uv0=<{uv0.X:F3},{uv0.Y:F3}> history=[{hist}]");
+                    }
                     if (active?.Mesh != null)
                     {
                         var mn = new System.Numerics.Vector3(float.MaxValue); var mx = new System.Numerics.Vector3(float.MinValue);

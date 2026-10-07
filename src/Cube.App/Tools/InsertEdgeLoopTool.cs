@@ -49,9 +49,9 @@ public sealed class InsertEdgeLoopTool : SelectTool
         }
         if (Ctx.Viewport.IsSnapHeld) t = 0.5f; // J: 중앙 스냅
 
-        var cmd = new MeshOpCommand("Insert Edge Loop", node.Id, m =>
+        var cmd = new MeshOpCommand("Insert Edge Loop", node.Id, new HistoryParams(HistoryParam.F("Position", t, 0.01f, 0.99f, 0.01f)), (m, p) =>
         {
-            var newEdges = MeshOps.InsertEdgeLoop(m, edge, t);
+            var newEdges = MeshOps.InsertEdgeLoop(m, edge, p.Float("Position"));
             return (newEdges.Count > 0, SelectMode.Edge, newEdges);
         });
         Ctx.Undo.Push(cmd);

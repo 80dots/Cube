@@ -30,7 +30,7 @@ public static class PieMenus
         string[] ids = sel.Mode switch
         {
             SelectMode.Object => new[] { "mesh.combine", "edit.duplicate", "mesh.separate", "mesh.harden", "edit.delete", "mesh.soften", "mesh.reverse", "view.frameSelected",
-                                         "skeleton.jointTool", "skin.bind", "skin.detach", "skin.paintTool", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection" },
+                                         "mesh.smooth", "skeleton.jointTool", "skin.bind", "skin.detach", "skin.paintTool", "edit.deleteHistory", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection" },
             SelectMode.Face => new[] { "mesh.extrude", "select.toEdges", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
                                        "mesh.reverse", "mesh.merge", "mesh.bevel", "mesh.bridge" },
             SelectMode.Edge => new[] { "mesh.harden", "select.toFaces", "mesh.bridge", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
@@ -56,7 +56,38 @@ public static class PieMenus
         Item(shell, "select.none", "Deselect All"),
     };
 
-    /// <summary>UV 편집기 RMB: UV 편집기가 지원하는 모든 기능. UV 편집기에 기능을 추가하면 여기에도 넣는다.</summary>
+    /// <summary>UV 편집기 RMB(기본): 모드 전환. N UV, NE Edge, E Face, SE Island, S Object, SW Deselect All, W Select All, NW Frame.</summary>
+    public static List<PieItem> UvModeMenu(Shell shell, bool island)
+    {
+        var sel = shell.Document.Selection;
+        PieItem Mode(string label, string action, bool on) => new(label + (on ? " •" : ""), action);
+        return new List<PieItem>
+        {
+            Mode("UV", "mode.uv", sel.Mode == SelectMode.Uv && !island),
+            Mode("Edge", "mode.edge", sel.Mode == SelectMode.Edge),
+            Mode("Face", "mode.face", sel.Mode == SelectMode.Face),
+            Mode("Island", "mode.uvIsland", sel.Mode == SelectMode.Uv && island),
+            Mode("Object Mode", "mode.object", sel.Mode == SelectMode.Object),
+            Item(shell, "select.none", "Deselect All"),
+            Item(shell, "select.all", "Select All"),
+            Item(shell, "uv.frameSelected", "Frame"),
+        };
+    }
+
+    /// <summary>UV 편집기 Ctrl+RMB: 선택 변환. N To Edge, NE To Face, E To UV, SE To Island, S To Object, SW To Boundary Edge, W Grow, NW Shrink.</summary>
+    public static List<PieItem> UvSelectMenu(Shell shell) => new()
+    {
+        Item(shell, "select.toEdges", "To Edge"),
+        Item(shell, "select.toFaces", "To Face"),
+        Item(shell, "select.toUv", "To UV"),
+        Item(shell, "select.toUvIsland", "To Island"),
+        Item(shell, "mode.object", "To Object"),
+        Item(shell, "select.toBoundaryEdges", "To Boundary Edge"),
+        Item(shell, "select.grow", "Grow"),
+        Item(shell, "select.shrink", "Shrink"),
+    };
+
+    /// <summary>UV 편집기 Shift+RMB(Edit): UV 편집기가 지원하는 모든 기능. UV 편집기에 기능을 추가하면 여기에도 넣는다.</summary>
     public static List<PieItem> UvMenu(Shell shell)
     {
         var sel = shell.Document.Selection;
@@ -69,7 +100,7 @@ public static class PieMenus
             Item(shell, "uv.layout", "Layout"),
             Item(shell, "uv.cut", "Cut UV"),
             Item(shell, "uv.sew", "Sew UV"),
-            Mode("UV Mode", "mode.uv", SelectMode.Uv),
+            Item(shell, "uv.frameAll", "Frame All"),
             Item(shell, "uv.frameSelected", "Frame"),
             Item(shell, "uv.planarX", "Planar X"),
             Item(shell, "uv.planarY", "Planar Y"),
@@ -77,13 +108,7 @@ public static class PieMenus
             Item(shell, "uv.spherical", "Spherical"),
             Item(shell, "uv.flipU", "Flip U"),
             Item(shell, "uv.flipV", "Flip V"),
-            Item(shell, "uv.frameAll", "Frame All"),
             Item(shell, "uv.cycleBackground", "Background"),
-            Mode("Edge Mode", "mode.edge", SelectMode.Edge),
-            Mode("Face Mode", "mode.face", SelectMode.Face),
-            Mode("Object Mode", "mode.object", SelectMode.Object),
-            Item(shell, "select.toUv", "To UV"),
-            Item(shell, "select.toUvIsland", "To UV Island"),
         };
     }
 

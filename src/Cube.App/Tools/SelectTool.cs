@@ -125,6 +125,7 @@ public class SelectTool : ToolBase
         var sel = Ctx.Sel;
         var hit = Picker.Pick(px, sel.Mode, Ctx.CameraBasedSelection);
         var items = hit != null ? new[] { hit.Value.ToSelItem() } : Array.Empty<SelItem>();
+        if (sel.Mode == SelectMode.Uv && items.Length > 0) items = Picker.ExpandUv(items).ToArray();
         if (items.Length == 0 && modifier != SelectModifier.Replace) return;
         UI.Shell.Instance.RecordSelection(s => s.Apply(items, modifier));
     }
