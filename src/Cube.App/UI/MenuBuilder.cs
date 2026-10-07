@@ -35,6 +35,9 @@ public sealed class MenuBuilder
 
         public Menu Separator(string? label = null) { Popup.AddSeparator(label ?? ""); return this; }
 
+        /// <summary>옵션 쌍(Maya 규약): "<id>Apply"(라벨 "X", 마지막 옵션으로 실행) 다음에 "<id>"(라벨 "X Options...").</summary>
+        public Menu Op(string dialogId) => Item(dialogId + "Apply").Item(dialogId);
+
         public Menu Submenu(string title, Action<Menu> build)
         {
             var sub = new PopupMenu { Name = title.Replace(" ", "") };

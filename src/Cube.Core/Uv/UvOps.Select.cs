@@ -18,21 +18,50 @@ public static partial class UvOps
     public static List<int> OverlappingFaces(PolyMesh m)
     {
         var faces = new List<(int f, Vector2[] poly, Vector2 min, Vector2 max)>();
+        var hes = new List<int>();
+        double sumW = 0, sumH = 0;
         for (int f = 0; f < m.FaceCount; f++)
         {
             if (!m.Faces[f].Alive) continue;
-            var poly = FaceHalfEdges(m, f).Select(h => m.Hes[h].Uv0).ToArray();
+            m.GetFaceHalfEdges(f, hes);
+            var poly = new Vector2[hes.Count];
+            for (int i = 0; i < hes.Count; i++) poly[i] = m.Hes[hes[i]].Uv0;
             var (mn, mx) = Bounds(poly);
             faces.Add((f, poly, mn, mx));
+            sumW += mx.X - mn.X; sumH += mx.Y - mn.Y;
         }
         var result = new HashSet<int>();
+        if (faces.Count < 2) return result.ToList();
+        // 균일 격자: 셀 크기 = 평균 바운딩 박스 크기의 2배(최소 1e-4). 같은 셀에 든 면끼리만 검사하고, 쌍은 먼저 만나는 셀에서 한 번만 검사한다.
+        float cell = MathF.Max(1e-4f, (float)(Math.Max(sumW, sumH) / faces.Count) * 2f);
+        var grid = new Dictionary<long, List<int>>();
+        static long Key(int x, int y) => ((long)x << 32) ^ (uint)y;
         for (int i = 0; i < faces.Count; i++)
-            for (int j = i + 1; j < faces.Count; j++)
-            {
-                var a = faces[i]; var b = faces[j];
-                if (a.max.X < b.min.X || b.max.X < a.min.X || a.max.Y < b.min.Y || b.max.Y < a.min.Y) continue;
-                if (PolygonsOverlap(a.poly, b.poly)) { result.Add(a.f); result.Add(b.f); }
-            }
+        {
+            var (_, _, mn, mx) = faces[i];
+            int x0 = (int)MathF.Floor(mn.X / cell), x1 = (int)MathF.Floor(mx.X / cell), y0 = (int)MathF.Floor(mn.Y / cell), y1 = (int)MathF.Floor(mx.Y / cell);
+            for (int x = x0; x <= x1; x++)
+                for (int y = y0; y <= y1; y++)
+                {
+                    long k = Key(x, y);
+                    if (!grid.TryGetValue(k, out var bucket)) { bucket = new List<int>(); grid[k] = bucket; }
+                    bucket.Add(i);
+                }
+        }
+        var tested = new HashSet<long>();
+        foreach (var bucket in grid.Values)
+        {
+            if (bucket.Count < 2) continue;
+            for (int bi = 0; bi < bucket.Count; bi++)
+                for (int bj = bi + 1; bj < bucket.Count; bj++)
+                {
+                    int i = bucket[bi], j = bucket[bj];
+                    var a = faces[i]; var b = faces[j];
+                    if (a.max.X < b.min.X || b.max.X < a.min.X || a.max.Y < b.min.Y || b.max.Y < a.min.Y) continue;
+                    if (!tested.Add(Key(Math.Min(i, j), Math.Max(i, j)))) continue;
+                    if (PolygonsOverlap(a.poly, b.poly)) { result.Add(a.f); result.Add(b.f); }
+                }
+        }
         return result.ToList();
     }
 

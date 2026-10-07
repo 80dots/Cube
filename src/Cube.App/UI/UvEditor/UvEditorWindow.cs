@@ -48,7 +48,7 @@ public partial class UvEditorWindow : FloatingPanel
         foreach (var (action, iconName) in new[] { ("uv.automaticApply", "uv_automatic"), ("uv.planarBest", "uv_planar"), ("uv.planarX", "uv_planar_x"), ("uv.planarY", "uv_planar_y"), ("uv.planarZ", "uv_planar_z"), ("uv.cylindrical", "uv_cylindrical"), ("uv.spherical", "uv_spherical") })
             bar.AddChild(ActionButton(action, iconName, icon));
         bar.AddChild(new VSeparator());
-        foreach (var (action, iconName) in new[] { ("uv.unfold", "uv_unfold"), ("uv.optimize", "uv_optimize"), ("uv.layout", "uv_layout"), ("uv.straightenApply", "uv_straighten"), ("uv.cut", "uv_cut"), ("uv.sew", "uv_sew"), ("uv.flipU", "uv_flip_u"), ("uv.flipV", "uv_flip_v"), ("uv.pin", "uv_pin") })
+        foreach (var (action, iconName) in new[] { ("uv.unfold", "uv_unfold"), ("uv.optimize", "uv_optimize"), ("uv.layoutApply", "uv_layout"), ("uv.straightenApply", "uv_straighten"), ("uv.cut", "uv_cut"), ("uv.sew", "uv_sew"), ("uv.flipU", "uv_flip_u"), ("uv.flipV", "uv_flip_v"), ("uv.pin", "uv_pin") })
             bar.AddChild(ActionButton(action, iconName, icon));
         bar.AddChild(new VSeparator());
         foreach (var (action, iconName) in new[] { ("uv.autoSeams", "uv_autoseam"), ("uv.autoWrap", "uv_autowrap") })
@@ -87,22 +87,22 @@ public partial class UvEditorWindow : FloatingPanel
         }
         var M = _shell.Menus;
         M.Build(Add("Edit")).Item("uv.copy").Item("uv.paste").Item("edit.delete", "Delete").Separator().Item("uv.pin").Item("uv.invertPins").Item("uv.unpin").Item("uv.unpinAll");
-        M.Build(Add("Create")).Item("uv.checkerShader").Separator().Item("uv.automatic").Item("uv.automaticApply", "Automatic (last options)").Item("uv.cameraBased").Item("uv.normalBased").Item("uv.cylindrical").Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.spherical").Separator().Item("uv.bestPlane").Item("uv.contourStretch");
+        M.Build(Add("Create")).Item("display.uvGrid", "Assign Checker Shader").Separator().Op("uv.automatic").Item("uv.cameraBased").Item("uv.cylindrical").Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.spherical").Separator().Item("uv.bestPlane").Item("uv.contourStretch");
         M.Build(Add("Select")).Item("select.all").Item("select.none", "Clear").Item("uv.selectInverse").Separator()
             .Submenu("Components", m => m.Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Item("mode.uvIsland", "UV Shell"))
             .Separator().Item("uv.selectBackFacing").Item("uv.selectFrontFacing").Item("uv.selectOverlapping").Item("uv.selectNonOverlapping").Item("uv.selectTextureBorders").Item("uv.selectUnmapped").Separator()
             .Item("uv.shortestPath").Item("select.grow").Item("uv.growLoop").Item("select.shrink").Item("uv.shrinkLoop").Separator().Item("uv.containedFaces").Item("uv.connectedFaces").Separator()
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces").Item("select.toUv").Item("select.toUvIsland", "To UV Shell").Item("select.toBoundaryEdges", "To UV Shell Border"));
-        M.Build(Add("Cut/Sew")).Item("uv.autoSeams").Item("uv.autoWrap").Separator().Item("uv.createShell").Item("uv.createShellGrid").Separator().Item("uv.cut").Item("uv.sew").Item("uv.split").Item("uv.merge").Item("uv.mergeApply", "Merge UVs (last options)").Item("uv.moveAndSew").Item("uv.stitch").Separator().Item("uv.deleteUvs").Separator().Item("uv.cutSewTool");
+        M.Build(Add("Cut/Sew")).Item("uv.autoSeams").Item("uv.autoWrap").Separator().Item("uv.createShell").Separator().Item("uv.cut").Item("uv.sew").Item("uv.split").Op("uv.merge").Item("uv.moveAndSew").Separator().Item("uv.deleteUvs").Separator().Item("uv.cutSewTool");
         M.Build(Add("Modify"))
             .Submenu("Align", m => m.Item("uv.alignMinU").Item("uv.alignMaxU").Item("uv.alignMinV").Item("uv.alignMaxV").Item("uv.alignCenterU").Item("uv.alignCenterV").Separator().Item("uv.linearAlign"))
             .Item("uv.cycle").Submenu("Distribute UVs", m => m.Item("uv.distributeU").Item("uv.distributeV")).Submenu("Flip", m => m.Item("uv.flipU").Item("uv.flipV"))
-            .Item("uv.matchGrid").Item("uv.matchGridApply", "Match Grid (last options)").Item("uv.matchUvs").Item("uv.normalize").Item("uv.normalizeApply", "Normalize (last options)")
-            .Submenu("Rotate", m => m.Item("uv.rotate").Item("uv.rotateApply", "Rotate (last options)").Item("uv.rotateCw").Item("uv.rotateCcw"))
-            .Item("uv.symmetrize").Item("uv.symmetrizeApply", "Symmetrize (last options)").Item("uv.unitize").Separator()
-            .Submenu("Distribute Shells", m => m.Item("uv.distributeShellsU").Item("uv.distributeShellsV")).Item("uv.gatherShells").Item("uv.layout").Item("uv.layoutOptions").Item("uv.layoutApply").Item("uv.orientShells").Item("uv.orientToEdge").Item("uv.randomizeShells").Item("uv.randomizeShellsApply", "Randomize Shells (last options)")
+            .Op("uv.matchGrid").Item("uv.matchUvs").Op("uv.normalize")
+            .Submenu("Rotate", m => m.Op("uv.rotate").Item("uv.rotateCw").Item("uv.rotateCcw"))
+            .Op("uv.symmetrize").Item("uv.unitize").Separator()
+            .Submenu("Distribute Shells", m => m.Item("uv.distributeShellsU").Item("uv.distributeShellsV")).Item("uv.gatherShells").Op("uv.layout").Item("uv.orientShells").Item("uv.orientToEdge").Op("uv.randomizeShells")
             .Item("uv.snapAndStack").Item("uv.snapTogether").Item("uv.stackShells").Item("uv.stackSimilar").Item("uv.unstackShells").Separator()
-            .Item("uv.flipReversed").Submenu("Map Border", m => m.Item("uv.mapBorderSquare").Item("uv.mapBorderCircle")).Item("uv.optimize").Item("uv.straightenBorder").Item("uv.straightenShell").Item("uv.straighten").Item("uv.straightenApply", "Straighten UVs (last options)").Item("uv.unfold");
+            .Item("uv.flipReversed").Submenu("Map Border", m => m.Item("uv.mapBorderSquare").Item("uv.mapBorderCircle")).Item("uv.optimize").Item("uv.straightenBorder").Item("uv.straightenShell").Op("uv.straighten").Item("uv.unfold");
         M.Build(Add("Tools")).Item("tool.select").Item("tool.move").Item("tool.rotate").Item("tool.scale").Item("uv.toolNone").Separator()
             .Item("uv.toolMoveShell").Item("uv.toolSmooth").Item("uv.toolTweak").Item("uv.toolCutSew").Item("uv.toolGrab").Item("uv.toolPinBrush").Item("uv.toolPinch").Item("uv.toolSmear").Separator().Item("uv.brushOptions");
         M.Build(Add("View")).Item("uv.viewShaded").Item("uv.viewDistortion").Item("uv.viewTextureBorders").Separator().Item("uv.viewGrid").Item("uv.viewTiles").Separator().Item("uv.viewIsolate").Item("uv.viewStats").Separator().Item("uv.frameAll").Item("uv.frameSelected");

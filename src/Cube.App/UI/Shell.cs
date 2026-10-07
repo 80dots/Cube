@@ -283,13 +283,13 @@ public partial class Shell : Control
         }
         Fill(PolyShelf,
             new[] { ("create.cube", "Cube", "shelf_cube"), ("create.sphere", "Sphere", "shelf_sphere"), ("create.cylinder", "Cylinder", "shelf_cylinder"), ("create.cone", "Cone", "shelf_cone"), ("create.plane", "Plane", "shelf_plane"), ("create.torus", "Torus", "shelf_torus") },
-            new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.merge", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevel", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") },
-            new[] { ("mesh.addDivisions", "Add Divisions", "shelf_adddiv"), ("mesh.connect", "Connect", "shelf_connect"), ("mesh.poke", "Poke", "shelf_poke"), ("mesh.fillHole", "Fill Hole", "shelf_fillhole"), ("mesh.mirror", "Mirror", "shelf_mirror") },
+            new[] { ("mesh.extrude", "Extrude", "shelf_extrude"), ("mesh.mergeApply", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevelApply", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") },
+            new[] { ("mesh.addDivisionsApply", "Add Divisions", "shelf_adddiv"), ("mesh.connect", "Connect", "shelf_connect"), ("mesh.pokeApply", "Poke", "shelf_poke"), ("mesh.fillHole", "Fill Hole", "shelf_fillhole"), ("mesh.mirrorApply", "Mirror", "shelf_mirror") },
             new[] { ("mesh.multiCut", "Multi-Cut", "shelf_multicut"), ("mesh.targetWeld", "Target Weld", "shelf_targetweld"), ("mesh.insertLoop", "Insert Loop", "uv_cut") });
         Fill(UvShelf,
             new[] { ("windows.uvEditor", "UV Editor", "mode_uv") },
             new[] { ("uv.planarBest", "Planar", "uv_planar"), ("uv.planarX", "Planar X", "uv_planar_x"), ("uv.planarY", "Planar Y", "uv_planar_y"), ("uv.planarZ", "Planar Z", "uv_planar_z"), ("uv.cylindrical", "Cylindrical", "uv_cylindrical"), ("uv.spherical", "Spherical", "uv_spherical") },
-            new[] { ("uv.unfold", "Unfold", "uv_unfold"), ("uv.layout", "Layout", "uv_layout"), ("uv.cut", "Cut UV", "uv_cut"), ("uv.sew", "Sew UV", "uv_sew"), ("uv.flipU", "Flip U", "uv_flip_u"), ("uv.flipV", "Flip V", "uv_flip_v") },
+            new[] { ("uv.unfold", "Unfold", "uv_unfold"), ("uv.layoutApply", "Layout", "uv_layout"), ("uv.cut", "Cut UV", "uv_cut"), ("uv.sew", "Sew UV", "uv_sew"), ("uv.flipU", "Flip U", "uv_flip_u"), ("uv.flipV", "Flip V", "uv_flip_v") },
             new[] { ("uv.autoSeams", "Auto Seams", "uv_autoseam"), ("uv.autoWrap", "Auto Wrap", "uv_autowrap") },
             new[] { ("uv.automaticApply", "Automatic", "uv_automatic"), ("uv.optimize", "Optimize", "uv_optimize"), ("uv.straightenApply", "Straighten", "uv_straighten"), ("uv.pin", "Pin", "uv_pin"), ("uv.cutSewTool", "3D Cut/Sew", "uv_cutsew"), ("uv.setEditor", "UV Sets", "uv_sets") });
         Fill(RigShelf,

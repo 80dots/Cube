@@ -31,12 +31,7 @@ public partial class Shell
             case SelectMode.Uv: set.UnionWith(comps.Uvs.Where(i => i < topo.Points.Count)); break;
             case SelectMode.Vertex: for (int i = 0; i < topo.Points.Count; i++) if (comps.Verts.Contains(topo.Points[i].Vertex)) set.Add(i); break;
             case SelectMode.Edge:
-                foreach (int e in comps.Edges)
-                {
-                    if (e >= m.EdgeCount || !m.Edges[e].Alive) continue;
-                    var ed = m.Edges[e];
-                    foreach (int he in new[] { ed.He0, ed.He1 }) { if (he < 0) continue; set.Add(topo.HeToPoint[he]); set.Add(topo.HeToPoint[m.Hes[he].Next]); }
-                }
+                foreach (int e in comps.Edges) AddEdgeUvPoints(m, topo, e, set);
                 break;
             case SelectMode.Face:
                 foreach (int f in comps.Faces)
@@ -48,6 +43,15 @@ public partial class Shell
                 break;
         }
         return set;
+    }
+
+    /// <summary>엣지 양쪽 하프에지의 두 끝 UV 점을 set에 넣는다.</summary>
+    internal static void AddEdgeUvPoints(PolyMesh m, UvTopology topo, int e, HashSet<int> set)
+    {
+        if (e < 0 || e >= m.EdgeCount || !m.Edges[e].Alive) return;
+        var ed = m.Edges[e];
+        if (ed.He0 >= 0) { set.Add(topo.HeToPoint[ed.He0]); set.Add(topo.HeToPoint[m.Hes[ed.He0].Next]); }
+        if (ed.He1 >= 0) { set.Add(topo.HeToPoint[ed.He1]); set.Add(topo.HeToPoint[m.Hes[ed.He1].Next]); }
     }
 
     private bool HasUvPoints()
@@ -92,16 +96,14 @@ public partial class Shell
         bool EditorOpen() => UvEditorWindow?.Visible ?? false;
 
         // ---------------------------------------------------------------- Create
-        Actions.Register("uv.automatic", "Automatic Mapping...", () => ShowOptions("uv.automatic", "Automatic Mapping Options", "Project",
+        RegisterOptionPair("uv.automatic", "Automatic Mapping", new OptionSpec("Automatic Mapping Options",
             v => { v.Set("planes", 3); v.Set("fewer", 1f); v.Set("spacing", 0.01f); },
-            new[] { OptionField.E("planes", "Planes", "3", "4", "5", "6", "8", "12"), OptionField.B("fewer", "Optimize for fewer pieces"), OptionField.F("spacing", "Shell spacing", 0, 0.2, 0.001) },
-            () => Actions.Invoke("uv.automaticApply")), canExecute: HasTargets);
-        Actions.Register("uv.automaticApply", "Automatic Mapping", () =>
+            new[] { OptionField.E("planes", "Planes", "3", "4", "5", "6", "8", "12"), OptionField.B("fewer", "Optimize for fewer pieces"), OptionField.F("spacing", "Shell spacing", 0, 0.2, 0.001) }, "Project"), () =>
         {
-            var o = OptWithDefaults("uv.automatic", v => { v.Set("planes", 3); v.Set("fewer", 1f); v.Set("spacing", 0.01f); });
+            var o = Options("uv.automatic");
             int planes = new[] { 3, 4, 5, 6, 8, 12 }[Math.Clamp(o.Int("planes"), 0, 5)];
             Project("Automatic", (m, f) => UvOps.AutomaticProject(m, f, planes, o.Bool("fewer"), o.Float("spacing")));
-        }, canExecute: HasTargets, repeatable: true);
+        }, HasTargets);
         Actions.Register("uv.cameraBased", "Camera-Based Mapping", () =>
         {
             var proj = Viewport.Picker.Projection();
@@ -117,7 +119,6 @@ public partial class Shell
                 }
             UvEditorWindow?.Canvas.Invalidate();
         }, canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.normalBased", "Normal-Based Mapping", () => Project("Normal-Based", (m, f) => UvOps.PlanarProjectBestFit(m, f)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.bestPlane", "Best Plane Texturing (faces + plane vertices)", () =>
         {
             var targets = UvTargetNodes().ToList();
@@ -131,16 +132,13 @@ public partial class Shell
             HelpLine.Text = "Best Plane: select faces, then (vertex mode) the vertices that define the plane, then run again for an exact plane.";
         }, canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.contourStretch", "Contour Stretch Mapping", () => Project("Contour Stretch", (m, f) => UvOps.ContourStretch(m, f)), canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.createShellGrid", "Create Shell (Grid)", () => Project("Create Shell (Grid)", (m, f) => UvOps.CreateShellGrid(m, f)), canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.checkerShader", "Assign Checker Shader (viewport UV grid)", () => Actions.Invoke(Viewport.Display.Mode == Cube.App.Viewport.ShadingMode.UvGrid ? "display.shaded" : "display.uvGrid"), isChecked: () => Viewport.Display.Mode == Cube.App.Viewport.ShadingMode.UvGrid);
 
         // ---------------------------------------------------------------- Cut / Sew
         Actions.Register("uv.createShell", "Create UV Shell", () => Project("Create UV Shell", (m, f) => UvOps.CreateUvShell(m, f)), canExecute: () => sel.IsComponentMode && HasTargets(), repeatable: true);
         Actions.Register("uv.split", "Split UVs", () => ForEachUvPoints("Split UVs", (m, t, p) => UvOps.SplitUvs(m, t, p)), canExecute: () => sel.IsComponentMode && HasUvPoints(), repeatable: true);
-        Actions.Register("uv.merge", "Merge UVs...", () => ShowOptions("uv.merge", "Merge UVs Options", "Merge", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Distance threshold", 0, 1, 0.0001) }, () => Actions.Invoke("uv.mergeApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.mergeApply", "Merge UVs", () => { float t = OptWithDefaults("uv.merge", v => v.Set("threshold", 0.001f)).Float("threshold"); ForEachUvPoints("Merge UVs", (m, tp, p) => UvOps.MergeUvs(m, tp, p, t)); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.merge", "Merge UVs", new OptionSpec("Merge UVs Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Distance threshold", 0, 1, 0.0001) }, "Merge"),
+            () => { float t = Options("uv.merge").Float("threshold"); ForEachUvPoints("Merge UVs", (m, tp, p) => UvOps.MergeUvs(m, tp, p, t)); }, HasUvPoints);
         Actions.Register("uv.moveAndSew", "Move and Sew UV Edges", MoveAndSew, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
-        Actions.Register("uv.stitch", "Stitch Together", MoveAndSew, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
         Actions.Register("uv.deleteUvs", "Delete UVs", () => Project("Delete UVs", (m, f) => UvOps.DeleteUvs(m, f)), canExecute: () => sel.Mode == SelectMode.Face && HasTargets(), repeatable: true);
         Actions.Register("uv.cutSewTool", "3D Cut and Sew UV Tool", () => Tools.SetTool("cutSewUv"), isChecked: () => Tools.Current?.Id == "cutSewUv");
 
@@ -153,23 +151,23 @@ public partial class Shell
         Actions.Register("uv.linearAlign", "Linear Align", () => ForEachUvPoints("Linear Align", (m, t, p) => UvOps.LinearAlign(m, t, p)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.distributeU", "Distribute UVs (U)", () => ForEachUvPoints("Distribute U", (m, t, p) => UvOps.Distribute(m, t, p, true)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.distributeV", "Distribute UVs (V)", () => ForEachUvPoints("Distribute V", (m, t, p) => UvOps.Distribute(m, t, p, false)), canExecute: HasUvPoints, repeatable: true);
-        Actions.Register("uv.rotate", "Rotate UVs...", () => ShowOptions("uv.rotate", "Rotate UVs", "Rotate", v => v.Set("angle", 90f), new[] { OptionField.F("angle", "Angle (deg, CCW)", -360, 360, 1) }, () => Actions.Invoke("uv.rotateApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.rotateApply", "Rotate UVs", () => { float a = OptWithDefaults("uv.rotate", v => v.Set("angle", 90f)).Float("angle"); ForEachUvPoints("Rotate UVs", (m, t, p) => UvOps.Rotate(m, t, p, a)); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.rotate", "Rotate UVs", new OptionSpec("Rotate UVs Options", v => v.Set("angle", 90f), new[] { OptionField.F("angle", "Angle (deg, CCW)", -360, 360, 1) }, "Rotate"),
+            () => { float a = Options("uv.rotate").Float("angle"); ForEachUvPoints("Rotate UVs", (m, t, p) => UvOps.Rotate(m, t, p, a)); }, HasUvPoints);
         Actions.Register("uv.rotateCw", "Rotate UVs 90° CW", () => ForEachUvPoints("Rotate UVs", (m, t, p) => UvOps.Rotate(m, t, p, -90f)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.rotateCcw", "Rotate UVs 90° CCW", () => ForEachUvPoints("Rotate UVs", (m, t, p) => UvOps.Rotate(m, t, p, 90f)), canExecute: HasUvPoints, repeatable: true);
-        Actions.Register("uv.normalize", "Normalize...", () => ShowOptions("uv.normalize", "Normalize Options", "Normalize", v => { v.Set("aspect", 1f); v.Set("collect", 1f); }, new[] { OptionField.B("aspect", "Preserve aspect ratio"), OptionField.B("collect", "Collectively (as one group)") }, () => Actions.Invoke("uv.normalizeApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.normalizeApply", "Normalize", () => { var o = OptWithDefaults("uv.normalize", v => { v.Set("aspect", 1f); v.Set("collect", 1f); }); ForEachUvPoints("Normalize", (m, t, p) => UvOps.Normalize(m, t, p, o.Bool("aspect"), o.Bool("collect"))); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.normalize", "Normalize", new OptionSpec("Normalize Options", v => { v.Set("aspect", 1f); v.Set("collect", 1f); }, new[] { OptionField.B("aspect", "Preserve aspect ratio"), OptionField.B("collect", "Collectively (as one group)") }, "Normalize"),
+            () => { var o = Options("uv.normalize"); ForEachUvPoints("Normalize", (m, t, p) => UvOps.Normalize(m, t, p, o.Bool("aspect"), o.Bool("collect"))); }, HasUvPoints);
         Actions.Register("uv.unitize", "Unitize", () => Project("Unitize", (m, f) => UvOps.Unitize(m, f)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.cycle", "Cycle", () => Project("Cycle", (m, f) => UvOps.Cycle(m, f)), canExecute: () => sel.Mode == SelectMode.Face && HasTargets(), repeatable: true);
-        Actions.Register("uv.matchGrid", "Match Grid...", () => ShowOptions("uv.matchGrid", "Match Grid Options", "Match", v => v.Set("size", 0.125f), new[] { OptionField.F("size", "Grid size", 0.0001, 1, 0.001) }, () => Actions.Invoke("uv.matchGridApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.matchGridApply", "Match Grid", () => { float g = OptWithDefaults("uv.matchGrid", v => v.Set("size", 0.125f)).Float("size"); ForEachUvPoints("Match Grid", (m, t, p) => UvOps.MatchGrid(m, t, p, g)); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.matchGrid", "Match Grid", new OptionSpec("Match Grid Options", v => v.Set("size", 0.125f), new[] { OptionField.F("size", "Grid size", 0.0001, 1, 0.001) }, "Match"),
+            () => { float g = Options("uv.matchGrid").Float("size"); ForEachUvPoints("Match Grid", (m, t, p) => UvOps.MatchGrid(m, t, p, g)); }, HasUvPoints);
         Actions.Register("uv.matchUvs", "Match UVs", () => ForEachUvPoints("Match UVs", (m, t, p) => UvOps.MatchUvs(m, t, p)), canExecute: HasUvPoints, repeatable: true);
-        Actions.Register("uv.symmetrize", "Symmetrize...", () => ShowOptions("uv.symmetrize", "Symmetrize UVs Options", "Symmetrize", v => { v.Set("axis", 0); v.Set("position", 0.5f); v.Set("tolerance", 0.02f); }, new[] { OptionField.E("axis", "Mirror axis", "U", "V"), OptionField.F("position", "Mirror axis position", -10, 10, 0.001), OptionField.F("tolerance", "Tolerance", 0.0001, 1, 0.001) }, () => Actions.Invoke("uv.symmetrizeApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.symmetrizeApply", "Symmetrize UVs", () => { var o = OptWithDefaults("uv.symmetrize", v => { v.Set("axis", 0); v.Set("position", 0.5f); v.Set("tolerance", 0.02f); }); ForEachUvPoints("Symmetrize UVs", (m, t, p) => UvOps.SymmetrizeUvs(m, t, p, o.Int("axis") == 0, o.Float("position"), o.Float("tolerance"))); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.symmetrize", "Symmetrize UVs", new OptionSpec("Symmetrize UVs Options", v => { v.Set("axis", 0); v.Set("position", 0.5f); v.Set("tolerance", 0.02f); }, new[] { OptionField.E("axis", "Mirror axis", "U", "V"), OptionField.F("position", "Mirror axis position", -10, 10, 0.001), OptionField.F("tolerance", "Tolerance", 0.0001, 1, 0.001) }, "Symmetrize"),
+            () => { var o = Options("uv.symmetrize"); ForEachUvPoints("Symmetrize UVs", (m, t, p) => UvOps.SymmetrizeUvs(m, t, p, o.Int("axis") == 0, o.Float("position"), o.Float("tolerance"))); }, HasUvPoints);
 
         // ---------------------------------------------------------------- Modify: straighten / border / optimize
-        Actions.Register("uv.straighten", "Straighten UVs...", () => ShowOptions("uv.straighten", "Straighten UVs Options", "Straighten", v => { v.Set("angle", 30f); v.Set("u", 1f); v.Set("v", 1f); }, new[] { OptionField.F("angle", "Max angle (deg)", 0, 90, 1), OptionField.B("u", "Along U"), OptionField.B("v", "Along V") }, () => Actions.Invoke("uv.straightenApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.straightenApply", "Straighten UVs", () => { var o = OptWithDefaults("uv.straighten", v => { v.Set("angle", 30f); v.Set("u", 1f); v.Set("v", 1f); }); ForEachUvPoints("Straighten UVs", (m, t, p) => UvOps.StraightenUvs(m, t, p, o.Float("angle"), o.Bool("u"), o.Bool("v"), 30)); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.straighten", "Straighten UVs", new OptionSpec("Straighten UVs Options", v => { v.Set("angle", 30f); v.Set("u", 1f); v.Set("v", 1f); }, new[] { OptionField.F("angle", "Max angle (deg)", 0, 90, 1), OptionField.B("u", "Along U"), OptionField.B("v", "Along V") }, "Straighten"),
+            () => { var o = Options("uv.straighten"); ForEachUvPoints("Straighten UVs", (m, t, p) => UvOps.StraightenUvs(m, t, p, o.Float("angle"), o.Bool("u"), o.Bool("v"), 30)); }, HasUvPoints);
         Actions.Register("uv.straightenBorder", "Straighten Border", () => ForEachUvShells("Straighten Border", (m, t, shells) => { foreach (int s in shells) UvOps.StraightenBorder(m, t, s); }), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.straightenShell", "Straighten Shell (selected edges)", () =>
         {
@@ -186,12 +184,11 @@ public partial class Shell
         Actions.Register("uv.optimize", "Optimize", () => ForEachUvShells("Optimize", (m, t, shells) => UvOps.Optimize(m, t, shells)), canExecute: HasUvPoints, repeatable: true);
 
         // ---------------------------------------------------------------- Modify: shells
-        Actions.Register("uv.layoutOptions", "Layout...", () => ShowOptions("uv.layout", "Layout UVs Options", "Layout", v => { v.Set("spacing", 0.01f); v.Set("rotate", 0f); v.Set("tileU", 0); v.Set("tileV", 0); }, new[] { OptionField.F("spacing", "Shell padding", 0, 0.2, 0.001), OptionField.B("rotate", "Rotate shells to fit (upright)"), OptionField.I("tileU", "Target tile U", 0, 9), OptionField.I("tileV", "Target tile V", 0, 9) }, () => Actions.Invoke("uv.layoutApply")), canExecute: HasTargets);
-        Actions.Register("uv.layoutApply", "Layout (last options)", () =>
+        RegisterOptionPair("uv.layout", "Layout", new OptionSpec("Layout UVs Options", v => { v.Set("spacing", 0.01f); v.Set("rotate", 0f); v.Set("tileU", 0); v.Set("tileV", 0); }, new[] { OptionField.F("spacing", "Shell padding", 0, 0.2, 0.001), OptionField.B("rotate", "Rotate shells to fit (upright)"), OptionField.I("tileU", "Target tile U", 0, 9), OptionField.I("tileV", "Target tile V", 0, 9) }, "Layout"), () =>
         {
-            var o = OptWithDefaults("uv.layout", v => { v.Set("spacing", 0.01f); v.Set("rotate", 0f); v.Set("tileU", 0); v.Set("tileV", 0); });
+            var o = Options("uv.layout");
             ForEachUvShells("Layout", (m, t, shells) => UvOps.Layout(m, t, shells, o.Float("spacing"), o.Bool("rotate"), new NVec2(o.Int("tileU"), o.Int("tileV")), 1f));
-        }, canExecute: HasUvPoints, repeatable: true);
+        }, HasUvPoints);
         Actions.Register("uv.orientShells", "Orient Shells", () => ForEachUvShells("Orient Shells", (m, t, shells) => UvOps.OrientShells(m, t, shells)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.orientToEdge", "Orient Shell to Edges", () =>
         {
@@ -203,8 +200,8 @@ public partial class Shell
                 }
             UvEditorWindow?.Canvas.Invalidate();
         }, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
-        Actions.Register("uv.randomizeShells", "Randomize Shells...", () => ShowOptions("uv.randomize", "Randomize Shells Options", "Randomize", v => { v.Set("translate", 0.1f); v.Set("rotate", 30f); v.Set("scale", 0.1f); v.Set("seed", 1); }, new[] { OptionField.F("translate", "Translate (max)", 0, 2, 0.01), OptionField.F("rotate", "Rotate (max deg)", 0, 180, 1), OptionField.F("scale", "Scale (max ±)", 0, 1, 0.01), OptionField.I("seed", "Seed", 0, 9999) }, () => Actions.Invoke("uv.randomizeShellsApply")), canExecute: HasUvPoints);
-        Actions.Register("uv.randomizeShellsApply", "Randomize Shells", () => { var o = OptWithDefaults("uv.randomize", v => { v.Set("translate", 0.1f); v.Set("rotate", 30f); v.Set("scale", 0.1f); v.Set("seed", 1); }); ForEachUvShells("Randomize Shells", (m, t, s) => UvOps.RandomizeShells(m, t, s, o.Float("translate"), o.Float("rotate"), o.Float("scale"), o.Int("seed"))); }, canExecute: HasUvPoints, repeatable: true);
+        RegisterOptionPair("uv.randomizeShells", "Randomize Shells", new OptionSpec("Randomize Shells Options", v => { v.Set("translate", 0.1f); v.Set("rotate", 30f); v.Set("scale", 0.1f); v.Set("seed", 1); }, new[] { OptionField.F("translate", "Translate (max)", 0, 2, 0.01), OptionField.F("rotate", "Rotate (max deg)", 0, 180, 1), OptionField.F("scale", "Scale (max ±)", 0, 1, 0.01), OptionField.I("seed", "Seed", 0, 9999) }, "Randomize"),
+            () => { var o = Options("uv.randomizeShells"); ForEachUvShells("Randomize Shells", (m, t, s) => UvOps.RandomizeShells(m, t, s, o.Float("translate"), o.Float("rotate"), o.Float("scale"), o.Int("seed"))); }, HasUvPoints);
         Actions.Register("uv.stackShells", "Stack Shells", () => ForEachUvShells("Stack Shells", (m, t, s) => UvOps.StackShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.stackSimilar", "Stack Similar Shells", () => ForEachUvShells("Stack Similar Shells", (m, t, s) => UvOps.StackSimilarShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.unstackShells", "Unstack Shells", () => ForEachUvShells("Unstack Shells", (m, t, s) => UvOps.UnstackShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
@@ -306,11 +303,13 @@ public partial class Shell
             Actions.Register(id, label, () => { if (UvEditorWindow != null) UvEditorWindow.Canvas.Tool = UvEditorWindow.Canvas.Tool == t ? UvEditor.UvCanvasTool.None : t; }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.Tool == t);
         }
         Actions.Register("uv.toolNone", "UV Select/Transform (manipulator)", () => { if (UvEditorWindow != null) UvEditorWindow.Canvas.Tool = UvEditor.UvCanvasTool.None; }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.Tool == UvEditor.UvCanvasTool.None);
-        Actions.Register("uv.brushOptions", "Brush Options...", () => ShowOptions("uv.brush", "UV Brush Options", "OK", v => { v.Set("radius", 60f); v.Set("strength", 0.5f); }, new[] { OptionField.F("radius", "Radius (px)", 5, 500, 1), OptionField.F("strength", "Strength", 0.01, 1, 0.01) }, () => { }), canExecute: EditorOpen);
+        _optionSpecs["uv.brush"] = new OptionSpec("UV Brush Options", v => { v.Set("radius", 60f); v.Set("strength", 0.5f); }, new[] { OptionField.F("radius", "Radius (px)", 5, 500, 1), OptionField.F("strength", "Strength", 0.01, 1, 0.01) }, "OK");
+        Actions.Register("uv.brushOptions", "Brush Options...", () => ShowOptions("uv.brush", () => { }), canExecute: EditorOpen);
 
         // ---------------------------------------------------------------- UV Sets
         Actions.Register("uv.setEditor", "UV Set Editor", ToggleUvSetEditor, isChecked: () => UvSetEditor?.Visible ?? false);
-        Actions.Register("uv.setCreate", "Create Empty UV Set...", () => ShowOptions("uv.setCreate", "Create Empty UV Set", "Create", v => v.Set("n", 1), new[] { OptionField.I("n", "Name suffix (uvSet<n>)", 1, 99) }, () => UvSetOp("Create UV Set", m => m.SwitchUvSet(m.AddUvSet("uvSet" + Opt("uv.setCreate").Int("n"), false)))), canExecute: () => UvNodes().Any());
+        _optionSpecs["uv.setCreate"] = new OptionSpec("Create Empty UV Set", v => v.Set("n", 1), new[] { OptionField.I("n", "Name suffix (uvSet<n>)", 1, 99) }, "Create");
+        Actions.Register("uv.setCreate", "Create Empty UV Set...", () => ShowOptions("uv.setCreate", () => UvSetOp("Create UV Set", m => m.SwitchUvSet(m.AddUvSet("uvSet" + Options("uv.setCreate").Int("n"), false)))), canExecute: () => UvNodes().Any());
         Actions.Register("uv.setCopy", "Copy UVs to New UV Set", () => UvSetOp("Copy UV Set", m => { m.EnsureUvSets(); m.SwitchUvSet(m.AddUvSet(m.UvSets[m.CurrentUvSet].Name + "_copy", true)); }), canExecute: () => UvNodes().Any(), repeatable: true);
         Actions.Register("uv.setDelete", "Delete Current UV Set", () => UvSetOp("Delete UV Set", m => m.RemoveUvSet(m.CurrentUvSet)), canExecute: () => UvNodes().Any(n => n.Mesh!.UvSets.Count > 1));
         Actions.Register("uv.setNext", "Switch to Next UV Set", () => UvSetOp("Switch UV Set", m => { m.EnsureUvSets(); m.SwitchUvSet((m.CurrentUvSet + 1) % m.UvSets.Count); }), canExecute: () => UvNodes().Any(n => n.Mesh!.UvSets.Count > 1));

@@ -144,34 +144,11 @@ public static partial class MeshOps
             touched.Add(a); touched.Add(b);
             var (f0, f1) = m.EdgeFaces(e);
             if (f1 < 0) { m.RemoveFace(f0, removeIsolated: false); continue; }
-            MergeFacesAcrossEdge(m, e);
+            MergeFacesAcrossEdgeReturning(m, e);
         }
         foreach (int v in touched) DissolveIfValence2(m, v);
         foreach (int v in touched) m.RemoveVertexIfIsolated(v);
         m.BumpTopology();
-    }
-
-    private static void MergeFacesAcrossEdge(PolyMesh m, int e)
-    {
-        var ed = m.Edges[e];
-        int he0 = ed.He0, he1 = ed.He1;
-        int f0 = m.Hes[he0].Face, f1 = m.Hes[he1].Face;
-        if (f0 == f1) return; // 같은 면의 두 변(비정상) → 무시
-        // f0 루프를 he0부터 시작해 he0를 제외하고 수집, 그 자리에 f1 루프(he1 제외)를 끼운다
-        var loop = new List<Corner>();
-        int cur = m.Hes[he0].Next;
-        while (cur != he0) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
-        cur = m.Hes[he1].Next;
-        while (cur != he1) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
-        // 하드 플래그 보존
-        var hard = new List<bool>();
-        for (int i = 0; i < loop.Count; i++) hard.Add(IsHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
-        int material = m.Faces[f0].Material;
-        m.RemoveFace(f0, removeIsolated: false);
-        m.RemoveFace(f1, removeIsolated: false);
-        // 중복 정점이 생기면(같은 정점을 두 번 지나는 비단순 루프) 거부될 수 있다 → 그대로 둔다
-        int nf = AddFaceWithCorners(m, loop, material);
-        if (nf >= 0) for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
     }
 
     /// <summary>엣지가 정확히 2개인 정점을 인접 면 루프에서 제거한다(직선 위 불필요 정점 정리).</summary>
@@ -390,11 +367,8 @@ public static partial class MeshOps
             {
                 int cur = stack.Pop(); list.Add(cur);
                 m.GetFaceVertices(cur, tmp);
-                foreach (int v in tmp.ToArray())
-                {
-                    var faces = new List<int>(); m.GetVertexFaces(v, faces);
-                    foreach (int nf in faces) if (comp[nf] < 0) { comp[nf] = id; stack.Push(nf); }
-                }
+                foreach (int v in tmp)
+                    foreach (int he in m.VertexOutgoing(v)) { int nf = m.Hes[he].Face; if (comp[nf] < 0) { comp[nf] = id; stack.Push(nf); } }
             }
             result.Add(list);
         }

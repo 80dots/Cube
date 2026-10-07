@@ -82,8 +82,6 @@ public partial class Shell
         Actions.Register("edit.preferences", "Preferences...", ShowPreferences);
         Actions.Register("edit.deleteHistory", "Delete History", () => { var ids = sel.Objects.Where(id => doc.Find(id)?.MeshShape?.History.Count > 0).ToArray(); if (ids.Length > 0) doc.Undo.Push(new DeleteHistoryCommand(ids)); },
             canExecute: () => sel.Objects.Any(id => doc.Find(id)?.MeshShape?.History.Count > 0));
-        Actions.Register("mesh.smooth", "Smooth...", ShowSmoothDialog, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null));
-        Actions.Register("mesh.smoothApply", "Smooth", SmoothSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
         foreach (var (level, id, label) in new[] { (0, "display.smoothPreviewOff", "Smooth Mesh Preview: Cage (1)"), (1, "display.smoothPreviewBoth", "Smooth Mesh Preview: Cage + Smooth (2)"), (2, "display.smoothPreviewOn", "Smooth Mesh Preview: Smooth (3)") })
         {
             int lv = level;
@@ -101,16 +99,11 @@ public partial class Shell
         // --- 메시 편집
         Actions.Register("mesh.extrude", "Extrude", ExtrudeSelection, canExecute: () => sel.Mode is SelectMode.Face or SelectMode.Edge && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
-        Actions.Register("mesh.merge", "Merge Vertices...", ShowMergeDialog, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any());
-        Actions.Register("mesh.mergeApply", "Merge Vertices", MergeSelectedVertices, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.combine", "Combine", CombineSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count(id => doc.Find(id)?.Mesh != null) >= 2);
         Actions.Register("mesh.separate", "Separate", SeparateSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count == 1);
         Actions.Register("mesh.soften", "Soften Edge", () => SetEdgesHard(false), canExecute: () => HasEdgeTargets(), repeatable: true);
         Actions.Register("mesh.harden", "Harden Edge", () => SetEdgesHard(true), canExecute: () => HasEdgeTargets(), repeatable: true);
         Actions.Register("mesh.reverse", "Reverse", ReverseSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
-        bool HasBevelTargets() => sel.Mode is SelectMode.Edge or SelectMode.Face && sel.NodesWithComponents(sel.Mode).Any();
-        Actions.Register("mesh.bevel", "Bevel...", ShowBevelDialog, canExecute: HasBevelTargets);
-        Actions.Register("mesh.bevelApply", "Bevel", BevelSelection, canExecute: HasBevelTargets, repeatable: true);
         Actions.Register("mesh.bridge", "Bridge", BridgeSelection, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
         Actions.Register("mesh.insertLoop", "Insert Edge Loop Tool", () => Tools.SetTool("insertLoop"), isChecked: () => Tools.Current?.Id == "insertLoop");
 
@@ -412,60 +405,6 @@ public partial class Shell
         ForEachComponentNode("Delete", mode, (id, comps) => new DeleteComponentsCommand(id, mode, comps.Get(mode)));
     }
 
-    private float _mergeThreshold = 0.001f;
-    private ConfirmationDialog? _mergeDialog;
-    private SpinBox? _mergeSpin;
-
-    private void ShowMergeDialog()
-    {
-        if (_mergeDialog == null)
-        {
-            _mergeDialog = new ConfirmationDialog { Title = "Merge Vertices", OkButtonText = "Merge" };
-            var row = new HBoxContainer();
-            row.AddChild(new Label { Text = "Threshold" });
-            _mergeSpin = new SpinBox { MinValue = 0, MaxValue = 1000, Step = 0.0001, Value = _mergeThreshold, CustomMinimumSize = new Vector2(120, 0) };
-            row.AddChild(_mergeSpin);
-            _mergeDialog.AddChild(row);
-            _mergeDialog.Confirmed += () => { _mergeThreshold = (float)_mergeSpin.Value; Actions.Invoke("mesh.mergeApply"); };
-            AddChild(_mergeDialog);
-        }
-        _mergeSpin!.Value = _mergeThreshold;
-        _mergeDialog.PopupCentered();
-    }
-
-    private ConfirmationDialog? _smoothDialog;
-    private SpinBox? _smoothSpin;
-    private int _smoothLevels = 1;
-
-    private void ShowSmoothDialog()
-    {
-        if (_smoothDialog == null)
-        {
-            _smoothDialog = new ConfirmationDialog { Title = "Smooth", OkButtonText = "Smooth" };
-            var row = new HBoxContainer();
-            row.AddChild(new Label { Text = "Division levels" });
-            _smoothSpin = new SpinBox { MinValue = 1, MaxValue = 4, Step = 1, Value = _smoothLevels, CustomMinimumSize = new Vector2(100, 0) };
-            row.AddChild(_smoothSpin);
-            _smoothDialog.AddChild(row);
-            _smoothDialog.Confirmed += () => { _smoothLevels = (int)_smoothSpin.Value; Actions.Invoke("mesh.smoothApply"); };
-            AddChild(_smoothDialog);
-        }
-        _smoothSpin!.Value = _smoothLevels;
-        _smoothDialog.PopupCentered();
-    }
-
-    /// <summary>Mesh → Smooth: Catmull-Clark 서브디비전(히스토리에서 단계 수 편집 가능).</summary>
-    private void SmoothSelection()
-    {
-        int levels = _smoothLevels;
-        var targets = Document.Selection.Objects.Where(id => Document.Find(id)?.Mesh != null).ToArray();
-        using (Document.Undo.BeginGroup("Smooth"))
-            foreach (var id in targets)
-                Document.Undo.Push(new MeshOpCommand("Smooth", id, new HistoryParams(HistoryParam.I("Levels", levels, 0, 4)),
-                    (m, p) => { MeshOps.Smooth(m, p.Int("Levels")); return (true, null, null); }));
-        HelpLine.Text = $"Smooth: {levels} level(s).";
-    }
-
     /// <summary>1/2/3 키: 선택 오브젝트의 Smooth Mesh Preview(표시 전용, 케이지는 그대로 편집).</summary>
     private void SetSmoothPreview(int level)
     {
@@ -481,41 +420,6 @@ public partial class Shell
         HelpLine.Text = level switch { 0 => "Smooth Mesh Preview off (cage).", 1 => "Smooth Mesh Preview: cage + smooth.", _ => "Smooth Mesh Preview: smooth." };
     }
 
-    private ConfirmationDialog? _bevelDialog;
-    private SpinBox? _bevelSpin;
-    private float _bevelDistance = 0.1f;
-
-    private void ShowBevelDialog()
-    {
-        if (_bevelDialog == null)
-        {
-            _bevelDialog = new ConfirmationDialog { Title = "Bevel", OkButtonText = "Bevel" };
-            var row = new HBoxContainer();
-            row.AddChild(new Label { Text = "Distance" });
-            _bevelSpin = new SpinBox { MinValue = 0.0001, MaxValue = 1000, Step = 0.001, Value = _bevelDistance, CustomMinimumSize = new Vector2(120, 0) };
-            row.AddChild(_bevelSpin);
-            _bevelDialog.AddChild(row);
-            _bevelDialog.Confirmed += () => { _bevelDistance = (float)_bevelSpin.Value; Actions.Invoke("mesh.bevelApply"); };
-            AddChild(_bevelDialog);
-        }
-        _bevelSpin!.Value = _bevelDistance;
-        _bevelDialog.PopupCentered();
-    }
-
-    private void BevelSelection()
-    {
-        var mode = Document.Selection.Mode;
-        float dist = _bevelDistance;
-        ForEachComponentNode("Bevel", mode, (id, comps) =>
-        {
-            var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
-            var edges = mode == SelectMode.Edge ? comps.Edges.ToArray() : SelectionOps.Convert(mesh, comps, mode, SelectMode.Edge).ToArray();
-            return new MeshOpCommand("Bevel", id, new HistoryParams(HistoryParam.F("Distance", dist, 0.0001f, 1000f, 0.001f)),
-                (m, p) => { var faces = MeshOps.BevelEdges(m, edges, p.Float("Distance")); return (faces.Count > 0, SelectMode.Face, faces); });
-        });
-        HelpLine.Text = $"Bevel: distance {dist:0.###}.";
-    }
-
     private void BridgeSelection()
     {
         int made = 0;
@@ -525,23 +429,6 @@ public partial class Shell
             return new MeshOpCommand("Bridge", id, m => { var faces = MeshOps.BridgeEdges(m, edges); made += faces.Count; return (faces.Count > 0, SelectMode.Face, faces); });
         });
         HelpLine.Text = made > 0 ? $"Bridge: {made} faces created." : "Bridge: select two border edge chains with the same number of edges.";
-    }
-
-    private void MergeSelectedVertices()
-    {
-        var sel = Document.Selection;
-        var mode = sel.Mode;
-        int total = 0;
-        ForEachComponentNode("Merge Vertices", mode, (id, comps) =>
-        {
-            var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
-            var verts = mode == SelectMode.Vertex ? comps.Verts : SelectionOps.Convert(mesh, comps, mode, SelectMode.Vertex);
-            var cmd = new MergeVerticesCommand(id, verts, _mergeThreshold);
-            return cmd;
-        });
-        if (Document.Undo.LastCommand is CompoundCommand cc) total = cc.Items.OfType<MergeVerticesCommand>().Sum(c => c.MergedCount);
-        else if (Document.Undo.LastCommand is MergeVerticesCommand m) total = m.MergedCount;
-        HelpLine.Text = total > 0 ? $"Merged {total} vertex pair(s)." : "No vertices within threshold.";
     }
 
     private void CombineSelection()
@@ -685,51 +572,50 @@ public partial class Shell
             .Separator().Item("file.save").Item("file.saveAs").Separator()
             .Item("file.import").Item("file.exportSelection").Item("file.exportAll").Separator().Item("file.exit");
 
+        // Maya 규약: "X"는 마지막 옵션으로 바로 실행(<id>Apply), "X Options..."는 옵션 창(<id>). Menu.Op가 둘을 함께 넣는다.
         Menus.Build(Add("Edit"))
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
             .Item("edit.delete").Item("edit.duplicate").Separator().Item("edit.deleteHistory").Separator()
             .Item("edit.centerPivot").Item("edit.editPivot").Separator()
-            .Item("select.all").Item("select.none").Separator()
+            .Item("select.all").Item("select.none").Item("select.hierarchy").Separator()
             .Item("snap.grid").Item("snap.point").Separator()
             .Item("edit.preferences");
 
         Menus.Build(Add("Create"))
             .Submenu("Polygon Primitives", m => m.Item("create.cube", "Cube").Item("create.sphere", "Sphere").Item("create.cylinder", "Cylinder").Item("create.cone", "Cone").Item("create.plane", "Plane").Item("create.torus", "Torus"))
-            .Item("create.polygonTool").Separator()
             .Submenu("Lights", m => m.Item("create.lightDirectional", "Directional Light").Item("create.lightPoint", "Point Light").Item("create.lightSpot", "Spot Light"));
 
         Menus.Build(Add("Select"))
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
-            .Item("select.all").Item("select.none").Item("select.hierarchy").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
 
         Menus.Build(Add("Mesh"))
             .Item("mesh.combine").Item("mesh.separate").Separator()
-            .Item("mesh.conform").Item("mesh.fillHole").Item("mesh.smooth").Item("mesh.triangulate").Item("mesh.quadrangulate").Item("mesh.quadrangulateApply", "Quadrangulate (last options)").Separator()
-            .Item("mesh.mirror").Item("mesh.mirrorApply", "Mirror (last options)").Item("mesh.symmetrizeMesh").Separator()
+            .Item("mesh.conform").Item("mesh.fillHole").Op("mesh.smooth").Item("mesh.triangulate").Op("mesh.quadrangulate").Separator()
+            .Op("mesh.mirror").Item("mesh.symmetrizeMesh").Separator()
             .Item("mesh.cleanup");
 
         Menus.Build(Add("Edit Mesh"))
-            .Item("mesh.addDivisions").Item("mesh.addDivisionsApply", "Add Divisions (last options)").Item("mesh.bevel").Item("mesh.bevelApply", "Bevel (last options)").Item("mesh.bridge")
-            .Item("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach").Item("mesh.extrude").Item("mesh.merge").Item("mesh.mergeToCenter")
-            .Item("mesh.flipComponents").Item("mesh.symmetrizeComponents").Separator()
-            .Item("mesh.averageVertices").Item("mesh.chamferVertices").Separator()
-            .Item("mesh.deleteComponents").Item("mesh.flipTriangleEdge").Item("mesh.spinEdgeBackward").Item("mesh.spinEdgeForward").Item("mesh.offsetEdgeLoop").Item("mesh.slideEdge").Separator()
-            .Item("mesh.duplicateFaces").Item("mesh.extractFaces").Item("mesh.poke").Item("mesh.wedge");
+            .Op("mesh.addDivisions").Op("mesh.bevel").Item("mesh.bridge").Op("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach")
+            .Item("mesh.extrude").Op("mesh.merge").Item("mesh.mergeToCenter").Op("mesh.flipComponents").Op("mesh.symmetrizeComponents").Separator()
+            .Op("mesh.averageVertices").Op("mesh.chamferVertices").Separator()
+            .Item("mesh.deleteComponents").Item("mesh.flipTriangleEdge").Item("mesh.spinEdgeBackward").Item("mesh.spinEdgeForward").Separator()
+            .Item("mesh.duplicateFaces").Item("mesh.extractFaces").Op("mesh.poke").Op("mesh.wedge");
 
         Menus.Build(Add("Mesh Tools"))
-            .Item("mesh.appendPolygon").Item("mesh.connect", "Connect").Item("mesh.crease").Item("mesh.uncrease").Item("create.polygonTool").Item("mesh.insertLoop").Item("mesh.multiCut").Item("mesh.offsetEdgeLoop", "Offset Edge Loop...").Item("mesh.slideEdge", "Slide Edge...").Item("mesh.targetWeld");
+            .Item("mesh.appendPolygon").Op("mesh.crease").Item("mesh.uncrease").Item("create.polygonTool").Item("mesh.insertLoop").Item("mesh.multiCut")
+            .Op("mesh.offsetEdgeLoop").Op("mesh.slideEdge").Item("mesh.targetWeld");
 
         Menus.Build(Add("Mesh Display"))
-            .Item("normals.average").Item("normals.conform").Item("mesh.reverse", "Reverse").Item("normals.setToFace").Item("normals.setVertexNormal").Separator()
-            .Item("mesh.harden", "Harden Edge").Item("mesh.soften", "Soften Edge").Item("normals.softenHardenAngle").Separator()
+            .Item("normals.average").Item("normals.conform").Item("mesh.reverse", "Reverse").Item("normals.setToFace").Op("normals.setVertexNormal").Separator()
+            .Item("mesh.harden", "Harden Edge").Item("mesh.soften", "Soften Edge").Op("normals.softenHardenAngle").Separator()
             .Item("normals.lock").Item("normals.unlock");
 
         Menus.Build(Add("UV"))
             .Item("windows.uvEditor").Separator()
             .Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
-            .Item("uv.unfold").Item("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
+            .Item("uv.unfold").Op("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
         Menus.Build(Add("Skeleton")).Item("skeleton.jointTool").Item("skeleton.insertJointTool").Separator().Item("skeleton.mirror").Item("skeleton.orient").Item("skeleton.orientApply");
         Menus.Build(Add("Skin")).Item("skin.bind").Item("skin.detach").Separator().Item("skin.paintTool").Item("skin.normalize").Item("skin.rebind");
 
@@ -740,7 +626,6 @@ public partial class Shell
             .Item("display.grid").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
-        Menus.Build(Add("Material")).Item("windows.materialEditor");
         Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor");
         Menus.Build(Add("Help")).Item("help.about");
     }

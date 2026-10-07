@@ -24,22 +24,21 @@ public partial class Shell
         Actions.Register("uv.planarZ", "Planar Mapping (Z)", () => Project("Planar Z", (m, f) => UvOps.PlanarProject(m, f, Vector3.UnitZ)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.cylindrical", "Cylindrical Mapping", () => Project("Cylindrical", UvOps.CylindricalProject), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.spherical", "Spherical Mapping", () => Project("Spherical", UvOps.SphericalProject), canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.unfold", "Unfold", UvUnfold, canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.layout", "Layout", UvLayout, canExecute: HasTargets, repeatable: true);
+        Actions.Register("uv.unfold", "Unfold", () => ForEachUvShells("Unfold", (m, t, shells) => UvOps.UnfoldRelax(m, t, shells)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.cut", "Cut UV Edges", () => CutSew(true), canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("uv.sew", "Sew UV Edges", () => CutSew(false), canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("uv.frameSelected", "Frame Selected (UV)", () => UvEditorWindow?.Canvas.FrameSelected(), canExecute: () => UvEditorWindow?.Visible ?? false);
         Actions.Register("uv.frameAll", "Frame All (UV)", () => UvEditorWindow?.Canvas.FrameAll(), canExecute: () => UvEditorWindow?.Visible ?? false);
         Actions.Register("uv.cycleBackground", "Cycle Background (UV)", () => UvEditorWindow?.CycleBackground(), canExecute: () => UvEditorWindow?.Visible ?? false);
-        Actions.Register("uv.flipU", "Flip U", () => Flip(true), canExecute: HasTargets, repeatable: true);
-        Actions.Register("uv.flipV", "Flip V", () => Flip(false), canExecute: HasTargets, repeatable: true);
+        Actions.Register("uv.flipU", "Flip U", () => ForEachUvPoints("Flip U", (m, t, p) => UvOps.Flip(m, t, p, true)), canExecute: HasTargets, repeatable: true);
+        Actions.Register("uv.flipV", "Flip V", () => ForEachUvPoints("Flip V", (m, t, p) => UvOps.Flip(m, t, p, false)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.autoSeams", "Auto Seam Select", AutoSeamSelect, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
         Actions.Register("uv.autoWrap", "Auto Wrap", AutoWrap, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
         RegisterUvActions2();
     }
 
     /// <summary>UV 브러시 옵션(반지름 px, 세기). Tools → Brush Options... 로 바꾸며 Ctrl+휠로 반지름 조절.</summary>
-    public OptionValues BrushOptions => OptWithDefaults("uv.brush", v => { v.Set("radius", 60f); v.Set("strength", 0.5f); });
+    public OptionValues BrushOptions => Options("uv.brush");
 
     private void ToggleUvEditor()
     {
@@ -83,7 +82,7 @@ public partial class Shell
         {
             case SelectMode.Uv: selPts.UnionWith(comps.Uvs.Where(p => p < topo.Points.Count)); break;
             case SelectMode.Edge:
-                foreach (int e in comps.Edges) { if (e >= m.EdgeCount || !m.Edges[e].Alive) continue; var ed = m.Edges[e]; foreach (int he in new[] { ed.He0, ed.He1 }) { if (he < 0) continue; selPts.Add(topo.HeToPoint[he]); selPts.Add(topo.HeToPoint[m.Hes[he].Next]); } }
+                foreach (int e in comps.Edges) AddEdgeUvPoints(m, topo, e, selPts);
                 break;
             case SelectMode.Vertex:
                 for (int p = 0; p < topo.Points.Count; p++) if (comps.Verts.Contains(topo.Points[p].Vertex)) selPts.Add(p);
@@ -145,56 +144,6 @@ public partial class Shell
         UvEditorWindow?.Canvas.Invalidate();
     }
 
-    private IEnumerable<int> ShellsForNode(SceneNode node, UvTopology topo, List<int> faces)
-    {
-        var sel = Document.Selection;
-        var m = node.Mesh!;
-        var shells = new HashSet<int>();
-        if (sel.Mode == SelectMode.Uv && sel.Components.TryGetValue(node.Id, out var comps) && comps.Uvs.Count > 0)
-        {
-            foreach (int p in comps.Uvs) if (p < topo.Points.Count) shells.Add(topo.Points[p].Shell);
-        }
-        else
-        {
-            foreach (int f in faces)
-            {
-                int start = m.Faces[f].HalfEdge, he = start;
-                do { shells.Add(topo.Points[topo.HeToPoint[he]].Shell); he = m.Hes[he].Next; } while (he != start);
-            }
-        }
-        return shells;
-    }
-
-    private void UvUnfold()
-    {
-        var targets = UvTargetNodes().ToList();
-        using (Document.Undo.BeginGroup("Unfold"))
-            foreach (var (node, faces) in targets)
-            {
-                Document.Undo.Push(new UvEditCommand("Unfold", node.Id, m =>
-                {
-                    var topo = UvTopology.Build(m);
-                    UvOps.UnfoldRelax(m, topo, ShellsForNode(node, topo, faces));
-                }));
-            }
-        UvEditorWindow?.Canvas.Invalidate();
-    }
-
-    private void UvLayout()
-    {
-        var targets = UvTargetNodes().ToList();
-        using (Document.Undo.BeginGroup("Layout"))
-            foreach (var (node, faces) in targets)
-            {
-                Document.Undo.Push(new UvEditCommand("Layout", node.Id, m =>
-                {
-                    var topo = UvTopology.Build(m);
-                    UvOps.Layout(m, topo, ShellsForNode(node, topo, faces));
-                }));
-            }
-        UvEditorWindow?.Canvas.Invalidate();
-    }
-
     /// <summary>현재 모드의 선택을 Cut/Sew 대상 엣지로: 엣지 그대로, 면은 바깥 경계 엣지, 정점/UV는 양 끝이 선택된 엣지(없으면 닿는 엣지).</summary>
     private int[] UvCutTargetEdges(PolyMesh mesh, ComponentSet comps, SelectMode mode)
     {
@@ -224,30 +173,6 @@ public partial class Shell
                 var edges = UvCutTargetEdges(mesh, sel.GetComponents(id), mode);
                 if (edges.Length == 0) continue;
                 Document.Undo.Push(new UvEditCommand(cut ? "Cut UV Edges" : "Sew UV Edges", id, m => { if (cut) UvOps.CutEdges(m, edges); else UvOps.SewEdges(m, edges); }));
-            }
-        UvEditorWindow?.Canvas.Invalidate();
-    }
-
-    private void Flip(bool flipU)
-    {
-        var targets = UvTargetNodes().ToList();
-        using (Document.Undo.BeginGroup(flipU ? "Flip U" : "Flip V"))
-            foreach (var (node, faces) in targets)
-            {
-                Document.Undo.Push(new UvEditCommand(flipU ? "Flip U" : "Flip V", node.Id, m =>
-                {
-                    var topo = UvTopology.Build(m);
-                    IEnumerable<int> pts;
-                    var sel = Document.Selection;
-                    if (sel.Mode == SelectMode.Uv && sel.Components.TryGetValue(node.Id, out var comps) && comps.Uvs.Count > 0) pts = comps.Uvs.Where(p => p < topo.Points.Count);
-                    else
-                    {
-                        var set = new HashSet<int>();
-                        foreach (int f in faces) { int start = m.Faces[f].HalfEdge, he = start; do { set.Add(topo.HeToPoint[he]); he = m.Hes[he].Next; } while (he != start); }
-                        pts = set;
-                    }
-                    UvOps.Flip(m, topo, pts, flipU);
-                }));
             }
         UvEditorWindow?.Canvas.Invalidate();
     }

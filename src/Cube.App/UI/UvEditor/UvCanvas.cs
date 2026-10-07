@@ -241,6 +241,23 @@ public partial class UvCanvas : Control
         return _checkerTex;
     }
 
+    private readonly List<GVec2> _polyBuf = new();
+    private readonly GVec2[] _triBuf = new GVec2[3];
+
+    /// <summary>모든 연속 변의 외적 부호가 같으면 볼록(삼각분할 없이 바로 그린다).</summary>
+    private static bool IsConvex(GVec2[] p)
+    {
+        int n = p.Length; bool pos = false, neg = false;
+        for (int i = 0; i < n; i++)
+        {
+            var a = p[i]; var b = p[(i + 1) % n]; var c = p[(i + 2) % n];
+            float cr = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
+            if (cr > 1e-6f) pos = true; else if (cr < -1e-6f) neg = true;
+            if (pos && neg) return false;
+        }
+        return true;
+    }
+
     public override void _Draw()
     {
         float s = CubeApp.Instance.UiScale;
@@ -296,29 +313,30 @@ public partial class UvCanvas : Control
                 if (!m.Faces[f].Alive || !FaceVisible(node.Id, f)) continue;
                 bool fsel = sel.Mode == SelectMode.Face && IsFaceSelected(node, f);
                 bool fhov = sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id && hf.Component == f;
-                var poly = new List<GVec2>();
+                _polyBuf.Clear();
                 int start = m.Faces[f].HalfEdge, he = start;
-                do { poly.Add(UvToPx(m.Hes[he].Uv0)); he = m.Hes[he].Next; } while (he != start);
-                if (poly.Count < 3) continue;
-                var arr = poly.ToArray();
+                do { _polyBuf.Add(UvToPx(m.Hes[he].Uv0)); he = m.Hes[he].Next; } while (he != start);
+                if (_polyBuf.Count < 3) continue;
+                var arr = _polyBuf.ToArray();
                 if (MathF.Abs(PolygonArea(arr)) < 0.5f) continue;
-                var tris = Geometry2D.TriangulatePolygon(arr);
-                if (tris.Length == 0) continue;
                 Color col;
                 if (fsel) col = new Color(1f, 0.55f, 0f, 0.35f);
                 else if (fhov) col = new Color(1f, 1f, 1f, 0.18f);
                 else if (ratio != null) { float rr = ratio[f]; col = rr < 1 ? new Color(1f, 0.3f, 0.3f, Math.Clamp((1 - rr) * 1.5f, 0.05f, 0.6f)) : new Color(0.3f, 0.5f, 1f, Math.Clamp((rr - 1) * 1.5f, 0.05f, 0.6f)); }
                 else if (_shaded) col = UvOps.FaceUvSignedArea(m, f) >= 0 ? new Color(0.35f, 0.55f, 1f, 0.25f) : new Color(1f, 0.35f, 0.35f, 0.25f);
                 else col = new Color(0.6f, 0.75f, 1f, 0.08f);
-                for (int t = 0; t + 2 < tris.Length; t += 3) DrawColoredPolygon(new[] { arr[tris[t]], arr[tris[t + 1]], arr[tris[t + 2]] }, col);
+                if (IsConvex(arr)) { DrawColoredPolygon(arr, col); continue; }
+                var tris = Geometry2D.TriangulatePolygon(arr);
+                for (int t = 0; t + 2 < tris.Length; t += 3) { _triBuf[0] = arr[tris[t]]; _triBuf[1] = arr[tris[t + 1]]; _triBuf[2] = arr[tris[t + 2]]; DrawColoredPolygon(_triBuf, col); }
             }
             // 엣지
             for (int e = 0; e < m.EdgeCount; e++)
             {
                 var ed = m.Edges[e];
                 if (!ed.Alive) continue;
-                foreach (int he in new[] { ed.He0, ed.He1 })
+                for (int k = 0; k < 2; k++)
                 {
+                    int he = k == 0 ? ed.He0 : ed.He1;
                     if (he < 0 || !FaceVisible(node.Id, m.Hes[he].Face)) continue;
                     var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
                     bool esel = sel.Mode == SelectMode.Edge && IsEdgeSelected(node, e);
@@ -606,8 +624,9 @@ public partial class UvCanvas : Control
         for (int e = 0; e < m.EdgeCount; e++)
         {
             var ed = m.Edges[e]; if (!ed.Alive) continue;
-            foreach (int he in new[] { ed.He0, ed.He1 })
+            for (int k = 0; k < 2; k++)
             {
+                int he = k == 0 ? ed.He0 : ed.He1;
                 if (he < 0) continue;
                 var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
                 float d = Geometry2D.GetClosestPointToSegment(px, a, b).DistanceTo(px);
@@ -644,8 +663,9 @@ public partial class UvCanvas : Control
             for (int e = 0; e < m.EdgeCount; e++)
             {
                 var ed = m.Edges[e]; if (!ed.Alive) continue;
-                foreach (int he in new[] { ed.He0, ed.He1 })
+                for (int k = 0; k < 2; k++)
                 {
+                    int he = k == 0 ? ed.He0 : ed.He1;
                     if (he < 0) continue;
                     float d = Geometry2D.GetClosestPointToSegment(px, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0)).DistanceTo(px);
                     if (d < best) { best = d; hit = (node, e); }
@@ -673,8 +693,9 @@ public partial class UvCanvas : Control
                     for (int e = 0; e < m.EdgeCount; e++)
                     {
                         var ed = m.Edges[e]; if (!ed.Alive) continue;
-                        foreach (int he in new[] { ed.He0, ed.He1 })
+                        for (int k = 0; k < 2; k++)
                         {
+                            int he = k == 0 ? ed.He0 : ed.He1;
                             if (he < 0) continue;
                             float d = Geometry2D.GetClosestPointToSegment(px, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0)).DistanceTo(px);
                             if (d <= 6 * s && d < best) { best = d; hit = new SelItem(node.Id, e); }
@@ -747,7 +768,7 @@ public partial class UvCanvas : Control
                     {
                         var ed = m.Edges[e]; if (!ed.Alive) continue;
                         bool inside = false;
-                        foreach (int he in new[] { ed.He0, ed.He1 }) { if (he < 0) continue; if (r.HasPoint(UvToPx(m.Hes[he].Uv0)) || r.HasPoint(UvToPx(m.Hes[m.Hes[he].Next].Uv0))) inside = true; }
+                        for (int k = 0; k < 2; k++) { int he = k == 0 ? ed.He0 : ed.He1; if (he < 0) continue; if (r.HasPoint(UvToPx(m.Hes[he].Uv0)) || r.HasPoint(UvToPx(m.Hes[m.Hes[he].Next].Uv0))) inside = true; }
                         if (inside) items.Add(new SelItem(node.Id, e));
                     }
                     break;

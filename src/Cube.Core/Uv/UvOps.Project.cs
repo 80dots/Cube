@@ -161,5 +161,4 @@ public static partial class UvOps
     }
 
     /// <summary>Create Shell (Grid): 선택 면을 셸로 만들고 Contour Stretch처럼 0..1 격자에 펼친다.</summary>
-    public static void CreateShellGrid(PolyMesh m, IEnumerable<int> faces) => ContourStretch(m, faces);
 }
