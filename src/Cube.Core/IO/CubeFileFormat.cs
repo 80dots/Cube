@@ -25,6 +25,15 @@ public static class CubeFileFormat
         [JsonPropertyName("seams")] public int[][] Seams { get; set; } = Array.Empty<int[]>();          // [a,b] UV 심
         [JsonPropertyName("creases")] public float[][]? Creases { get; set; }                            // [a,b,crease]
         [JsonPropertyName("lockedNormals")] public float[][]? LockedNormals { get; set; }                // [v,x,y,z]
+        [JsonPropertyName("pinnedUvs")] public int[][]? PinnedUvs { get; set; }                          // 면별 핀된 코너 인덱스
+        [JsonPropertyName("uvSets")] public UvSetDto[]? UvSets { get; set; }
+        [JsonPropertyName("currentUvSet")] public int CurrentUvSet { get; set; }
+    }
+
+    private sealed class UvSetDto
+    {
+        [JsonPropertyName("name")] public string Name { get; set; } = "map1";
+        [JsonPropertyName("uvs")] public float[][] Uvs { get; set; } = Array.Empty<float[]>();          // 면별 코너 uv
     }
 
     private sealed class SkinDto
@@ -250,6 +259,33 @@ public static class CubeFileFormat
         for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Crease > 0f) { var (a, b) = m.EdgeVertices(e); creases.Add(new[] { a, b, m.Edges[e].Crease }); }
         if (creases.Count > 0) dto.Creases = creases.ToArray();
         if (m.LockedNormals.Count > 0) dto.LockedNormals = m.LockedNormals.Select(kv => new[] { kv.Key, kv.Value.X, kv.Value.Y, kv.Value.Z }).ToArray();
+        // 핀: 면별 코너 인덱스
+        var pins = new List<int[]>(); bool anyPin = false;
+        for (int f = 0; f < m.FaceCount; f++)
+        {
+            m.GetFaceHalfEdges(f, loop);
+            var p = new List<int>(); for (int i = 0; i < loop.Count; i++) if (m.Hes[loop[i]].PinUv) p.Add(i);
+            if (p.Count > 0) anyPin = true;
+            pins.Add(p.ToArray());
+        }
+        if (anyPin) dto.PinnedUvs = pins.ToArray();
+        if (m.UvSets.Count > 1)
+        {
+            m.StoreCurrentUvs();
+            dto.CurrentUvSet = m.CurrentUvSet;
+            dto.UvSets = m.UvSets.Select(set =>
+            {
+                var per = new List<float[]>();
+                for (int f = 0; f < m.FaceCount; f++)
+                {
+                    m.GetFaceHalfEdges(f, loop);
+                    var uv = new float[loop.Count * 2];
+                    for (int i = 0; i < loop.Count; i++) { var v = loop[i] < set.Uvs.Length ? set.Uvs[loop[i]] : Vector2.Zero; uv[i * 2] = v.X; uv[i * 2 + 1] = v.Y; }
+                    per.Add(uv);
+                }
+                return new UvSetDto { Name = set.Name, Uvs = per.ToArray() };
+            }).ToArray();
+        }
         return dto;
     }
 
@@ -289,6 +325,32 @@ public static class CubeFileFormat
             }
         if (dto.LockedNormals != null)
             foreach (var l in dto.LockedNormals) if (l.Length >= 4) m.LockedNormals[(int)l[0]] = new Vector3(l[1], l[2], l[3]);
+        if (dto.PinnedUvs != null)
+        {
+            var loop = new List<int>();
+            for (int f = 0; f < m.FaceCount && f < dto.PinnedUvs.Length; f++)
+            {
+                m.GetFaceHalfEdges(f, loop);
+                foreach (int ci in dto.PinnedUvs[f]) if (ci >= 0 && ci < loop.Count) { var h = m.Hes[loop[ci]]; h.PinUv = true; m.Hes[loop[ci]] = h; }
+            }
+        }
+        if (dto.UvSets != null && dto.UvSets.Length > 0)
+        {
+            var loop = new List<int>();
+            foreach (var sd in dto.UvSets)
+            {
+                var arr = new Vector2[m.HalfEdgeCount];
+                for (int f = 0; f < m.FaceCount && f < sd.Uvs.Length; f++)
+                {
+                    m.GetFaceHalfEdges(f, loop);
+                    var uv = sd.Uvs[f];
+                    for (int i = 0; i < loop.Count && i * 2 + 1 < uv.Length; i++) arr[loop[i]] = new Vector2(uv[i * 2], uv[i * 2 + 1]);
+                }
+                m.UvSets.Add(new UvSet { Name = sd.Name, Uvs = arr });
+            }
+            m.CurrentUvSet = Math.Clamp(dto.CurrentUvSet, 0, m.UvSets.Count - 1);
+            // 코너 UV(dto.Uvs)는 현재 세트와 같다
+        }
         MeshNormals.Recompute(m);
         m.BumpTopology();
         return m;

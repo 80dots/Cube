@@ -10,6 +10,8 @@ public sealed class UvPoint
     public readonly List<int> HalfEdges = new();
     public Vector2 Uv;
     public int Shell = -1;
+    /// <summary>코너 중 하나라도 PinUv면 고정.</summary>
+    public bool Pinned;
 }
 
 /// <summary>메시의 UV 점/셸 구조. 위상이나 UV가 바뀌면 다시 만든다.</summary>
@@ -55,6 +57,7 @@ public sealed class UvTopology
                 t.Points.Add(new UvPoint { Vertex = m.Hes[h].Vertex, Uv = m.Hes[h].Uv0 });
             }
             t.Points[idx].HalfEdges.Add(h);
+            if (m.Hes[h].PinUv) t.Points[idx].Pinned = true;
             t.HeToPoint[h] = idx;
         }
         // 셸: UV 점이 연결된(같은 면에 속한) 성분
@@ -92,17 +95,17 @@ public sealed class UvTopology
 }
 
 /// <summary>UV 편집 연산. 모두 코너 UV(HalfEdge.Uv0)와 엣지 심 플래그만 바꾼다(위상 불변).</summary>
-public static class UvOps
+public static partial class UvOps
 {
-    private static void SetUv(PolyMesh m, int he, Vector2 uv) { var h = m.Hes[he]; h.Uv0 = uv; m.Hes[he] = h; }
+    internal static void SetUv(PolyMesh m, int he, Vector2 uv) { var h = m.Hes[he]; h.Uv0 = uv; m.Hes[he] = h; }
 
-    private static IEnumerable<int> FaceHalfEdges(PolyMesh m, int f)
+    internal static IEnumerable<int> FaceHalfEdges(PolyMesh m, int f)
     {
         int start = m.Faces[f].HalfEdge, he = start;
         do { yield return he; he = m.Hes[he].Next; } while (he != start);
     }
 
-    private static (Vector2 min, Vector2 max) Bounds(IEnumerable<Vector2> pts)
+    public static (Vector2 min, Vector2 max) Bounds(IEnumerable<Vector2> pts)
     {
         var min = new Vector2(float.MaxValue); var max = new Vector2(float.MinValue);
         foreach (var p in pts) { min = Vector2.Min(min, p); max = Vector2.Max(max, p); }
@@ -227,7 +230,7 @@ public static class UvOps
     }
 
     /// <summary>투영된 면 집합의 경계 엣지를 심으로 표시(기존 UV와 분리). 내부 엣지의 심은 해제.</summary>
-    private static void MarkSeamsAroundSelection(PolyMesh m, List<int> faces)
+    internal static void MarkSeamsAroundSelection(PolyMesh m, List<int> faces)
     {
         var set = new HashSet<int>(faces);
         foreach (int f in faces)
@@ -356,9 +359,13 @@ public static class UvOps
     /// Unfold(이완): 셸마다 각 삼각형이 3D 모양(프로크루스테스 맞춤)을 따르도록 반복해서 UV 점을 당긴다.
     /// 초기값은 현재 UV. 저폴리용 단순 ARAP 근사.
     /// </summary>
-    public static void UnfoldRelax(PolyMesh m, UvTopology topo, IEnumerable<int> shells, int iterations = 60)
+    public static void UnfoldRelax(PolyMesh m, UvTopology topo, IEnumerable<int> shells, int iterations = 60) => UnfoldRelax(m, topo, shells, iterations, null);
+
+    /// <summary>pinned(UV 점 ID)와 Pin된 점은 움직이지 않는다.</summary>
+    public static void UnfoldRelax(PolyMesh m, UvTopology topo, IEnumerable<int> shells, int iterations, HashSet<int>? pinned)
     {
         var shellSet = new HashSet<int>(shells);
+        bool IsPinned(int p) => topo.Points[p].Pinned || (pinned != null && pinned.Contains(p));
         var render = MeshTessellator.Build(m);
         // 셸별 삼각형 목록: (uv점 3개, 3D 모양을 2D로 펼친 로컬 좌표 3개)
         var tris = new List<(int[] pts, Vector2[] local)>();
@@ -410,18 +417,29 @@ public static class UvOps
                     acc[pts[i]] += target; cnt[pts[i]]++;
                 }
             }
-            for (int i = 0; i < pos.Length; i++) if (cnt[i] > 0) pos[i] = acc[i] / cnt[i];
+            for (int i = 0; i < pos.Length; i++) if (cnt[i] > 0 && !IsPinned(i)) pos[i] = acc[i] / cnt[i];
         }
-        for (int i = 0; i < pos.Length; i++) if (shellSet.Contains(topo.Points[i].Shell)) SetPointUv(m, topo, i, pos[i]);
+        for (int i = 0; i < pos.Length; i++) if (shellSet.Contains(topo.Points[i].Shell) && !IsPinned(i)) SetPointUv(m, topo, i, pos[i]);
     }
 
-    private static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
+    public static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
 
     /// <summary>Layout: 셸들을 0..1 사각형에 선반(shelf) 방식으로 패킹한다. 종횡비 유지, 간격 spacing.</summary>
-    public static void Layout(PolyMesh m, UvTopology topo, IEnumerable<int> shells, float spacing = 0.01f)
+    public static void Layout(PolyMesh m, UvTopology topo, IEnumerable<int> shells, float spacing = 0.01f) => Layout(m, topo, shells, spacing, false, Vector2.Zero, 1f);
+
+    /// <summary>Layout 옵션: rotateToFit = 셸을 세워(높이 ≤ 폭) 넣기, tileOrigin/tileSize = 대상 타일(UDIM).</summary>
+    public static void Layout(PolyMesh m, UvTopology topo, IEnumerable<int> shells, float spacing, bool rotateToFit, Vector2 tileOrigin, float tileSize)
     {
         var shellList = shells.Distinct().ToList();
         if (shellList.Count == 0) return;
+        if (rotateToFit)
+            foreach (int s in shellList)
+            {
+                var pts = topo.PointsInShell(s).ToList();
+                if (pts.Count == 0) continue;
+                var (mn, mx) = Bounds(pts.Select(p => topo.Points[p].Uv));
+                if (mx.Y - mn.Y > mx.X - mn.X) TransformPoints(m, topo, pts, Matrix3x2.CreateRotation(-MathF.PI / 2f, (mn + mx) * 0.5f));
+            }
         var boxes = new List<(int shell, Vector2 min, Vector2 size)>();
         foreach (int s in shellList)
         {
@@ -454,7 +472,7 @@ public static class UvOps
         {
             if (!placed.TryGetValue(shell, out var origin)) continue;
             foreach (int p in topo.PointsInShell(shell))
-                SetPointUv(m, topo, p, origin + (topo.Points[p].Uv - min) * scale);
+                SetPointUv(m, topo, p, tileOrigin + (origin + (topo.Points[p].Uv - min) * scale) * tileSize);
         }
     }
 

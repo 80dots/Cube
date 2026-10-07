@@ -37,7 +37,7 @@ public static partial class MeshOps
     }
 
     /// <summary>4가 내부 정점 v에서 e와 면을 공유하지 않는 유일한 엣지. 없거나 모호하면 -1.</summary>
-    private static int OppositeEdgeAtVertex(PolyMesh m, int v, int e)
+    public static int OppositeEdgeAtVertex(PolyMesh m, int v, int e)
     {
         var edges = new List<int>(); m.GetVertexEdges(v, edges);
         if (edges.Count != 4) return -1;

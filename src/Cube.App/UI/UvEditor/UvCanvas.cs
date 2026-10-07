@@ -12,12 +12,16 @@ using NVec2 = System.Numerics.Vector2;
 
 namespace Cube.App.UI.UvEditor;
 
-public enum UvBackground { None, Grid, UvTexture, Mapped }
+public enum UvBackground { None, Grid, UvTexture, Mapped, Checker }
+
+/// <summary>UV 편집기 캔버스 툴(Maya UV Editor Tools 메뉴). None = 선택/조작기.</summary>
+public enum UvCanvasTool { None, Tweak, Grab, Smooth, Pinch, Smear, PinBrush, CutSew, MoveShell }
 
 /// <summary>
 /// UV 편집 캔버스. 선택된 오브젝트들의 UV를 0..1 그리드 위에 그리고, 뷰포트와 같은 선택 UI(클릭/마키/Shift·Ctrl 수식어/호버)와
-/// 2D 조작기(W 이동 / E 회전 / R 스케일)를 제공한다. Island 모드는 심으로 완전히 분리된 UV 섬 단위로 선택한다.
-/// 파이 메뉴 정책은 뷰포트와 같다: RMB = 모드, Shift+RMB = Edit(UV 기능), Ctrl+RMB = Select(변환).
+/// 2D 조작기(W 이동 / E 회전 / R 스케일), 브러시·Tweak·Cut/Sew·Move Shell 툴을 제공한다. Island 모드는 심으로 분리된 UV 섬 단위 선택.
+/// 표시 옵션: Shaded(앞/뒤 색), Distortion, Texture Borders, Isolate Select, Grid, UDIM 타일, 이미지 Dim/Unfiltered/Pixel Snap, Checker 배경, Pin(파랑), 통계 HUD.
+/// 파이 메뉴 정책은 뷰포트와 같다: RMB = 모드, Shift+RMB = Edit(UV 기능, 서브 파이), Ctrl+RMB = Select(변환).
 /// 내비게이션: Alt+MMB 팬, Alt+RMB·휠 줌, F 프레임, A 전체.
 /// </summary>
 public partial class UvCanvas : Control
@@ -25,16 +29,34 @@ public partial class UvCanvas : Control
     private Shell _shell = null!;
     private UvBackground _background = UvBackground.UvTexture;
     public UvBackground Background { get => _background; set { _background = value; QueueRedraw(); } }
-    /// <summary>Island 선택 모드(UV 모드의 변형: 점 하나를 집으면 같은 섬 전체).</summary>
     public bool IslandMode { get; private set; }
     public event Action? IslandModeChanged;
     private PieMenu _pie = null!;
-    private float _zoom = 400f;          // UV 1단위 = 픽셀
-    private GVec2 _origin;               // uv (0,0)의 캔버스 픽셀
+    private float _zoom = 400f;
+    private GVec2 _origin;
     private Texture2D? _gridTex;
+    private ImageTexture? _checkerTex; private int _checkerTexSize = -1;
+
+    // 표시 옵션
+    private bool _shaded, _distortion, _texBorders = true, _showStats, _gridLines = true, _tiles, _dim = true, _unfiltered, _pixelSnap;
+    public bool Shaded { get => _shaded; set { _shaded = value; QueueRedraw(); } }
+    public bool Distortion { get => _distortion; set { _distortion = value; QueueRedraw(); } }
+    public bool TextureBorders { get => _texBorders; set { _texBorders = value; QueueRedraw(); } }
+    public bool ShowStats { get => _showStats; set { _showStats = value; QueueRedraw(); } }
+    public bool ShowGridLines { get => _gridLines; set { _gridLines = value; QueueRedraw(); } }
+    public bool ShowTiles { get => _tiles; set { _tiles = value; QueueRedraw(); } }
+    public bool DimImage { get => _dim; set { _dim = value; QueueRedraw(); } }
+    public bool Unfiltered { get => _unfiltered; set { _unfiltered = value; TextureFilter = value ? TextureFilterEnum.Nearest : TextureFilterEnum.Linear; QueueRedraw(); } }
+    public bool PixelSnap { get => _pixelSnap; set { _pixelSnap = value; QueueRedraw(); } }
+    public int CheckerSize { get; private set; } = 8;
+    public void SetCheckerSize(int n) { CheckerSize = Math.Clamp(n, 1, 256); QueueRedraw(); }
+    private Dictionary<NodeId, HashSet<int>>? _isolate;
+    public bool Isolated => _isolate != null;
+    private UvCanvasTool _tool;
+    public UvCanvasTool Tool { get => _tool; set { _tool = value; _brushPos = null; QueueRedraw(); _shell.HelpLine.Text = ToolHelp(value); } }
 
     private readonly Dictionary<NodeId, UvTopology> _topos = new();
-    private bool _dragging;              // 변형 드래그 중 위상 재빌드 금지
+    private bool _dragging;
 
     // 입력 상태
     private MouseButton _navButton = MouseButton.None;
@@ -51,9 +73,11 @@ public partial class UvCanvas : Control
     private NVec2 _pivotUv;
     private bool _hasPivot;
 
-    // 변형 드래그
+    // 변형 드래그(조작기/Tweak/브러시/셸 이동 공용)
     private readonly List<(NodeId node, UvTopology topo, int[] points, NVec2[] initial, UvEditCommand cmd)> _xform = new();
     private string _xformTool = "";
+    private GVec2? _brushPos; private GVec2 _brushLast; private bool _brushing; private bool _cutSewPainting; private bool _cutSewSew;
+    private readonly HashSet<(NodeId, int)> _cutSewDone = new();
 
     public void Setup(Shell shell)
     {
@@ -76,18 +100,18 @@ public partial class UvCanvas : Control
 
     public override void _ExitTree()
     {
-        if (_shell != null) { _shell.Document.Changed -= OnDocChanged; _shell.Document.Selection.Changed -= QueueRedraw; _shell.Document.Selection.ModeChanged -= QueueRedraw; }
+        if (_shell != null) { _shell.Document.Changed -= OnDocChanged; _shell.Document.Selection.Changed -= QueueRedraw; }
     }
 
     private void OnDocChanged(DocChange c)
     {
         if (_dragging) return;
-        if (c.Kind is ChangeKind.MeshTopology or ChangeKind.MeshAttributes or ChangeKind.NodeRemoved or ChangeKind.Reset) _topos.Remove(c.Node);
-        if (c.Kind == ChangeKind.Reset) _topos.Clear();
+        if (c.Kind is ChangeKind.MeshTopology or ChangeKind.MeshAttributes or ChangeKind.NodeRemoved or ChangeKind.Reset) { _topos.Remove(c.Node); _statsCache.Remove(c.Node); _distortionCache.Remove(c.Node); }
+        if (c.Kind == ChangeKind.Reset) { _topos.Clear(); _isolate = null; }
         QueueRedraw();
     }
 
-    public void Invalidate() { _topos.Clear(); QueueRedraw(); }
+    public void Invalidate() { _topos.Clear(); _statsCache.Clear(); _distortionCache.Clear(); QueueRedraw(); }
 
     public void SetIslandMode(bool on)
     {
@@ -97,9 +121,21 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    private static string ToolHelp(UvCanvasTool t) => t switch
+    {
+        UvCanvasTool.Tweak => "Tweak UV: drag a UV point (or the selection) directly.",
+        UvCanvasTool.Grab => "Grab UV: drag to move UVs inside the brush. Ctrl+wheel changes the radius (Tools > Brush Options...).",
+        UvCanvasTool.Smooth => "Smooth UV: drag to relax UVs inside the brush (pinned UVs stay).",
+        UvCanvasTool.Pinch => "Pinch UV: drag to pull UVs toward the brush center.",
+        UvCanvasTool.Smear => "Smear UV: drag to push UVs along the stroke.",
+        UvCanvasTool.PinBrush => "Pin UV: drag to pin UVs (Ctrl = unpin).",
+        UvCanvasTool.CutSew => "Cut/Sew UV: click or drag over edges to cut, Ctrl to sew.",
+        UvCanvasTool.MoveShell => "Move UV Shell: drag a shell to move it.",
+        _ => "UV Editor: W/E/R manipulators, RMB mode pie, Shift+RMB edit pie, Ctrl+RMB select pie.",
+    };
+
     // ---------------------------------------------------------------- 데이터
 
-    /// <summary>UV 편집 대상 노드: 선택된 오브젝트 + 컴포넌트가 선택된 노드.</summary>
     public IEnumerable<SceneNode> TargetNodes()
     {
         var sel = _shell.Document.Selection;
@@ -114,6 +150,23 @@ public partial class UvCanvas : Control
         return t;
     }
 
+    private bool FaceVisible(NodeId node, int f) => _isolate == null || (_isolate.TryGetValue(node, out var set) && set.Contains(f));
+
+    /// <summary>Isolate Select: 현재 선택(면/UV 점이 속한 면)만 표시 ↔ 해제.</summary>
+    public void ToggleIsolate()
+    {
+        if (_isolate != null) { _isolate = null; QueueRedraw(); return; }
+        var map = new Dictionary<NodeId, HashSet<int>>();
+        foreach (var node in TargetNodes())
+        {
+            var topo = Topo(node); var pts = SelectedPoints(node);
+            if (pts.Count == 0) continue;
+            map[node.Id] = new HashSet<int>(UvOps.FacesOfPoints(node.Mesh!, topo, pts, all: false));
+        }
+        _isolate = map.Count > 0 ? map : null;
+        QueueRedraw();
+    }
+
     // ---------------------------------------------------------------- 좌표
 
     public GVec2 UvToPx(NVec2 uv) => _origin + new GVec2(uv.X, -uv.Y) * _zoom;
@@ -122,10 +175,8 @@ public partial class UvCanvas : Control
     public void FrameAll()
     {
         if (Size.X < 10 || Size.Y < 10) return;
-        var targets = TargetNodes().ToList();
         var min = new NVec2(0, 0); var max = new NVec2(1, 1);
-        foreach (var n in targets)
-            foreach (var p in Topo(n).Points) { min = NVec2.Min(min, p.Uv); max = NVec2.Max(max, p.Uv); }
+        foreach (var n in TargetNodes()) foreach (var p in Topo(n).Points) { min = NVec2.Min(min, p.Uv); max = NVec2.Max(max, p.Uv); }
         FrameRect(min, max);
     }
 
@@ -152,66 +203,43 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 선택 도우미
 
-    /// <summary>현재 모드의 선택을 UV 점 집합으로 변환(UV 모드: 그대로, 엣지/면: 코너의 UV 점, 오브젝트: 전체).</summary>
-    public HashSet<int> SelectedPoints(SceneNode node)
-    {
-        var sel = _shell.Document.Selection;
-        var set = new HashSet<int>();
-        if (!sel.Components.TryGetValue(node.Id, out var comps))
-        {
-            if (sel.Mode == SelectMode.Object && sel.IsObjectSelected(node.Id)) for (int i = 0; i < Topo(node).Points.Count; i++) set.Add(i);
-            return set;
-        }
-        var topo = Topo(node); var m = node.Mesh!;
-        switch (sel.Mode)
-        {
-            case SelectMode.Uv: set.UnionWith(comps.Uvs.Where(i => i < topo.Points.Count)); break;
-            case SelectMode.Vertex:
-                for (int i = 0; i < topo.Points.Count; i++) if (comps.Verts.Contains(topo.Points[i].Vertex)) set.Add(i);
-                break;
-            case SelectMode.Edge:
-                foreach (int e in comps.Edges)
-                {
-                    if (e >= m.EdgeCount || !m.Edges[e].Alive) continue;
-                    var ed = m.Edges[e];
-                    foreach (int he in new[] { ed.He0, ed.He1 }) { if (he < 0) continue; set.Add(topo.HeToPoint[he]); set.Add(topo.HeToPoint[m.Hes[he].Next]); }
-                }
-                break;
-            case SelectMode.Face:
-                foreach (int f in comps.Faces)
-                {
-                    if (f >= m.FaceCount || !m.Faces[f].Alive) continue;
-                    int start = m.Faces[f].HalfEdge, he = start;
-                    do { set.Add(topo.HeToPoint[he]); he = m.Hes[he].Next; } while (he != start);
-                }
-                break;
-            case SelectMode.Object:
-                if (sel.IsObjectSelected(node.Id)) for (int i = 0; i < topo.Points.Count; i++) set.Add(i);
-                break;
-        }
-        return set;
-    }
+    public HashSet<int> SelectedPoints(SceneNode node) => _shell.UvPointSelection(node, Topo(node));
 
     private bool IsEdgeSelected(SceneNode node, int e) => _shell.Document.Selection.IsComponentSelected(node.Id, SelectMode.Edge, e);
     private bool IsFaceSelected(SceneNode node, int f) => _shell.Document.Selection.IsComponentSelected(node.Id, SelectMode.Face, f);
 
-    /// <summary>선택 UV 점들의 중심(UV 공간). 없으면 false.</summary>
     private bool ComputePivot(out NVec2 pivot)
     {
         var sum = NVec2.Zero; int n = 0;
-        foreach (var node in TargetNodes())
-        {
-            var topo = Topo(node);
-            foreach (int p in SelectedPoints(node)) { sum += topo.Points[p].Uv; n++; }
-        }
+        foreach (var node in TargetNodes()) { var topo = Topo(node); foreach (int p in SelectedPoints(node)) { sum += topo.Points[p].Uv; n++; } }
         pivot = n > 0 ? sum / n : NVec2.Zero;
         return n > 0;
     }
 
-    private bool GizmoActive => _shell.Tools.Current?.Id is "move" or "rotate" or "scale";
+    private bool GizmoActive => _tool == UvCanvasTool.None && _shell.Tools.Current?.Id is "move" or "rotate" or "scale";
     private float GizmoLen => 70f * CubeApp.Instance.UiScale;
 
     // ---------------------------------------------------------------- 그리기
+
+    private readonly Dictionary<NodeId, (int version, float[] ratio)> _distortionCache = new();
+    private readonly Dictionary<NodeId, (int version, (int shells, int overlapping, int reversed, float usage) stats)> _statsCache = new();
+
+    private Texture2D? CheckerTexture()
+    {
+        int n = Math.Max(CheckerSize, 1);
+        if (_checkerTex != null && _checkerTexSize == n) return _checkerTex;
+        int px = Math.Max(8, 512 / n) * n;
+        var img = Image.CreateEmpty(px, px, false, Image.Format.Rgb8);
+        int cell = px / n;
+        for (int y = 0; y < px; y++)
+            for (int x = 0; x < px; x++)
+            {
+                bool dark = ((x / cell) + (y / cell)) % 2 == 0;
+                img.SetPixel(x, y, dark ? new Color(0.35f, 0.35f, 0.35f) : new Color(0.75f, 0.75f, 0.75f));
+            }
+        _checkerTex = ImageTexture.CreateFromImage(img); _checkerTexSize = n;
+        return _checkerTex;
+    }
 
     public override void _Draw()
     {
@@ -219,31 +247,30 @@ public partial class UvCanvas : Control
         DrawRect(new Rect2(GVec2.Zero, Size), MathConvert.Rgb(0x2b2b2b));
         var p0 = UvToPx(new NVec2(0, 1)); var p1 = UvToPx(new NVec2(1, 0));
         var unit = new Rect2(p0, p1 - p0);
-        switch (_background)
-        {
-            case UvBackground.UvTexture:
-                if (_gridTex != null) DrawTextureRect(_gridTex, unit, false, new Color(1, 1, 1, 0.28f));
-                else DrawRect(unit, MathConvert.Rgb(0x3a3a3a));
-                break;
-            case UvBackground.Mapped:
+        float imgAlpha = _dim ? 0.28f : 1f;
+        int tileMin = _tiles ? -1 : 0, tileMax = _tiles ? 2 : 0;
+        for (int tx = tileMin; tx <= tileMax; tx++)
+            for (int ty = tileMin; ty <= tileMax; ty++)
+            {
+                var r = new Rect2(UvToPx(new NVec2(tx, ty + 1)), unit.Size);
+                bool home = tx == 0 && ty == 0;
+                switch (_background)
                 {
-                    var tex = MappedTexture();
-                    if (tex != null) DrawTextureRect(tex, unit, false, Colors.White);
-                    else DrawRect(unit, MathConvert.Rgb(0x3a3a3a));
-                    break;
+                    case UvBackground.UvTexture: if (_gridTex != null) DrawTextureRect(_gridTex, r, false, new Color(1, 1, 1, home ? imgAlpha : imgAlpha * 0.5f)); else DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break;
+                    case UvBackground.Checker: { var ct = CheckerTexture(); if (ct != null) DrawTextureRect(ct, r, false, new Color(1, 1, 1, home ? imgAlpha + 0.2f : imgAlpha * 0.5f)); break; }
+                    case UvBackground.Mapped: { var tex = MappedTexture(); if (tex != null) DrawTextureRect(tex, r, false, new Color(1, 1, 1, home ? (_dim ? 0.7f : 1f) : 0.35f)); else DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break; }
+                    case UvBackground.Grid: DrawRect(r, MathConvert.Rgb(0x333333)); break;
                 }
-            case UvBackground.Grid:
-                DrawRect(unit, MathConvert.Rgb(0x333333));
-                for (int i = 0; i <= 10; i++)
-                {
-                    float t = i / 10f;
-                    var col = i % 5 == 0 ? MathConvert.Rgb(0x6a6a6a) : MathConvert.Rgb(0x4a4a4a);
-                    DrawLine(UvToPx(new NVec2(t, 0)), UvToPx(new NVec2(t, 1)), col, 1 * s);
-                    DrawLine(UvToPx(new NVec2(0, t)), UvToPx(new NVec2(1, t)), col, 1 * s);
-                }
-                break;
-        }
-        DrawRect(unit, MathConvert.Rgb(0x9a9a9a), false, 1 * s);
+                if (_gridLines && (_background == UvBackground.Grid || _background == UvBackground.None))
+                    for (int i = 0; i <= 10; i++)
+                    {
+                        float t = i / 10f; var col = i % 5 == 0 ? MathConvert.Rgb(0x6a6a6a) : MathConvert.Rgb(0x4a4a4a);
+                        DrawLine(UvToPx(new NVec2(tx + t, ty)), UvToPx(new NVec2(tx + t, ty + 1)), col, 1 * s);
+                        DrawLine(UvToPx(new NVec2(tx, ty + t)), UvToPx(new NVec2(tx + 1, ty + t)), col, 1 * s);
+                    }
+                DrawRect(r, home ? MathConvert.Rgb(0x9a9a9a) : MathConvert.Rgb(0x555555), false, 1 * s);
+                if (_tiles && tx >= 0 && ty >= 0) DrawString(GetThemeDefaultFont(), r.Position + new GVec2(4 * s, 14 * s), (1001 + tx + ty * 10).ToString(), HorizontalAlignment.Left, -1, (int)(11 * s), MayaTheme.TextDim);
+            }
 
         var sel = _shell.Document.Selection;
         var font = GetThemeDefaultFont(); int fs = (int)(11 * s);
@@ -257,10 +284,16 @@ public partial class UvCanvas : Control
         {
             var m = node.Mesh!; var topo = Topo(node);
             var selPts = SelectedPoints(node);
+            float[]? ratio = null;
+            if (_distortion)
+            {
+                if (!_distortionCache.TryGetValue(node.Id, out var dc) || dc.version != m.GeometryVersion) { dc = (m.GeometryVersion, UvOps.DistortionPerFace(m)); _distortionCache[node.Id] = dc; }
+                ratio = dc.ratio;
+            }
             // 면 틴트
             for (int f = 0; f < m.FaceCount; f++)
             {
-                if (!m.Faces[f].Alive) continue;
+                if (!m.Faces[f].Alive || !FaceVisible(node.Id, f)) continue;
                 bool fsel = sel.Mode == SelectMode.Face && IsFaceSelected(node, f);
                 bool fhov = sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id && hf.Component == f;
                 var poly = new List<GVec2>();
@@ -268,12 +301,16 @@ public partial class UvCanvas : Control
                 do { poly.Add(UvToPx(m.Hes[he].Uv0)); he = m.Hes[he].Next; } while (he != start);
                 if (poly.Count < 3) continue;
                 var arr = poly.ToArray();
-                if (MathF.Abs(PolygonArea(arr)) < 0.5f) continue; // 퇴화 면(원통 캡 등)은 채우지 않는다
+                if (MathF.Abs(PolygonArea(arr)) < 0.5f) continue;
                 var tris = Geometry2D.TriangulatePolygon(arr);
                 if (tris.Length == 0) continue;
-                var col = fsel ? new Color(1f, 0.55f, 0f, 0.35f) : fhov ? new Color(1f, 1f, 1f, 0.18f) : new Color(0.6f, 0.75f, 1f, 0.08f);
-                for (int t = 0; t + 2 < tris.Length; t += 3)
-                    DrawColoredPolygon(new[] { arr[tris[t]], arr[tris[t + 1]], arr[tris[t + 2]] }, col);
+                Color col;
+                if (fsel) col = new Color(1f, 0.55f, 0f, 0.35f);
+                else if (fhov) col = new Color(1f, 1f, 1f, 0.18f);
+                else if (ratio != null) { float rr = ratio[f]; col = rr < 1 ? new Color(1f, 0.3f, 0.3f, Math.Clamp((1 - rr) * 1.5f, 0.05f, 0.6f)) : new Color(0.3f, 0.5f, 1f, Math.Clamp((rr - 1) * 1.5f, 0.05f, 0.6f)); }
+                else if (_shaded) col = UvOps.FaceUvSignedArea(m, f) >= 0 ? new Color(0.35f, 0.55f, 1f, 0.25f) : new Color(1f, 0.35f, 0.35f, 0.25f);
+                else col = new Color(0.6f, 0.75f, 1f, 0.08f);
+                for (int t = 0; t + 2 < tris.Length; t += 3) DrawColoredPolygon(new[] { arr[tris[t]], arr[tris[t + 1]], arr[tris[t + 2]] }, col);
             }
             // 엣지
             for (int e = 0; e < m.EdgeCount; e++)
@@ -282,23 +319,26 @@ public partial class UvCanvas : Control
                 if (!ed.Alive) continue;
                 foreach (int he in new[] { ed.He0, ed.He1 })
                 {
-                    if (he < 0) continue;
+                    if (he < 0 || !FaceVisible(node.Id, m.Hes[he].Face)) continue;
                     var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
                     bool esel = sel.Mode == SelectMode.Edge && IsEdgeSelected(node, e);
                     bool ehov = sel.Mode == SelectMode.Edge && _hover is { } hv && hv.Node == node.Id && hv.Component == e;
-                    // 심(Cut된 엣지)은 굵은 노란색, 선택 엣지는 주황색, 호버는 흰색
-                    var col = ehov ? MeshView.Hover : esel ? MeshView.EdgeSelected : ed.Seam ? MathConvert.Rgb(0xffe034) : MathConvert.Rgb(0xdddddd);
-                    DrawLine(a, b, col, (esel || ehov ? 2.5f : ed.Seam ? 2.5f : 1f) * s, true);
+                    bool border = ed.Seam || ed.He1 < 0;
+                    var col = ehov ? MeshView.Hover : esel ? MeshView.EdgeSelected : border && _texBorders ? MathConvert.Rgb(0xffe034) : MathConvert.Rgb(0xdddddd);
+                    DrawLine(a, b, col, (esel || ehov ? 2.5f : border && _texBorders ? 2.5f : 1f) * s, true);
                 }
             }
-            // UV 점(파랑, 선택 빨강, 호버 흰색)
+            // UV 점(파랑, 선택 빨강, 호버 흰색, 핀 = 진파랑 테두리)
             for (int i = 0; i < topo.Points.Count; i++)
             {
-                var p = UvToPx(topo.Points[i].Uv);
+                var pt = topo.Points[i];
+                if (_isolate != null && !pt.HalfEdges.Any(h => FaceVisible(node.Id, m.Hes[h].Face))) continue;
+                var p = UvToPx(pt.Uv);
                 bool ps = selPts.Contains(i);
                 bool ph = sel.Mode == SelectMode.Uv && _hover is { } hp && hp.Node == node.Id && hp.Component >= 0 && hp.Component < topo.Points.Count
-                          && (IslandMode ? topo.Points[hp.Component].Shell == topo.Points[i].Shell : hp.Component == i);
+                          && (IslandMode ? topo.Points[hp.Component].Shell == pt.Shell : hp.Component == i);
                 float r = (ps || ph ? 3.5f : 2.5f) * s;
+                if (pt.Pinned) DrawRect(new Rect2(p - new GVec2(r + 2 * s, r + 2 * s), new GVec2(2 * r + 4 * s, 2 * r + 4 * s)), MathConvert.Rgb(0x2255ff));
                 DrawRect(new Rect2(p - new GVec2(r, r), new GVec2(2 * r, 2 * r)), ph ? MeshView.Hover : ps ? MeshView.UvSelected : MeshView.UvNormal);
             }
         }
@@ -309,13 +349,31 @@ public partial class UvCanvas : Control
             DrawRect(r, new Color(1, 1, 1, 0.9f), false, 1 * s);
         }
         DrawGizmo(s);
+        if (_tool is UvCanvasTool.Grab or UvCanvasTool.Smooth or UvCanvasTool.Pinch or UvCanvasTool.Smear or UvCanvasTool.PinBrush && _brushPos is { } bp)
+        {
+            float r = BrushRadius;
+            DrawArc(bp, r, 0, Mathf.Tau, 48, new Color(1f, 0.4f, 0.4f, 0.9f), 1.5f * s, true);
+        }
         string modeText = IslandMode && sel.Mode == SelectMode.Uv ? "Island" : sel.Mode switch { SelectMode.Uv => "UV", SelectMode.Edge => "Edge", SelectMode.Face => "Face", SelectMode.Vertex => "Vertex", _ => "Object" };
-        DrawString(font, new GVec2(12 * s, Size.Y - 10 * s), $"{modeText} mode   tool: {_shell.Tools.Current?.Label}   zoom {(_zoom / 400f):P0}", HorizontalAlignment.Left, -1, fs, MayaTheme.TextDim);
+        string toolText = _tool == UvCanvasTool.None ? _shell.Tools.Current?.Label ?? "" : _tool.ToString();
+        string setText = "";
+        var first = targets[0].Mesh!; if (first.UvSets.Count > 1) setText = $"   set: {first.UvSets[Math.Clamp(first.CurrentUvSet, 0, first.UvSets.Count - 1)].Name}";
+        DrawString(font, new GVec2(12 * s, Size.Y - 10 * s), $"{modeText} mode   tool: {toolText}   zoom {(_zoom / 400f):P0}{setText}{(_isolate != null ? "   [isolate]" : "")}{(_pixelSnap ? "   [pixel snap]" : "")}", HorizontalAlignment.Left, -1, fs, MayaTheme.TextDim);
+        if (_showStats)
+        {
+            int shells = 0, overlap = 0, reversed = 0; float usage = 0;
+            foreach (var node in targets)
+            {
+                var m = node.Mesh!;
+                if (!_statsCache.TryGetValue(node.Id, out var sc) || sc.version != m.GeometryVersion) { sc = (m.GeometryVersion, UvOps.Statistics(m, Topo(node))); _statsCache[node.Id] = sc; }
+                shells += sc.stats.shells; overlap += sc.stats.overlapping; reversed += sc.stats.reversed; usage += sc.stats.usage;
+            }
+            DrawString(font, new GVec2(12 * s, 20 * s), $"UV shells: {shells}   overlapping faces: {overlap}   reversed faces: {reversed}   0-1 usage: {usage:P0}", HorizontalAlignment.Left, -1, fs, MayaTheme.Text);
+        }
     }
 
     private static readonly Color AxisX = MathConvert.Rgb(0xff2a2a), AxisY = MathConvert.Rgb(0x5aff2a), AxisC = MathConvert.Rgb(0x6ad0ff), Active = MathConvert.Rgb(0xffff00);
 
-    /// <summary>2D 조작기: 이동(X/Y 화살표 + 중앙 사각), 회전(링), 스케일(X/Y 상자 + 중앙).</summary>
     private void DrawGizmo(float s)
     {
         if (!GizmoActive) { _hasPivot = false; return; }
@@ -325,12 +383,7 @@ public partial class UvCanvas : Control
         float len = GizmoLen;
         string tool = _shell.Tools.Current!.Id;
         Color Col(Part p, Color normal) => (_dragging ? _dragPart : _hoverPart) == p ? Active : normal;
-        if (tool == "rotate")
-        {
-            DrawArc(c, len, 0, Mathf.Tau, 64, Col(Part.Ring, AxisC), 2 * s, true);
-            DrawCircle(c, 3 * s, Col(Part.Ring, AxisC));
-            return;
-        }
+        if (tool == "rotate") { DrawArc(c, len, 0, Mathf.Tau, 64, Col(Part.Ring, AxisC), 2 * s, true); DrawCircle(c, 3 * s, Col(Part.Ring, AxisC)); return; }
         var ex = c + new GVec2(len, 0); var ey = c - new GVec2(0, len);
         DrawLine(c, ex, Col(Part.X, AxisX), 2 * s, true);
         DrawLine(c, ey, Col(Part.Y, AxisY), 2 * s, true);
@@ -358,7 +411,6 @@ public partial class UvCanvas : Control
         string tool = _shell.Tools.Current!.Id;
         if (tool == "rotate") return MathF.Abs(px.DistanceTo(c) - len) <= th ? Part.Ring : Part.None;
         if (px.DistanceTo(c) <= 9 * s) return Part.Center;
-        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Uv] hit px={px} c={c} len={len} dX={Geometry2D.GetClosestPointToSegment(px, c, c + new GVec2(len + 6 * s, 0)).DistanceTo(px):F1} th={th:F1}");
         if (Geometry2D.GetClosestPointToSegment(px, c, c + new GVec2(len + 6 * s, 0)).DistanceTo(px) <= th) return Part.X;
         if (Geometry2D.GetClosestPointToSegment(px, c, c - new GVec2(0, len + 6 * s)).DistanceTo(px) <= th) return Part.Y;
         return Part.None;
@@ -371,16 +423,14 @@ public partial class UvCanvas : Control
         return a * 0.5f;
     }
 
-    /// <summary>Mapped Texture 배경: 대상 노드의 머티리얼 텍스처. 아직 머티리얼 텍스처가 없으면 null.</summary>
     private Texture2D? MappedTexture()
     {
-        foreach (var node in TargetNodes())
-        {
-            var mv = _shell.Viewport.Scene.GetMeshView(node.Id);
-            if (mv?.MappedTexture != null) return mv.MappedTexture;
-        }
+        foreach (var node in TargetNodes()) { var mv = _shell.Viewport.Scene.GetMeshView(node.Id); if (mv?.MappedTexture != null) return mv.MappedTexture; }
         return null;
     }
+
+    /// <summary>Pixel Snap 기준 해상도(매핑 텍스처 크기, 없으면 체커 512).</summary>
+    private int ImagePixels() { var t = MappedTexture(); return t != null ? Math.Max(t.GetWidth(), 1) : 512; }
 
     private static bool RectIntersectsSegment(Rect2 r, GVec2 a, GVec2 b)
     {
@@ -400,6 +450,10 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 입력
 
+    private float BrushRadius => _shell.BrushOptions.Float("radius") * CubeApp.Instance.UiScale;
+    private float BrushStrength => _shell.BrushOptions.Float("strength");
+    private bool IsBrushTool => _tool is UvCanvasTool.Grab or UvCanvasTool.Smooth or UvCanvasTool.Pinch or UvCanvasTool.Smear or UvCanvasTool.PinBrush;
+
     public override void _GuiInput(InputEvent e)
     {
         float s = CubeApp.Instance.UiScale;
@@ -408,23 +462,27 @@ public partial class UvCanvas : Control
             case InputEventMouseButton mb:
                 if (mb.Pressed) GrabFocus();
                 if (HandlePie(mb)) { AcceptEvent(); return; }
+                if (mb.Pressed && mb.CtrlPressed && IsBrushTool && mb.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
+                {
+                    var o = _shell.BrushOptions; o.Set("radius", Math.Clamp(o.Float("radius") * (mb.ButtonIndex == MouseButton.WheelUp ? 1.15f : 1 / 1.15f), 5f, 500f)); QueueRedraw(); AcceptEvent(); return;
+                }
                 if (mb.Pressed && mb.ButtonIndex == MouseButton.WheelUp) { ZoomAt(mb.Position, 1.1f); AcceptEvent(); return; }
                 if (mb.Pressed && mb.ButtonIndex == MouseButton.WheelDown) { ZoomAt(mb.Position, 1 / 1.1f); AcceptEvent(); return; }
                 if (mb.Pressed && mb.AltPressed && mb.ButtonIndex is MouseButton.Middle or MouseButton.Right or MouseButton.Left && _navButton == MouseButton.None)
-                {
-                    _navButton = mb.ButtonIndex; _last = mb.Position; AcceptEvent(); return;
-                }
+                { _navButton = mb.ButtonIndex; _last = mb.Position; AcceptEvent(); return; }
                 if (!mb.Pressed && mb.ButtonIndex == _navButton) { _navButton = MouseButton.None; AcceptEvent(); return; }
                 if (mb.ButtonIndex == MouseButton.Left)
                 {
                     if (mb.Pressed)
                     {
+                        if (_tool != UvCanvasTool.None && BeginToolPress(mb)) { AcceptEvent(); return; }
                         var part = HitGizmo(mb.Position);
-                        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Uv] press {mb.Position} part={part} hasPivot={_hasPivot} gizmo={GizmoActive}");
                         if (part != Part.None && TryBeginTransform(mb.Position, part)) { AcceptEvent(); return; }
                         _pressed = true; _marquee = false; _pressPos = mb.Position; _modifier = ModifierOf(mb);
                         AcceptEvent(); return;
                     }
+                    if (_cutSewPainting) { _cutSewPainting = false; AcceptEvent(); return; }
+                    if (_brushing) { EndBrush(); AcceptEvent(); return; }
                     if (_dragging) { EndTransform(commit: true); AcceptEvent(); return; }
                     if (_pressed)
                     {
@@ -444,6 +502,9 @@ public partial class UvCanvas : Control
                     else if (_navButton == MouseButton.Right) ZoomAt(_pressPos == GVec2.Zero ? Size / 2 : _pressPos, MathF.Exp((d.X - d.Y) * 0.004f));
                     QueueRedraw(); AcceptEvent(); return;
                 }
+                if (IsBrushTool) { _brushPos = mm.Position; QueueRedraw(); }
+                if (_cutSewPainting) { CutSewAt(mm.Position); AcceptEvent(); return; }
+                if (_brushing) { ApplyBrush(mm.Position); AcceptEvent(); return; }
                 if (_dragging) { UpdateTransform(mm.Position); AcceptEvent(); return; }
                 if (_pressed)
                 {
@@ -457,13 +518,14 @@ public partial class UvCanvas : Control
                 if (k.Keycode == Key.F && !k.CtrlPressed && !k.AltPressed) { FrameSelected(); AcceptEvent(); return; }
                 if (k.Keycode == Key.A && !k.CtrlPressed && !k.AltPressed) { FrameAll(); AcceptEvent(); return; }
                 if (k.Keycode == Key.Escape && _dragging) { EndTransform(commit: false); AcceptEvent(); return; }
+                if (k.Keycode == Key.Escape && _tool != UvCanvasTool.None) { Tool = UvCanvasTool.None; AcceptEvent(); return; }
                 break;
         }
     }
 
     public override void _Notification(int what)
     {
-        if (what == NotificationMouseExit) { if (_hover != null || _hoverPart != Part.None) { _hover = null; _hoverPart = Part.None; QueueRedraw(); } }
+        if (what == NotificationMouseExit) { if (_hover != null || _hoverPart != Part.None || _brushPos != null) { _hover = null; _hoverPart = Part.None; _brushPos = null; QueueRedraw(); } }
     }
 
     private void UpdateHover(GVec2 px)
@@ -473,7 +535,6 @@ public partial class UvCanvas : Control
         if (part != _hoverPart || !Nullable.Equals(hit, _hover)) { _hoverPart = part; _hover = hit; QueueRedraw(); }
     }
 
-    /// <summary>임베디드 창은 루트의 _Input을 받지 못하므로 캔버스가 처리하지 않은 키는 셸 핫키 라우터로 넘긴다.</summary>
     public override void _UnhandledKeyInput(InputEvent e)
     {
         if (e is not InputEventKey) return;
@@ -481,13 +542,14 @@ public partial class UvCanvas : Control
         if (GetViewport().IsInputHandled() || _shell.GetViewport().IsInputHandled()) GetViewport().SetInputAsHandled();
     }
 
-    /// <summary>RMB 홀드 파이: 기본 = 모드, Shift = Edit(UV 기능), Ctrl = Select(변환). 떼면 하이라이트 항목 실행.</summary>
+    /// <summary>RMB 홀드 파이: 기본 = 모드, Shift = Edit(UV 기능; 서브 파이는 버튼을 뗀 뒤 LMB로 선택), Ctrl = Select(변환).</summary>
     private bool HandlePie(InputEventMouseButton mb)
     {
         if (mb.ButtonIndex == MouseButton.Right)
         {
             if (mb.Pressed)
             {
+                if (_pie.IsOpen && _pie.Sticky) { _pie.Close(); QueueRedraw(); return true; }
                 if (mb.AltPressed || _pie.IsOpen || _dragging) return _pie.IsOpen;
                 var items = mb.CtrlPressed ? PieMenus.UvSelectMenu(_shell) : mb.ShiftPressed ? PieMenus.UvMenu(_shell) : PieMenus.UvModeMenu(_shell, IslandMode);
                 _pie.Open(items, mb.Position);
@@ -495,14 +557,22 @@ public partial class UvCanvas : Control
             }
             if (_pie.IsOpen)
             {
-                var chosen = _pie.Release();
-                if (chosen != null && chosen.Enabled) _shell.Actions.Invoke(chosen.ActionId);
-                QueueRedraw();
+                if (_pie.Sticky) return true;
+                ExecutePie(_pie.Release());
                 return true;
             }
             return false;
         }
+        if (_pie.IsOpen && _pie.Sticky && mb.ButtonIndex == MouseButton.Left && mb.Pressed) { ExecutePie(_pie.Release()); return true; }
         return _pie.IsOpen;
+    }
+
+    private void ExecutePie(PieItem? chosen)
+    {
+        if (chosen == null || !chosen.Enabled) { QueueRedraw(); return; }
+        if (chosen.Sub != null) { _pie.Open(chosen.Sub(), _pie.Center, sticky: true, title: chosen.Label); return; }
+        if (chosen.Run != null) chosen.Run(); else _shell.Actions.Invoke(chosen.ActionId);
+        QueueRedraw();
     }
 
     private void ZoomAt(GVec2 px, float factor)
@@ -526,17 +596,12 @@ public partial class UvCanvas : Control
         return poly;
     }
 
-    /// <summary>Island 모드: 점(8px) → 엣지(6px) → 면 안 순으로 집어 그 요소가 속한 섬의 대표 UV 점을 돌려준다.</summary>
     private SelItem? PickIsland(GVec2 px, SceneNode node, ref float best)
     {
         float s = CubeApp.Instance.UiScale;
         var m = node.Mesh!; var topo = Topo(node);
         SelItem? hit = null;
-        for (int i = 0; i < topo.Points.Count; i++)
-        {
-            float d = UvToPx(topo.Points[i].Uv).DistanceTo(px);
-            if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); }
-        }
+        for (int i = 0; i < topo.Points.Count; i++) { float d = UvToPx(topo.Points[i].Uv).DistanceTo(px); if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); } }
         if (hit != null) return hit;
         for (int e = 0; e < m.EdgeCount; e++)
         {
@@ -558,7 +623,38 @@ public partial class UvCanvas : Control
         return null;
     }
 
-    /// <summary>현재 모드에서 커서 아래 항목(UV 모드: 점 id, 엣지/면: id, 오브젝트: 면 안의 오브젝트 → Component -1).</summary>
+    /// <summary>커서 아래 UV 점(모드 무관, 8px).</summary>
+    private (SceneNode node, int point)? PickPointAny(GVec2 px)
+    {
+        float s = CubeApp.Instance.UiScale; float best = 8 * s; (SceneNode, int)? hit = null;
+        foreach (var node in TargetNodes())
+        {
+            var topo = Topo(node);
+            for (int i = 0; i < topo.Points.Count; i++) { float d = UvToPx(topo.Points[i].Uv).DistanceTo(px); if (d < best) { best = d; hit = (node, i); } }
+        }
+        return hit;
+    }
+
+    private (SceneNode node, int edge)? PickEdgeAny(GVec2 px)
+    {
+        float s = CubeApp.Instance.UiScale; float best = 6 * s; (SceneNode, int)? hit = null;
+        foreach (var node in TargetNodes())
+        {
+            var m = node.Mesh!;
+            for (int e = 0; e < m.EdgeCount; e++)
+            {
+                var ed = m.Edges[e]; if (!ed.Alive) continue;
+                foreach (int he in new[] { ed.He0, ed.He1 })
+                {
+                    if (he < 0) continue;
+                    float d = Geometry2D.GetClosestPointToSegment(px, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0)).DistanceTo(px);
+                    if (d < best) { best = d; hit = (node, e); }
+                }
+            }
+        }
+        return hit;
+    }
+
     private SelItem? Pick(GVec2 px)
     {
         var sel = _shell.Document.Selection;
@@ -571,11 +667,7 @@ public partial class UvCanvas : Control
             switch (sel.Mode)
             {
                 case SelectMode.Uv:
-                    for (int i = 0; i < topo.Points.Count; i++)
-                    {
-                        float d = UvToPx(topo.Points[i].Uv).DistanceTo(px);
-                        if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); }
-                    }
+                    for (int i = 0; i < topo.Points.Count; i++) { float d = UvToPx(topo.Points[i].Uv).DistanceTo(px); if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); } }
                     break;
                 case SelectMode.Edge:
                     for (int e = 0; e < m.EdgeCount; e++)
@@ -584,8 +676,7 @@ public partial class UvCanvas : Control
                         foreach (int he in new[] { ed.He0, ed.He1 })
                         {
                             if (he < 0) continue;
-                            var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
-                            float d = Geometry2D.GetClosestPointToSegment(px, a, b).DistanceTo(px);
+                            float d = Geometry2D.GetClosestPointToSegment(px, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0)).DistanceTo(px);
                             if (d <= 6 * s && d < best) { best = d; hit = new SelItem(node.Id, e); }
                         }
                     }
@@ -603,7 +694,6 @@ public partial class UvCanvas : Control
         return hit;
     }
 
-    /// <summary>Island 모드: 점 하나를 그 점이 속한 섬 전체로 확장.</summary>
     private IEnumerable<SelItem> ExpandIsland(SelItem item)
     {
         if (!IslandMode) { yield return item; yield break; }
@@ -619,7 +709,7 @@ public partial class UvCanvas : Control
         var hit = Pick(px);
         var items = hit != null ? (sel.Mode == SelectMode.Uv ? ExpandIsland(hit.Value).ToArray() : new[] { hit.Value }) : Array.Empty<SelItem>();
         if (items.Length == 0 && _modifier != SelectModifier.Replace) return;
-        if (sel.Mode == SelectMode.Object && items.Length == 0) return; // UV 편집기에서 빈 곳 클릭으로 오브젝트 선택을 지우지 않는다
+        if (sel.Mode == SelectMode.Object && items.Length == 0) return;
         var mod = _modifier;
         _shell.RecordSelection(ss => ss.Apply(items, mod));
     }
@@ -640,8 +730,6 @@ public partial class UvCanvas : Control
                         for (int i = 0; i < topo.Points.Count; i++)
                             if (r.HasPoint(UvToPx(topo.Points[i].Uv))) { if (IslandMode) shells.Add(topo.Points[i].Shell); else items.Add(new SelItem(node.Id, i)); }
                         if (IslandMode)
-                        {
-                            // 섬 모드: 사각형이 엣지를 가로지르거나 면 중심을 포함해도 그 섬
                             for (int f = 0; f < m.FaceCount; f++)
                             {
                                 if (!m.Faces[f].Alive) continue;
@@ -651,7 +739,6 @@ public partial class UvCanvas : Control
                                 for (int i = 0; i < poly.Count && !inside; i++) if (RectIntersectsSegment(r, poly[i], poly[(i + 1) % poly.Count])) inside = true;
                                 if (inside) shells.Add(topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell);
                             }
-                        }
                         foreach (int sh in shells) foreach (int p in topo.PointsInShell(sh)) items.Add(new SelItem(node.Id, p));
                         break;
                     }
@@ -660,12 +747,7 @@ public partial class UvCanvas : Control
                     {
                         var ed = m.Edges[e]; if (!ed.Alive) continue;
                         bool inside = false;
-                        foreach (int he in new[] { ed.He0, ed.He1 })
-                        {
-                            if (he < 0) continue;
-                            var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
-                            if (r.HasPoint(a) || r.HasPoint(b)) inside = true;
-                        }
+                        foreach (int he in new[] { ed.He0, ed.He1 }) { if (he < 0) continue; if (r.HasPoint(UvToPx(m.Hes[he].Uv0)) || r.HasPoint(UvToPx(m.Hes[m.Hes[he].Next].Uv0))) inside = true; }
                         if (inside) items.Add(new SelItem(node.Id, e));
                     }
                     break;
@@ -692,24 +774,37 @@ public partial class UvCanvas : Control
     {
         var tool = _shell.Tools.Current?.Id ?? "select";
         if (tool is not ("move" or "rotate" or "scale")) return false;
+        if (!CaptureSelectionForTransform(tool switch { "move" => "Move UVs", "rotate" => "Rotate UVs", _ => "Scale UVs" }, null)) return false;
+        _xformTool = tool; _pressPos = px; _dragging = true; _dragPart = part;
+        return true;
+    }
+
+    /// <summary>현재 선택(또는 지정 점)을 변형 대상으로 캡처한다.</summary>
+    private bool CaptureSelectionForTransform(string name, Func<SceneNode, HashSet<int>>? pointsOf)
+    {
         _xform.Clear();
         int count = 0;
         foreach (var node in TargetNodes())
         {
-            var pts = SelectedPoints(node);
+            var pts = pointsOf?.Invoke(node) ?? SelectedPoints(node);
             if (pts.Count == 0) continue;
             var topo = Topo(node);
-            var ids = pts.ToArray();
+            var ids = pts.Where(i => !topo.Points[i].Pinned || _tool == UvCanvasTool.Tweak).ToArray();
+            if (ids.Length == 0) continue;
             var init = ids.Select(i => topo.Points[i].Uv).ToArray();
             count += ids.Length;
-            var cmd = new UvEditCommand(tool switch { "move" => "Move UVs", "rotate" => "Rotate UVs", _ => "Scale UVs" }, node.Id);
+            var cmd = new UvEditCommand(name, node.Id);
             cmd.Capture(_shell.Document);
             _xform.Add((node.Id, topo, ids, init, cmd));
         }
-        if (count == 0) return false;
-        _xformTool = tool; _pressPos = px; _dragging = true; _dragPart = part;
-        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Uv] transform begin tool={tool} part={part} points={count} pivotPx={UvToPx(_pivotUv)}");
-        return true;
+        return count > 0;
+    }
+
+    private NVec2 SnapDelta(NVec2 delta)
+    {
+        if (!_pixelSnap) return delta;
+        float px = 1f / ImagePixels();
+        return new NVec2(MathF.Round(delta.X / px) * px, MathF.Round(delta.Y / px) * px);
     }
 
     private void UpdateTransform(GVec2 px)
@@ -720,25 +815,28 @@ public partial class UvCanvas : Control
         switch (_xformTool)
         {
             case "move":
+            case "tweak":
+            case "shell":
                 {
                     var delta = new NVec2(d.X / _zoom, -d.Y / _zoom);
                     if (_dragPart == Part.X) delta.Y = 0; else if (_dragPart == Part.Y) delta.X = 0;
-                    xf = Matrix3x2.CreateTranslation(delta); break;
+                    if (_shell.Viewport.IsGridSnapHeld) { float g = 1f / 8f; delta = new NVec2(MathF.Round(delta.X / g) * g, MathF.Round(delta.Y / g) * g); }
+                    xf = Matrix3x2.CreateTranslation(SnapDelta(delta)); break;
                 }
             case "rotate":
                 {
                     float a0 = MathF.Atan2(_pressPos.Y - c.Y, _pressPos.X - c.X), a1 = MathF.Atan2(px.Y - c.Y, px.X - c.X);
-                    float angle = -(a1 - a0); // 화면 y가 아래로 커지므로 부호 반전(UV 공간 반시계 = 양수)
-                    if (_shell.Viewport.IsSnapHeld) angle = MathF.Round(angle / (MathF.PI / 12f)) * (MathF.PI / 12f);
+                    float angle = -(a1 - a0);
+                    if (_shell.Viewport.IsSnapHeld) { float step = MathF.Max(CubeApp.Instance.Settings.RotateSnapDegrees, 0.1f) * MathF.PI / 180f; angle = MathF.Round(angle / step) * step; }
                     xf = Matrix3x2.CreateRotation(angle, _pivotUv); break;
                 }
             default:
                 {
-                    float len = GizmoLen;
-                    float fx = 1f, fy = 1f;
+                    float len = GizmoLen; float fx = 1f, fy = 1f;
                     if (_dragPart == Part.X) fx = MathF.Max((len + d.X) / len, 0.01f);
                     else if (_dragPart == Part.Y) fy = MathF.Max((len - d.Y) / len, 0.01f);
                     else { float f = MathF.Max(1f + (d.X - d.Y) * 0.005f, 0.01f); fx = fy = f; }
+                    if (_shell.Viewport.IsSnapHeld) { float st = MathF.Max(CubeApp.Instance.Settings.ScaleSnapStep, 0.001f); fx = MathF.Max(MathF.Round(fx / st) * st, st); fy = MathF.Max(MathF.Round(fy / st) * st, st); }
                     xf = Matrix3x2.CreateScale(fx, fy, _pivotUv); break;
                 }
         }
@@ -756,21 +854,156 @@ public partial class UvCanvas : Control
         _dragging = false; _dragPart = Part.None;
         var doc = _shell.Document;
         using (doc.Undo.BeginGroup(_xform.Count > 0 ? _xform[0].cmd.Name : "UV"))
-        {
             foreach (var (id, topo, ids, init, cmd) in _xform)
             {
                 var mesh = doc.Get(id).Mesh!;
-                if (!commit)
-                {
-                    for (int i = 0; i < ids.Length; i++) UvOps.SetPointUv(mesh, topo, ids[i], init[i]);
-                    doc.Notify(new DocChange(ChangeKind.MeshAttributes, id));
-                    continue;
-                }
+                if (!commit) { for (int i = 0; i < ids.Length; i++) UvOps.SetPointUv(mesh, topo, ids[i], init[i]); doc.Notify(new DocChange(ChangeKind.MeshAttributes, id)); continue; }
                 cmd.Commit(doc);
                 if (cmd.Changed) doc.Undo.Push(cmd, alreadyApplied: true);
             }
-        }
         _xform.Clear();
         QueueRedraw();
+    }
+
+    // ---------------------------------------------------------------- 툴(Tweak / 브러시 / Cut-Sew / Move Shell)
+
+    private bool BeginToolPress(InputEventMouseButton mb)
+    {
+        var px = mb.Position;
+        switch (_tool)
+        {
+            case UvCanvasTool.Tweak:
+                {
+                    var hit = PickPointAny(px); if (hit == null) return false;
+                    var (node, point) = hit.Value;
+                    bool inSel = SelectedPoints(node).Contains(point);
+                    if (!CaptureSelectionForTransform("Tweak UVs", n => inSel ? SelectedPoints(n) : n.Id == node.Id ? new HashSet<int> { point } : new HashSet<int>())) return false;
+                    _xformTool = "tweak"; _pressPos = px; _dragging = true; _dragPart = Part.Center; _pivotUv = Topo(node).Points[point].Uv;
+                    return true;
+                }
+            case UvCanvasTool.MoveShell:
+                {
+                    var hit = PickPointAny(px) ?? PickFacePoint(px); if (hit == null) return false;
+                    var (node, point) = hit.Value;
+                    int shell = Topo(node).Points[point].Shell;
+                    if (!CaptureSelectionForTransform("Move UV Shell", n => n.Id == node.Id ? new HashSet<int>(Topo(n).PointsInShell(shell)) : new HashSet<int>())) return false;
+                    _xformTool = "shell"; _pressPos = px; _dragging = true; _dragPart = Part.Center; _pivotUv = Topo(node).Points[point].Uv;
+                    return true;
+                }
+            case UvCanvasTool.CutSew:
+                _cutSewPainting = true; _cutSewSew = mb.CtrlPressed; _cutSewDone.Clear();
+                CutSewAt(px);
+                return true;
+            default:
+                {
+                    // 브러시: 대상 노드 전체를 캡처하고 드래그마다 반지름 안의 점을 움직인다
+                    string name = _tool switch { UvCanvasTool.Grab => "Grab UVs", UvCanvasTool.Smooth => "Smooth UVs", UvCanvasTool.Pinch => "Pinch UVs", UvCanvasTool.Smear => "Smear UVs", _ => "Pin UVs" };
+                    bool pinBrush = _tool == UvCanvasTool.PinBrush;
+                    _xform.Clear();
+                    foreach (var node in TargetNodes())
+                    {
+                        var topo = Topo(node);
+                        var ids = Enumerable.Range(0, topo.Points.Count).Where(i => pinBrush || !topo.Points[i].Pinned).ToArray();
+                        var cmd = new UvEditCommand(name, node.Id); cmd.Capture(_shell.Document);
+                        _xform.Add((node.Id, topo, ids, ids.Select(i => topo.Points[i].Uv).ToArray(), cmd));
+                    }
+                    if (_xform.Count == 0) return false;
+                    _brushing = true; _dragging = true; _brushLast = px; _brushUnpin = mb.CtrlPressed;
+                    ApplyBrush(px);
+                    return true;
+                }
+        }
+    }
+
+    private bool _brushUnpin;
+
+    private (SceneNode node, int point)? PickFacePoint(GVec2 px)
+    {
+        foreach (var node in TargetNodes())
+        {
+            var m = node.Mesh!; var topo = Topo(node);
+            for (int f = 0; f < m.FaceCount; f++)
+                if (m.Faces[f].Alive && Geometry2D.IsPointInPolygon(px, FacePoly(m, f, UvToPx).ToArray())) return (node, topo.HeToPoint[m.Faces[f].HalfEdge]);
+        }
+        return null;
+    }
+
+    private void ApplyBrush(GVec2 px)
+    {
+        float r = BrushRadius; float strength = BrushStrength;
+        var deltaUv = new NVec2((px.X - _brushLast.X) / _zoom, -(px.Y - _brushLast.Y) / _zoom);
+        _brushLast = px;
+        var centerUv = PxToUv(px);
+        foreach (var (id, topo, ids, _, _) in _xform)
+        {
+            var mesh = _shell.Document.Get(id).Mesh!;
+            bool any = false;
+            foreach (int i in ids)
+            {
+                var uv = topo.Points[i].Uv;
+                float d = UvToPx(uv).DistanceTo(px);
+                if (d > r) continue;
+                float w = 1f - d / r; w = w * w * (3 - 2 * w);
+                switch (_tool)
+                {
+                    case UvCanvasTool.Grab: UvOps.SetPointUv(mesh, topo, i, uv + deltaUv * w); any = true; break;
+                    case UvCanvasTool.Smear: UvOps.SetPointUv(mesh, topo, i, uv + deltaUv * w * strength); any = true; break;
+                    case UvCanvasTool.Pinch: UvOps.SetPointUv(mesh, topo, i, uv + (centerUv - uv) * w * strength * 0.1f); any = true; break;
+                    case UvCanvasTool.Smooth:
+                        {
+                            // 이웃 UV 점 평균(같은 셸, 엣지로 이어진 코너)
+                            var sum = NVec2.Zero; int n = 0;
+                            foreach (int he in topo.Points[i].HalfEdges)
+                            {
+                                int nxt = topo.HeToPoint[mesh.Hes[he].Next]; int prv = topo.HeToPoint[mesh.Hes[he].Prev];
+                                sum += topo.Points[nxt].Uv + topo.Points[prv].Uv; n += 2;
+                            }
+                            if (n > 0) { UvOps.SetPointUv(mesh, topo, i, NVec2.Lerp(uv, sum / n, w * strength * 0.5f)); any = true; }
+                            break;
+                        }
+                    case UvCanvasTool.PinBrush:
+                        foreach (int he in topo.Points[i].HalfEdges) { var h = mesh.Hes[he]; h.PinUv = !_brushUnpin; mesh.Hes[he] = h; }
+                        topo.Points[i].Pinned = !_brushUnpin; any = true;
+                        break;
+                }
+            }
+            if (any) _shell.Document.Notify(new DocChange(ChangeKind.MeshAttributes, id));
+        }
+        QueueRedraw();
+    }
+
+    private void EndBrush()
+    {
+        _brushing = false; _dragging = false;
+        var doc = _shell.Document;
+        using (doc.Undo.BeginGroup(_xform.Count > 0 ? _xform[0].cmd.Name : "UV"))
+            foreach (var (_, _, _, _, cmd) in _xform) { cmd.Commit(doc); if (cmd.Changed) doc.Undo.Push(cmd, alreadyApplied: true); }
+        _xform.Clear();
+        _topos.Clear();
+        QueueRedraw();
+    }
+
+    private void CutSewAt(GVec2 px)
+    {
+        var hit = PickEdgeAny(px); if (hit == null) return;
+        var (node, edge) = hit.Value;
+        if (!_cutSewDone.Add((node.Id, edge))) return;
+        var m = node.Mesh!;
+        if (m.Edges[edge].He1 < 0 || m.Edges[edge].Seam == !_cutSewSew) return;
+        bool sew = _cutSewSew; int e = edge;
+        _shell.Document.Undo.Push(new UvEditCommand(sew ? "Sew UV Edge" : "Cut UV Edge", node.Id, mm => { if (sew) UvOps.SewEdges(mm, new[] { e }); else UvOps.CutEdges(mm, new[] { e }); }));
+        _topos.Remove(node.Id);
+        QueueRedraw();
+    }
+
+    // ---------------------------------------------------------------- 스냅샷
+
+    /// <summary>현재 캔버스 영역을 PNG로 저장한다(UV Snapshot).</summary>
+    public Error SaveSnapshot(string path)
+    {
+        var img = GetViewport().GetTexture().GetImage();
+        var rect = GetGlobalRect();
+        var region = img.GetRegion(new Rect2I((int)rect.Position.X, (int)rect.Position.Y, (int)rect.Size.X, (int)rect.Size.Y));
+        return region.SavePng(path);
     }
 }

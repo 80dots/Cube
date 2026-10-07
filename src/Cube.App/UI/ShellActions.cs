@@ -27,6 +27,7 @@ public partial class Shell
         Tools.Register(new MultiCutTool());
         Tools.Register(new TargetWeldTool());
         Tools.Register(new AppendPolygonTool());
+        Tools.Register(new CutSewUvTool());
     }
 
     private void RegisterActions()

@@ -104,7 +104,7 @@ public static class PieMenus
         };
     }
 
-    /// <summary>UV 편집기 Ctrl+RMB: 선택 변환. N To Edge, NE To Face, E To UV, SE To Island, S To Object, SW To Boundary Edge, W Grow, NW Shrink.</summary>
+    /// <summary>UV 편집기 Ctrl+RMB: 선택 변환. N To Edge, NE To Face, E To UV, SE To Island, S To Object, SW To Boundary Edge, W Grow, NW Shrink + Select By Type 등.</summary>
     public static List<PieItem> UvSelectMenu(Shell shell) => new()
     {
         Item(shell, "select.toEdges", "To Edge"),
@@ -115,13 +115,27 @@ public static class PieMenus
         Item(shell, "select.toBoundaryEdges", "To Boundary Edge"),
         Item(shell, "select.grow", "Grow"),
         Item(shell, "select.shrink", "Shrink"),
+        Item(shell, "uv.growLoop", "Grow Along Loop"),
+        Item(shell, "uv.shrinkLoop", "Shrink Along Loop"),
+        Item(shell, "uv.selectInverse", "Inverse"),
+        Item(shell, "uv.selectBackFacing", "Back-Facing"),
+        Item(shell, "uv.selectFrontFacing", "Front-Facing"),
+        Item(shell, "uv.selectOverlapping", "Overlapping"),
+        Item(shell, "uv.selectTextureBorders", "Texture Borders"),
+        Item(shell, "uv.selectUnmapped", "Unmapped"),
+        Item(shell, "uv.shortestPath", "Shortest Edge Path"),
+        Item(shell, "uv.containedFaces", "Contained Faces"),
+        Item(shell, "uv.connectedFaces", "Connected Faces"),
     };
 
-    /// <summary>UV 편집기 Shift+RMB(Edit): UV 편집기가 지원하는 모든 기능. UV 편집기에 기능을 추가하면 여기에도 넣는다.</summary>
+    /// <summary>
+    /// UV 편집기 Shift+RMB(Edit): UV 편집기가 지원하는 모든 기능. 방사형 8개는 자주 쓰는 것, 나머지는 그룹별 서브 파이(▸, 버튼을 뗀 뒤 LMB로 선택).
+    /// UV 편집기에 기능을 추가하면 여기(해당 그룹)에도 넣는다.
+    /// </summary>
     public static List<PieItem> UvMenu(Shell shell)
     {
-        var sel = shell.Document.Selection;
-        PieItem Mode(string label, string action, SelectMode mode) => new(label + (sel.Mode == mode ? " •" : ""), action);
+        List<PieItem> Group(params (string action, string label)[] items) => items.Select(i => Item(shell, i.action, i.label)).ToList();
+        PieItem Sub(string label, Func<List<PieItem>> sub) => new(label + " ▸", "uv.sub") { Sub = sub };
         return new List<PieItem>
         {
             Item(shell, "uv.planarBest", "Planar"),
@@ -132,15 +146,15 @@ public static class PieMenus
             Item(shell, "uv.sew", "Sew UV"),
             Item(shell, "uv.frameAll", "Frame All"),
             Item(shell, "uv.frameSelected", "Frame Selected"),
-            Item(shell, "uv.planarX", "Planar X"),
-            Item(shell, "uv.planarY", "Planar Y"),
-            Item(shell, "uv.planarZ", "Planar Z"),
-            Item(shell, "uv.spherical", "Spherical"),
-            Item(shell, "uv.flipU", "Flip U"),
-            Item(shell, "uv.flipV", "Flip V"),
-            Item(shell, "uv.cycleBackground", "Background"),
-            Item(shell, "uv.autoSeams", "Auto Seam Select"),
-            Item(shell, "uv.autoWrap", "Auto Wrap"),
+            Sub("Create", () => Group(("uv.automaticApply", "Automatic"), ("uv.automatic", "Automatic..."), ("uv.cameraBased", "Camera-Based"), ("uv.normalBased", "Normal-Based"), ("uv.planarX", "Planar X"), ("uv.planarY", "Planar Y"), ("uv.planarZ", "Planar Z"), ("uv.spherical", "Spherical"), ("uv.bestPlane", "Best Plane"), ("uv.contourStretch", "Contour Stretch"), ("uv.checkerShader", "Checker Shader"))),
+            Sub("Cut / Sew", () => Group(("uv.autoSeams", "Auto Seam Select"), ("uv.autoWrap", "Auto Wrap"), ("uv.createShell", "Create UV Shell"), ("uv.createShellGrid", "Create Shell (Grid)"), ("uv.split", "Split UVs"), ("uv.mergeApply", "Merge UVs"), ("uv.moveAndSew", "Move and Sew"), ("uv.stitch", "Stitch Together"), ("uv.deleteUvs", "Delete UVs"), ("uv.cutSewTool", "3D Cut/Sew Tool"))),
+            Sub("Align / Snap", () => Group(("uv.alignMinU", "Align Min U"), ("uv.alignMaxU", "Align Max U"), ("uv.alignMinV", "Align Min V"), ("uv.alignMaxV", "Align Max V"), ("uv.alignCenterU", "Center U"), ("uv.alignCenterV", "Center V"), ("uv.linearAlign", "Linear Align"), ("uv.distributeU", "Distribute U"), ("uv.distributeV", "Distribute V"), ("uv.matchGridApply", "Match Grid"), ("uv.matchUvs", "Match UVs"), ("uv.snapTogether", "Snap Together"), ("uv.pixelSnap", "Pixel Snap"))),
+            Sub("Modify", () => Group(("uv.normalizeApply", "Normalize"), ("uv.unitize", "Unitize"), ("uv.cycle", "Cycle"), ("uv.flipU", "Flip U"), ("uv.flipV", "Flip V"), ("uv.rotateCw", "Rotate 90 CW"), ("uv.rotateCcw", "Rotate 90 CCW"), ("uv.symmetrizeApply", "Symmetrize"), ("uv.straightenApply", "Straighten UVs"), ("uv.straightenBorder", "Straighten Border"), ("uv.straightenShell", "Straighten Shell"), ("uv.mapBorderSquare", "Map Border Square"), ("uv.mapBorderCircle", "Map Border Circle"), ("uv.optimize", "Optimize"))),
+            Sub("Shells", () => Group(("uv.layoutOptions", "Layout..."), ("uv.orientShells", "Orient Shells"), ("uv.orientToEdge", "Orient to Edges"), ("uv.randomizeShellsApply", "Randomize"), ("uv.stackShells", "Stack"), ("uv.stackSimilar", "Stack Similar"), ("uv.unstackShells", "Unstack"), ("uv.snapAndStack", "Snap and Stack"), ("uv.distributeShellsU", "Distribute U"), ("uv.distributeShellsV", "Distribute V"), ("uv.gatherShells", "Gather"), ("uv.flipReversed", "Flip Reversed"))),
+            Sub("Pin / Edit", () => Group(("uv.pin", "Pin"), ("uv.unpin", "Unpin"), ("uv.invertPins", "Invert Pins"), ("uv.unpinAll", "Unpin All"), ("uv.copy", "Copy UVs"), ("uv.paste", "Paste UVs"))),
+            Sub("Tools", () => Group(("uv.toolNone", "Select/Transform"), ("uv.toolTweak", "Tweak"), ("uv.toolMoveShell", "Move Shell"), ("uv.toolGrab", "Grab"), ("uv.toolSmooth", "Smooth"), ("uv.toolPinch", "Pinch"), ("uv.toolSmear", "Smear"), ("uv.toolPinBrush", "Pin Brush"), ("uv.toolCutSew", "Cut/Sew"), ("uv.brushOptions", "Brush Options..."))),
+            Sub("Display", () => Group(("uv.cycleBackground", "Background"), ("uv.checkerMap", "Checker Map"), ("uv.viewShaded", "Shaded"), ("uv.viewDistortion", "Distortion"), ("uv.viewTextureBorders", "Texture Borders"), ("uv.viewIsolate", "Isolate Select"), ("uv.viewStats", "Statistics"), ("uv.viewGrid", "Grid"), ("uv.viewTiles", "UV Tiles"), ("uv.imageDim", "Dim Image"), ("uv.imageUnfiltered", "Unfiltered"), ("uv.snapshot", "UV Snapshot..."))),
+            Sub("UV Sets", () => Group(("uv.setEditor", "UV Set Editor"), ("uv.setCreate", "Create Empty Set..."), ("uv.setCopy", "Copy to New Set"), ("uv.setDelete", "Delete Current"), ("uv.setNext", "Next Set"))),
         };
     }
 

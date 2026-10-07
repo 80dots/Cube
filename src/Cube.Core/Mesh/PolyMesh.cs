@@ -25,7 +25,17 @@ public struct HalfEdge
     public int Edge;
     public Vector3 Normal;
     public Vector2 Uv0;
+    /// <summary>UV 편집기 Pin: 이 코너의 UV 점은 Unfold/Optimize/브러시 등에서 움직이지 않는다.</summary>
+    public bool PinUv;
     public bool Alive;
+}
+
+/// <summary>UV 세트(Maya UV Sets): 하프에지 슬롯별 UV 배열. 현재 세트는 HalfEdge.Uv0에 올라와 있고 전환 시 저장/복원된다.</summary>
+public sealed class UvSet
+{
+    public string Name = "map1";
+    public Vector2[] Uvs = Array.Empty<Vector2>();
+    public UvSet Clone() => new() { Name = Name, Uvs = (Vector2[])Uvs.Clone() };
 }
 
 /// <summary>무방향 엣지. 최대 2개의 하프에지(He1은 경계면 -1)를 가진다. 비매니폴드(3면 이상)는 허용하지 않는다.</summary>
@@ -68,6 +78,57 @@ public sealed class PolyMesh
 
     /// <summary>잠긴 정점 노멀(Mesh Display → Lock Normals / Set Vertex Normal / Set to Face / Average). 재계산 시 이 정점의 코너 노멀은 저장된 값으로 고정된다.</summary>
     public readonly Dictionary<int, Vector3> LockedNormals = new();
+
+    /// <summary>UV 세트 목록. 비어 있으면 단일 기본 세트("map1")만 있는 것으로 본다. <see cref="CurrentUvSet"/>의 UV가 HalfEdge.Uv0에 올라와 있다.</summary>
+    public readonly List<UvSet> UvSets = new();
+    public int CurrentUvSet;
+
+    /// <summary>세트 목록이 비어 있으면 현재 UV로 "map1"을 만든다.</summary>
+    public void EnsureUvSets()
+    {
+        if (UvSets.Count > 0) return;
+        UvSets.Add(new UvSet { Name = "map1", Uvs = SnapshotUvs() });
+        CurrentUvSet = 0;
+    }
+
+    public Vector2[] SnapshotUvs() { var a = new Vector2[Hes.Count]; for (int i = 0; i < a.Length; i++) a[i] = Hes[i].Uv0; return a; }
+
+    /// <summary>현재 코너 UV를 현재 세트 배열에 저장한다.</summary>
+    public void StoreCurrentUvs()
+    {
+        EnsureUvSets();
+        UvSets[Math.Clamp(CurrentUvSet, 0, UvSets.Count - 1)].Uvs = SnapshotUvs();
+    }
+
+    /// <summary>세트를 전환한다: 현재 UV를 저장하고 대상 세트를 코너에 올린다(배열이 짧으면 0).</summary>
+    public void SwitchUvSet(int index)
+    {
+        EnsureUvSets();
+        if (index < 0 || index >= UvSets.Count) return;
+        StoreCurrentUvs();
+        var src = UvSets[index].Uvs;
+        for (int h = 0; h < Hes.Count; h++) { var he = Hes[h]; he.Uv0 = h < src.Length ? src[h] : Vector2.Zero; Hes[h] = he; }
+        CurrentUvSet = index;
+        GeometryVersion++;
+    }
+
+    /// <summary>새 UV 세트를 만든다(copyCurrent면 현재 UV 복사, 아니면 0). 반환값은 인덱스.</summary>
+    public int AddUvSet(string name, bool copyCurrent)
+    {
+        EnsureUvSets();
+        StoreCurrentUvs();
+        UvSets.Add(new UvSet { Name = name, Uvs = copyCurrent ? SnapshotUvs() : new Vector2[Hes.Count] });
+        return UvSets.Count - 1;
+    }
+
+    public void RemoveUvSet(int index)
+    {
+        EnsureUvSets();
+        if (UvSets.Count <= 1 || index < 0 || index >= UvSets.Count) return;
+        if (index == CurrentUvSet) SwitchUvSet(index == 0 ? 1 : 0);
+        UvSets.RemoveAt(index);
+        if (CurrentUvSet > index) CurrentUvSet--;
+    }
 
     private Dictionary<long, int>? _edgeMap;      // (min,max) 정점쌍 → edge id
     private int _edgeMapVersion = -1;
@@ -354,6 +415,8 @@ public sealed class PolyMesh
         Edges.Clear(); Edges.AddRange(src.Edges);
         Faces.Clear(); Faces.AddRange(src.Faces);
         LockedNormals.Clear(); foreach (var kv in src.LockedNormals) LockedNormals[kv.Key] = kv.Value;
+        UvSets.Clear(); foreach (var s in src.UvSets) UvSets.Add(s.Clone());
+        CurrentUvSet = src.CurrentUvSet;
         TopologyVersion++;
         GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;
@@ -361,7 +424,7 @@ public sealed class PolyMesh
 
     public void Clear()
     {
-        Verts.Clear(); Hes.Clear(); Edges.Clear(); Faces.Clear(); LockedNormals.Clear();
+        Verts.Clear(); Hes.Clear(); Edges.Clear(); Faces.Clear(); LockedNormals.Clear(); UvSets.Clear(); CurrentUvSet = 0;
         TopologyVersion++; GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;
     }
@@ -408,6 +471,12 @@ public sealed class PolyMesh
         Faces.Clear(); Faces.AddRange(newF);
         var locked = LockedNormals.Where(kv => kv.Key < vMap.Length && vMap[kv.Key] >= 0).Select(kv => (vMap[kv.Key], kv.Value)).ToList();
         LockedNormals.Clear(); foreach (var (v, n) in locked) LockedNormals[v] = n;
+        foreach (var set in UvSets)
+        {
+            var packed = new Vector2[nh];
+            for (int i = 0; i < hMap.Length && i < set.Uvs.Length; i++) if (hMap[i] >= 0) packed[hMap[i]] = set.Uvs[i];
+            set.Uvs = packed;
+        }
         TopologyVersion++; GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;
         return new CompactRemap(vMap, hMap, eMap, fMap);

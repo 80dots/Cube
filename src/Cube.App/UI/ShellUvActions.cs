@@ -35,7 +35,11 @@ public partial class Shell
         Actions.Register("uv.flipV", "Flip V", () => Flip(false), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.autoSeams", "Auto Seam Select", AutoSeamSelect, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
         Actions.Register("uv.autoWrap", "Auto Wrap", AutoWrap, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
+        RegisterUvActions2();
     }
+
+    /// <summary>UV 브러시 옵션(반지름 px, 세기). Tools → Brush Options... 로 바꾸며 Ctrl+휠로 반지름 조절.</summary>
+    public OptionValues BrushOptions => OptWithDefaults("uv.brush", v => { v.Set("radius", 60f); v.Set("strength", 0.5f); });
 
     private void ToggleUvEditor()
     {
