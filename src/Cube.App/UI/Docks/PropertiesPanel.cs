@@ -21,6 +21,7 @@ public partial class PropertiesPanel : VBoxContainer
     private NodeId _node;
 
     private ItemList _history = null!;
+    private int _dragId; private TransformNodesCommand? _dragCmd;
     private Control _lightGroup = null!;
     private OptionButton _lightType = null!;
     private ColorPickerButton _lightColor = null!;
@@ -111,7 +112,8 @@ public partial class PropertiesPanel : VBoxContainer
         AddChild(Header("History", s));
         _historyEmpty = new Label { Text = "(no construction history)", Modulate = new Color(1, 1, 1, 0.6f) };
         AddChild(_historyEmpty);
-        _history = new ItemList { CustomMinimumSize = new Vector2(0, 110 * s), SizeFlagsHorizontal = SizeFlags.ExpandFill, FocusMode = FocusModeEnum.Click };
+        // 남는 세로 공간을 모두 History 목록에 준다(고정 높이로 키우면 도크 최소 높이가 창보다 커져 레이아웃이 넘친다)
+        _history = new ItemList { CustomMinimumSize = new Vector2(0, 120 * s), SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill, FocusMode = FocusModeEnum.Click };
         _history.ItemSelected += i => { _historyIndex = HistoryCount - 1 - (int)i; RefreshParams(); };
         AddChild(_history);
         _paramBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
@@ -322,8 +324,17 @@ public partial class PropertiesPanel : VBoxContainer
         if (row == 0) after.Translation = v; else if (row == 1) after.RotationDegrees = v; else if (row == 2) after.Scale = v;
         else after = before.WithPivotKeepingMatrix(v); // 피벗 편집은 월드를 유지한다(Maya 피벗 이동과 같음)
         if (after == before) return;
+        // 가운데 버튼 드래그(SpinDrag) 한 번의 변경들은 Undo 한 단계로 합친다: 같은 드래그의 직전 명령을 빼고 처음 값부터의 명령으로 바꾼다
+        if (SpinDrag.ActiveDrag != 0 && SpinDrag.ActiveDrag == _dragId && _dragCmd != null && ReferenceEquals(_doc.Undo.LastCommand, _dragCmd) && _dragCmd.Ids.Count == 1 && _dragCmd.Ids[0] == node.Id)
+        {
+            var start = _dragCmd.Before[0];
+            _doc.Undo.Undo();
+            before = start;
+        }
         node.Local = after;
         _doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
-        _doc.Undo.Push(new TransformNodesCommand("Set Attribute", new[] { node.Id }, new[] { before }, new[] { after }), alreadyApplied: true);
+        var cmd = new TransformNodesCommand("Set Attribute", new[] { node.Id }, new[] { before }, new[] { after });
+        _doc.Undo.Push(cmd, alreadyApplied: true);
+        _dragId = SpinDrag.ActiveDrag; _dragCmd = SpinDrag.ActiveDrag != 0 ? cmd : null;
     }
 }

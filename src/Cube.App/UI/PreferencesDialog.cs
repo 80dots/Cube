@@ -18,6 +18,7 @@ public partial class PreferencesDialog : AcceptDialog
         Title = "Preferences";
         OkButtonText = "Save";
         ResizeGrip.AttachToWindow(this);
+        AddChild(new SpinDrag());
         var s = CubeApp.Instance.Settings;
         float k = CubeApp.Instance.UiScale;
 

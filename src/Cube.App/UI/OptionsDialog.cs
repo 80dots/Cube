@@ -89,7 +89,7 @@ public partial class OptionsDialog : ConfirmationDialog
         Confirmed += () => { Store(); _onApply(); };
     }
 
-    public override void _Ready() => ResizeGrip.AttachToWindow(this);
+    public override void _Ready() { ResizeGrip.AttachToWindow(this); AddChild(new SpinDrag()); }
 
     private void Store()
     {

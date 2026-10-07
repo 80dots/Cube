@@ -76,6 +76,8 @@ public partial class ActionPopup : PanelContainer
         var vp = _shell.Viewport;
         if (vp == null || !vp.IsVisibleInTree()) return;
         float s = CubeApp.Instance.UiScale;
+        var min = GetCombinedMinimumSize();
+        if (Size != min) Size = min; // 필드 수가 바뀌면 다음 프레임에 최소 크기가 갱신되므로 매 프레임 맞춘다
         GlobalPosition = vp.GlobalPosition + new Vector2(8 * s, vp.Size.Y - Size.Y - 8 * s);
     }
 
@@ -212,7 +214,7 @@ public partial class ActionPopup : PanelContainer
     private void Rebuild()
     {
         _rebuildQueued = false;
-        foreach (var c in _grid.GetChildren()) c.QueueFree();
+        foreach (var c in _grid.GetChildren()) { _grid.RemoveChild(c); c.QueueFree(); } // 즉시 빼야 이전 필드 크기가 남지 않는다
         _note.Text = "";
         float s = CubeApp.Instance.UiScale;
         switch (_kind)
@@ -259,7 +261,8 @@ public partial class ActionPopup : PanelContainer
         UpdateHeader();
         _grid.Visible = !_collapsed && _kind != Kind.None;
         _note.Visible = !_collapsed && _note.Text.Length > 0;
-        ResetSize();
+        Size = Vector2.Zero; ResetSize();
+        Callable.From(() => { Size = Vector2.Zero; ResetSize(); }).CallDeferred();
     }
 
     private static NVec3 Conv(Vector3 v) => new(v.X, v.Y, v.Z);

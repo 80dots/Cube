@@ -177,6 +177,8 @@ public partial class Shell : Control
         ActionPopup = new ActionPopup { Name = "ActionPopup" };
         AddChild(ActionPopup);
         ActionPopup.Setup(this);
+        // 숫자 입력칸: 가운데 버튼 드래그로 값 조절(Shift = 세밀)
+        AddChild(new SpinDrag { Name = "SpinDrag" });
 
         Document.Selection.ModeChanged += RefreshModeButtons;
         Document.Undo.Changed += RefreshUndoButtons;
