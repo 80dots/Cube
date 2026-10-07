@@ -13,6 +13,8 @@ public partial class ViewportOverlay : Control
     public (Vector2 center, float radiusPx)? Brush;
     /// <summary>Create Polygon Tool 미리보기(화면 점 목록).</summary>
     public List<Vector2>? Polyline;
+    /// <summary>좌상단 Poly Count HUD 수치(Shell이 갱신). null이면 그리지 않는다.</summary>
+    public PolyCount? Stats;
 
     public override void _Ready()
     {
@@ -21,6 +23,40 @@ public partial class ViewportOverlay : Control
     }
 
     public override void _Process(double delta) => QueueRedraw();
+
+    private void DrawPolyCount(PolyCount st, Font font, int fs, float s)
+    {
+        float x0 = 10 * s, y = 18 * s, line = fs + 4 * s;
+        float colW = 62 * s, labelW = 54 * s;
+        var dim = MathConvert.Rgb(0x9a9a9a); var txt = MathConvert.Rgb(0xdcdcdc); var hi = MathConvert.Rgb(0xffd54a);
+        bool comp = st.Mode != Core.Selection.SelectMode.Object;
+        void Cell(string text, float x, float yy, Color c, bool right)
+        {
+            float w = right ? font.GetStringSize(text, HorizontalAlignment.Left, -1, fs).X : 0;
+            DrawString(font, new Vector2(x - w, yy), text, HorizontalAlignment.Left, -1, fs, c);
+        }
+        // 헤더
+        Cell("Scene", x0 + labelW + colW, y, dim, true);
+        Cell("Object", x0 + labelW + colW * 2, y, dim, true);
+        if (comp) Cell("Selected", x0 + labelW + colW * 3, y, dim, true);
+        y += line;
+        (string label, int scene, int obj, int sel, bool showSel)[] rows =
+        {
+            ("Verts", st.SceneVerts, st.ObjVerts, st.Mode == Core.Selection.SelectMode.Uv ? st.SelUvs : st.SelVerts, st.Mode is Core.Selection.SelectMode.Vertex or Core.Selection.SelectMode.Uv),
+            ("Edges", st.SceneEdges, st.ObjEdges, st.SelEdges, st.Mode == Core.Selection.SelectMode.Edge),
+            ("Faces", st.SceneFaces, st.ObjFaces, st.SelFaces, st.Mode == Core.Selection.SelectMode.Face),
+            ("Tris", st.SceneTris, st.ObjTris, 0, false),
+            ("Objects", st.SceneObjects, st.ObjObjects, 0, false),
+        };
+        foreach (var (label, scene, obj, sel, showSel) in rows)
+        {
+            Cell(label, x0, y, dim, false);
+            Cell(scene.ToString("N0"), x0 + labelW + colW, y, txt, true);
+            Cell(obj > 0 ? obj.ToString("N0") : "-", x0 + labelW + colW * 2, y, txt, true);
+            if (comp && showSel) Cell(sel.ToString("N0"), x0 + labelW + colW * 3, y, hi, true);
+            y += line;
+        }
+    }
 
     public override void _Draw()
     {
@@ -32,6 +68,9 @@ public partial class ViewportOverlay : Control
         var label = CameraLabel;
         var textSize = font.GetStringSize(label, HorizontalAlignment.Left, -1, fs);
         DrawString(font, new Vector2((Size.X - textSize.X) / 2, Size.Y - 8 * s), label, HorizontalAlignment.Left, -1, fs, MathConvert.Rgb(0xdcdcdc));
+
+        // Poly Count HUD (좌상단, Maya Heads Up Display)
+        if (Stats != null && CubeApp.Instance.Settings.ShowPolyCount) DrawPolyCount(Stats, font, fs, s);
 
         // 축 기즈모 (좌하단)
         if (Camera != null)

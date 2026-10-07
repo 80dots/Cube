@@ -146,6 +146,7 @@ public partial class Shell
         Actions.Register("display.wireOnShaded", "Wireframe on Shaded", () => { bool on = !Viewport.Display.WireOnShaded; Settings.WireOnShaded = on; foreach (var p in Layout.Panels) { p.Display.WireOnShaded = on; p.Display.RefreshAll(); } }, isChecked: () => Viewport.Display.WireOnShaded);
         Actions.Register("display.grid", "Grid", () => { bool on = !Viewport.Display.ShowGrid; Settings.ShowGrid = on; foreach (var p in Layout.Panels) p.Display.ShowGrid = on; }, isChecked: () => Viewport.Display.ShowGrid);
         Actions.Register("display.background", "Background Color", () => { Viewport.CycleBackground(); });
+        Actions.Register("display.polyCount", "Poly Count (HUD)", () => { Settings.ShowPolyCount = !Settings.ShowPolyCount; Settings.Save(); }, isChecked: () => Settings.ShowPolyCount);
 
         // --- 창
         Actions.Register("windows.outliner", "Outliner", () => OutlinerDock.Visible = !OutlinerDock.Visible, isChecked: () => OutlinerDock.Visible);
@@ -628,7 +629,7 @@ public partial class Shell
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
             .Item("display.jointAxes").Separator()
-            .Item("display.grid").Item("display.background").Separator()
+            .Item("display.grid").Item("display.polyCount").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
         Menus.Build(Add("Render"))
@@ -637,7 +638,8 @@ public partial class Shell
             .Item("render.headlight").Item("render.shadows");
 
         Menus.Build(Add("Bridge"))
-            .Item("bridge.blender").Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()
+            .Item("bridge.blender").Item("bridge.blenderFile").Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()
+            .Submenu("Blender Add-on", m => m.Item("bridge.installBlenderAddon").Item("bridge.saveBlenderAddon"))
             .Item("bridge.tripo").Separator()
             .Item("bridge.reload").Item("bridge.autoReload").Item("bridge.openFolder").Separator()
             .Item("bridge.settings");

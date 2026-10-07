@@ -53,6 +53,8 @@ public sealed class Settings
     [JsonPropertyName("axisOrientation")] public string AxisOrientation { get; set; } = "World";
     [JsonPropertyName("wireOnShaded")] public bool WireOnShaded { get; set; } = true;
     [JsonPropertyName("showGrid")] public bool ShowGrid { get; set; } = true;
+    /// <summary>뷰포트 좌상단 Poly Count HUD(Verts/Edges/Faces/Tris/Objects).</summary>
+    [JsonPropertyName("showPolyCount")] public bool ShowPolyCount { get; set; } = true;
     [JsonPropertyName("quadView")] public bool QuadView { get; set; }
     /// <summary>Display → Joint Local Rotation Axes.</summary>
     [JsonPropertyName("showJointAxes")] public bool ShowJointAxes { get; set; }

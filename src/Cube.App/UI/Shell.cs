@@ -52,6 +52,14 @@ public partial class Shell : Control
     private bool _maximized;
 
     public Document Document => CubeApp.Instance.Document;
+    /// <summary>뷰포트 좌상단 Poly Count HUD 수치(모든 패널이 공유).</summary>
+    public Viewport.PolyCount PolyCount { get; } = new();
+    private bool _polyCountDirty;
+
+    public override void _Process(double delta)
+    {
+        if (_polyCountDirty) { _polyCountDirty = false; PolyCount.Recompute(Document); }
+    }
     public Settings Settings => CubeApp.Instance.Settings;
 
     public override void _Ready()
@@ -149,6 +157,12 @@ public partial class Shell : Control
         Document.Selection.ModeChanged += RefreshModeButtons;
         Document.Undo.Changed += RefreshUndoButtons;
         Document.Changed += _ => UpdateTitle();
+        // Poly Count HUD: 문서/선택이 바뀔 때마다 다시 센다(프레임마다 세지 않음)
+        Document.Changed += _ => _polyCountDirty = true;
+        Document.Selection.Changed += () => _polyCountDirty = true;
+        Document.Selection.ModeChanged += () => _polyCountDirty = true;
+        _polyCountDirty = true;
+        foreach (var p in Layout.Panels) p.Overlay.Stats = PolyCount;
         Document.Undo.Changed += UpdateTitle;
         Tools.ToolChanged += _ => RefreshToolButtons();
         foreach (var p in Layout.Panels)
