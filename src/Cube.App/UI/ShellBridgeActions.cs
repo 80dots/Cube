@@ -39,7 +39,6 @@ public partial class Shell
 
     private void RegisterBridgeActions()
     {
-        Actions.Register("bridge.blender", "Send to Blender (FBX, OBJ back)", () => SendToBridge(BridgeApp.Blender), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.rizom", "Send to RizomUV (OBJ, UVs round-trip)", () => SendToBridge(BridgeApp.RizomUv), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.marmoset", "Send to Marmoset Toolbag (FBX)", () => SendToBridge(BridgeApp.Marmoset), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.cascadeur", "Send to Cascadeur (FBX)", () => SendToBridge(BridgeApp.Cascadeur), canExecute: HasBridgeNodes, repeatable: true);
@@ -48,7 +47,7 @@ public partial class Shell
         Actions.Register("bridge.autoReload", "Auto Reload When File Changes", () => { Settings.Bridge.AutoReload = !Settings.Bridge.AutoReload; Settings.Save(); }, isChecked: () => Settings.Bridge.AutoReload);
         Actions.Register("bridge.openFolder", "Open Bridge Folder", () => { var d = BridgeDir(null); OS.ShellOpen(d); });
         Actions.Register("bridge.settings", "Bridge Settings...", ToggleBridgeSettings, isChecked: () => BridgeSettingsWindow?.Visible ?? false);
-        Actions.Register("bridge.blenderFile", "Send to Blender (file only, add-on receives)", () => SendToBridge(BridgeApp.Blender, launch: false), canExecute: HasBridgeNodes, repeatable: true);
+        Actions.Register("bridge.blenderFile", "Send to Blender (add-on receives)", () => SendToBridge(BridgeApp.Blender, launch: false), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.installBlenderAddon", "Install Blender Add-on", InstallBlenderAddon);
         Actions.Register("bridge.saveBlenderAddon", "Save Blender Add-on As...", SaveBlenderAddon);
         Actions.Register("bridge.openAddonsFolder", "Open Add-ons Folder (shipped add-ons)", () =>
@@ -100,7 +99,6 @@ public partial class Shell
                     // FBX(자체 writer): n각형·공유 정점·코너 노멀/UV·머티리얼/텍스처·조인트/스킨이 그대로 간다(glTF는 삼각형 + 코너 분리)
                     path = System.IO.Path.Combine(dir, "cube_bridge.fbx");
                     if (!Files.Export(path, selOnly).Ok) return;
-                    WriteBlenderScript(System.IO.Path.Combine(dir, "cube_bridge.py"), path, System.IO.Path.Combine(dir, "cube_bridge.obj"));
                     break;
                 case BridgeApp.RizomUv:
                     path = System.IO.Path.Combine(dir, "cube_bridge.obj");
@@ -116,7 +114,7 @@ public partial class Shell
 
         string ret = app == BridgeApp.Blender ? System.IO.Path.Combine(dir, "cube_bridge.obj") : path;
         Bridge = new BridgeSession { App = app, Path = path, ReturnPath = ret, Nodes = nodes.Select(n => (n.Id, n.Name)).ToList(), Stamp = System.IO.File.Exists(ret) ? System.IO.File.GetLastWriteTimeUtc(ret) : DateTime.UtcNow };
-        if (!launch) { HelpLine.Text = $"Bridge: wrote {System.IO.Path.GetFileName(path)} — the Blender add-on (Cube tab) receives it; 'Send to Cube' there reloads it here."; return; }
+        if (!launch) { HelpLine.Text = $"Bridge: wrote {System.IO.Path.GetFileName(path)} — the Blender add-on (View3D sidebar → Cube tab, Auto receive) imports it; 'Send to Cube' there sends it back here."; return; }
         string? exe = ResolveExe(app);
         if (exe == null)
         {
@@ -125,11 +123,7 @@ public partial class Shell
             ToggleBridgeSettings(open: true);
             return;
         }
-        var args = app switch
-        {
-            BridgeApp.Blender => new[] { "--python", System.IO.Path.Combine(dir, "cube_bridge.py") },
-            _ => new[] { path },
-        };
+        var args = new[] { path };
         try
         {
             var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = dir };
@@ -137,7 +131,6 @@ public partial class Shell
             Process.Start(psi);
             HelpLine.Text = app switch
             {
-                BridgeApp.Blender => "Sent to Blender (FBX, polygons intact). Edit, then press 'Send to Cube' in the Cube sidebar tab (N) — it writes cube_bridge.obj and Cube reloads it automatically.",
                 BridgeApp.RizomUv => "Sent to RizomUV. Edit UVs and save (Ctrl+S) — Cube copies the UVs back onto the original meshes.",
                 BridgeApp.Marmoset => "Sent to Marmoset Toolbag (FBX with materials and textures).",
                 _ => "Sent to Cascadeur. Save/export back to the same FBX — Cube reloads it.",
@@ -190,80 +183,6 @@ public partial class Shell
             catch { /* 권한 등 */ }
         }
         return null;
-    }
-
-    /// <summary>Cube에서 실행한 Blender용 세션 스크립트. Cube Bridge 애드온이 켜져 있으면 패널을 다시 만들지 않고 애드온에 맡긴다(가져오기만).</summary>
-    private static void WriteBlenderScript(string scriptPath, string fbxPath, string objPath)
-    {
-        string p = fbxPath.Replace("\\", "/"); string q = objPath.Replace("\\", "/");
-        string script = $@"# Generated by Cube — Blender bridge session. Imports the FBX (polygons, shared vertices, normals, UVs, materials)
-# and adds a 'Cube' sidebar tab with 'Send to Cube' (writes OBJ with n-gons back) unless the Cube Bridge add-on is enabled.
-import bpy, os
-BRIDGE = r""{p}""
-BRIDGE_OBJ = r""{q}""
-
-def _import():
-    try: bpy.ops.import_scene.fbx(filepath=BRIDGE, use_custom_normals=True, use_image_search=True)
-    except TypeError: bpy.ops.import_scene.fbx(filepath=BRIDGE)
-
-def _write_origins(objects):
-    import json
-    from bpy_extras.io_utils import axis_conversion
-    G = axis_conversion(to_forward='-Z', to_up='Y').to_4x4(); Ginv = G.inverted()
-    data = {{}}
-    for ob in objects:
-        if ob.type != 'MESH': continue
-        M = G @ ob.matrix_world @ Ginv
-        data[ob.name] = [[float(M[r][c]) for c in range(4)] for r in range(4)]
-    with open(os.path.splitext(BRIDGE_OBJ)[0] + "".json"", ""w"", encoding=""utf-8"") as f:
-        json.dump({{""version"": 1, ""axes"": ""Y-up,-Z forward"", ""objects"": data}}, f)
-
-def _export():
-    sel = bool(bpy.context.selected_objects)
-    try:
-        bpy.ops.wm.obj_export(filepath=BRIDGE_OBJ, export_selected_objects=sel, apply_modifiers=True, export_normals=True, export_uv=True,
-                              export_materials=False, export_triangulated_mesh=False, forward_axis='NEGATIVE_Z', up_axis='Y', global_scale=1.0)
-    except AttributeError:
-        bpy.ops.export_scene.obj(filepath=BRIDGE_OBJ, use_selection=sel, use_mesh_modifiers=True, use_normals=True, use_uvs=True,
-                                 use_materials=False, use_triangles=False, axis_forward='-Z', axis_up='Y', global_scale=1.0)
-    _write_origins(bpy.context.selected_objects if sel else list(bpy.context.view_layer.objects))
-
-if ""cube_bridge"" in bpy.context.preferences.addons:
-    bpy.ops.wm.read_homefile(use_empty=True)
-    _import()
-    print(""Cube bridge: add-on active, session panel skipped"")
-    raise SystemExit  # 아래 세션 패널은 만들지 않는다(이름 충돌 방지)
-
-class CUBE_OT_send_back(bpy.types.Operator):
-    bl_idname = ""cube.send_back""
-    bl_label = ""Send to Cube""
-    bl_description = ""Export the scene back to the Cube bridge file (Cube reloads it automatically)""
-    def execute(self, context):
-        _export()
-        self.report({{'INFO'}}, ""Sent to Cube: "" + os.path.basename(BRIDGE_OBJ))
-        return {{'FINISHED'}}
-
-class CUBE_PT_bridge_session(bpy.types.Panel):
-    bl_label = ""Cube Bridge (session)""
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = ""Cube""
-    def draw(self, context):
-        self.layout.operator(""cube.send_back"", icon='EXPORT')
-        self.layout.label(text=os.path.basename(BRIDGE))
-
-def _on_save(_dummy):
-    try: _export()
-    except Exception as e: print(""Cube bridge export failed:"", e)
-
-bpy.ops.wm.read_homefile(use_empty=True)
-_import()
-bpy.utils.register_class(CUBE_OT_send_back)
-bpy.utils.register_class(CUBE_PT_bridge_session)
-bpy.app.handlers.save_post.append(_on_save)
-print(""Cube bridge ready:"", BRIDGE)
-";
-        System.IO.File.WriteAllText(scriptPath, script);
     }
 
     // ---------------------------------------------------------------- 다시 읽기

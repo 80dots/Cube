@@ -27,7 +27,7 @@ public partial class BridgeSettingsWindow : FloatingPanel
         grid.AddThemeConstantOverride("v_separation", (int)(6 * s));
         box.AddChild(grid);
 
-        foreach (var app in new[] { BridgeApp.Blender, BridgeApp.RizomUv, BridgeApp.Marmoset, BridgeApp.Cascadeur })
+        foreach (var app in new[] { BridgeApp.RizomUv, BridgeApp.Marmoset, BridgeApp.Cascadeur }) // Blender는 실행하지 않고 애드온이 받으므로 경로 불필요
         {
             var a = app;
             grid.AddChild(new Label { Text = Shell.AppLabel(app) });
@@ -64,7 +64,7 @@ public partial class BridgeSettingsWindow : FloatingPanel
         box.AddChild(_auto);
 
         var note = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, Text =
-            "Blender: FBX out (polygons, shared vertices, normals/UVs, materials, rig) and OBJ back via the 'Cube' sidebar tab 'Send to Cube'.  RizomUV: OBJ, only UVs come back (same topology).  " +
+            "Blender: install the Cube Bridge add-on (Bridge → Add-ons); 'Send to Blender' writes cube_bridge.fbx which the add-on auto-receives, and its 'Send to Cube' returns OBJ + origins.  RizomUV: OBJ, only UVs come back (same topology).  " +
             "Marmoset Toolbag: FBX with materials/textures (send only).  Cascadeur: FBX with skeleton/skin; export back to the same file.  " +
             "Tripo3D: text-to-model via the Tripo API, the result is imported as glTF." };
         note.AddThemeColorOverride("font_color", MayaTheme.TextDim);
