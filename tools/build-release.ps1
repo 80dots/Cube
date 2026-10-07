@@ -31,6 +31,16 @@ try {
     if (-not (Test-Path (Join-Path $buildDir "Cube.exe"))) { throw "Cube.exe가 생성되지 않았습니다" }
     Get-ChildItem $buildDir | ForEach-Object { Write-Host ("   {0,10:N0}  {1}" -f $_.Length, $_.Name) }
 
+    # 외부 앱 애드온(assets/addons/<app>/*)은 항상 같이 배포한다: 빌드 폴더 addons\(zip·인스톨러 포함) + 별도 Cube-<ver>-addons.zip
+    Write-Host "== addons"
+    $addonsSrc = Join-Path $root "assets\addons"
+    $addonsDst = Join-Path $buildDir "addons"
+    Copy-Item -Recurse -Force $addonsSrc $addonsDst
+    Get-ChildItem -Recurse -File $addonsDst | ForEach-Object { Write-Host ("   {0,10:N0}  addons\{1}" -f $_.Length, $_.FullName.Substring($addonsDst.Length + 1)) }
+    $addonsZip = Join-Path $distDir "Cube-$version-addons.zip"
+    if (Test-Path $addonsZip) { Remove-Item $addonsZip }
+    Compress-Archive -Path (Join-Path $addonsSrc "*") -DestinationPath $addonsZip
+
     Write-Host "== zip"
     $zip = Join-Path $distDir "Cube-$version-win64.zip"
     if (Test-Path $zip) { Remove-Item $zip }
@@ -52,7 +62,7 @@ try {
 
     if ($Upload) {
         Write-Host "== gh release upload $Tag"
-        gh release upload $Tag $setup $zip --clobber
+        gh release upload $Tag $setup $zip $addonsZip --clobber
         if ($LASTEXITCODE -ne 0) { throw "gh release upload 실패" }
     }
     Write-Host "OK"
