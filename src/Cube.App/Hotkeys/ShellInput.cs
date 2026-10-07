@@ -22,12 +22,31 @@ public partial class ShellInput : Node
     }
 
     /// <summary>Space 누름/뗌(텍스트 필드 포커스가 아닐 때). Shell이 탭=레이아웃 토글, 홀드=뷰 파이로 해석한다.</summary>
+    private Vector2 _cursorPos;
+    private bool _cursorFixQueued;
+
+    /// <summary>
+    /// 커서 복구: 크기 조절 그립·스플리터·텍스트 필드 위에서 바뀐 커서가 SubViewportContainer(뷰포트·UV 캔버스) 위로 오면
+    /// Godot이 갱신하지 않아 그대로 남는 경우가 있다. 버튼을 누르지 않은 마우스 이동마다(GUI 처리 뒤) 호버 컨트롤의 커서 모양을 다시 적용한다.
+    /// 임베디드 다이얼로그 위(루트에서 호버 컨트롤 없음)에서는 건드리지 않는다.
+    /// </summary>
+    private void FixCursor()
+    {
+        _cursorFixQueued = false;
+        var hovered = GetViewport().GuiGetHoveredControl();
+        if (hovered == null || !hovered.IsVisibleInTree()) return;
+        var local = hovered.GetGlobalTransformWithCanvas().AffineInverse() * _cursorPos;
+        var shape = hovered.GetCursorShape(local);
+        DisplayServer.CursorSetShape((DisplayServer.CursorShape)(int)shape);
+    }
+
     public event Action? SpaceDown;
     public event Action? SpaceUp;
     private bool _spaceHeld;
 
     public override void _Input(InputEvent e)
     {
+        if (e is InputEventMouseMotion mm && mm.ButtonMask == 0) { _cursorPos = mm.Position; if (!_cursorFixQueued) { _cursorFixQueued = true; CallDeferred(nameof(FixCursor)); } return; }
         if (e is not InputEventKey k) return;
         var focus = GetViewport().GuiGetFocusOwner();
         bool textFocused = focus is LineEdit or TextEdit || (focus != null && focus.GetParent() is SpinBox);
