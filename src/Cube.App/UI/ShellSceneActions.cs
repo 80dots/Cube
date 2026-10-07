@@ -20,7 +20,7 @@ public partial class Shell
         Actions.Register("create.lightDirectional", "Directional Light", () => CreateLight(LightType.Directional), repeatable: true);
         Actions.Register("create.lightPoint", "Point Light", () => CreateLight(LightType.Point), repeatable: true);
         Actions.Register("create.lightSpot", "Spot Light", () => CreateLight(LightType.Spot), repeatable: true);
-        Actions.Register("windows.materialEditor", "Material Editor", ToggleMaterialEditor, isChecked: () => MaterialEditor?.Visible ?? false);
+        Actions.Register("windows.materialEditor", "Material Editor", ToggleMaterialEditor, isChecked: () => MaterialEditor?.IsOpen ?? false);
 
         bool JointSelected() => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.IsJoint == true);
         Actions.Register("skeleton.insertJointTool", "Insert Joint Tool", () => Tools.SetTool("insertJoint"), isChecked: () => Tools.Current?.Id == "insertJoint");
@@ -44,17 +44,20 @@ public partial class Shell
         Document.Undo.Push(new AddNodeCommand("Create " + type + " Light", node));
     }
 
-    private void ToggleMaterialEditor()
+    private MaterialEditorWindow EnsureMaterialEditor()
     {
         if (MaterialEditor == null)
         {
-            MaterialEditor = new MaterialEditorWindow { Name = "MaterialEditor", Visible = false };
+            MaterialEditor = new MaterialEditorWindow { Name = "MaterialEditor", Visible = false, PanelId = "materialEditor" };
             AddChild(MaterialEditor);
             MaterialEditor.Setup(this);
             MaterialEditor.Closed += RefreshShelf;
+            Dock.Register(MaterialEditor);
         }
-        MaterialEditor.Toggle();
+        return MaterialEditor;
     }
+
+    private void ToggleMaterialEditor() => EnsureMaterialEditor().Toggle();
 
     // ---------------------------------------------------------------- Mirror Joint
 

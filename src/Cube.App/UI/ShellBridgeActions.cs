@@ -42,13 +42,13 @@ public partial class Shell
         Actions.Register("bridge.rizom", "Send to RizomUV (OBJ, UVs round-trip)", () => SendToBridge(BridgeApp.RizomUv), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.marmoset", "Send to Marmoset Toolbag (FBX)", () => SendToBridge(BridgeApp.Marmoset), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.cascadeur", "Send to Cascadeur (FBX)", () => SendToBridge(BridgeApp.Cascadeur), canExecute: HasBridgeNodes, repeatable: true);
-        Actions.Register("bridge.tripo", "Tripo Editor...", ToggleTripo, isChecked: () => TripoWindow?.Visible ?? false);
+        Actions.Register("bridge.tripo", "Tripo Editor...", ToggleTripo, isChecked: () => TripoWindow?.IsOpen ?? false);
         Actions.Register("bridge.tripoImport", "Import Tripo File...", () => Files.ShowImportDialog());
         Actions.Register("bridge.tripoFolder", "Open Tripo Folder", () => OS.ShellOpen(System.IO.Path.Combine(BridgeDir(null), "tripo")));
         Actions.Register("bridge.reload", "Reload from Bridge File", () => ReloadBridge(), canExecute: () => Bridge is { CanReload: true } && System.IO.File.Exists(Bridge.ReturnPath), repeatable: true);
         Actions.Register("bridge.autoReload", "Auto Reload When File Changes", () => { Settings.Bridge.AutoReload = !Settings.Bridge.AutoReload; Settings.Save(); }, isChecked: () => Settings.Bridge.AutoReload);
         Actions.Register("bridge.openFolder", "Open Bridge Folder", () => { var d = BridgeDir(null); OS.ShellOpen(d); });
-        Actions.Register("bridge.settings", "Bridge Settings...", ToggleBridgeSettings, isChecked: () => BridgeSettingsWindow?.Visible ?? false);
+        Actions.Register("bridge.settings", "Bridge Settings...", ToggleBridgeSettings, isChecked: () => BridgeSettingsWindow?.IsOpen ?? false);
         Actions.Register("bridge.blenderAll", "Send All to Blender", () => SendToBridge(BridgeApp.Blender, launch: false, selection: false), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.blenderSelected", "Send Selected to Blender", () => SendToBridge(BridgeApp.Blender, launch: false, selection: true), canExecute: () => Document.Selection.Objects.Count > 0, repeatable: true);
         Actions.Register("bridge.installBlenderAddon", "Install Blender Add-on", InstallBlenderAddon);
@@ -399,24 +399,38 @@ public partial class Shell
     private void ToggleBridgeSettings() => ToggleBridgeSettings(open: null);
     private void ToggleBridgeSettings(bool? open)
     {
-        if (BridgeSettingsWindow == null)
-        {
-            BridgeSettingsWindow = new BridgeSettingsWindow { Name = "BridgeSettings", Visible = false };
-            AddChild(BridgeSettingsWindow);
-            BridgeSettingsWindow.Setup(this);
-        }
+        EnsureBridgeSettings();
         bool show = open ?? !BridgeSettingsWindow.Visible;
         if (show) BridgeSettingsWindow.Open(); else BridgeSettingsWindow.Close();
     }
 
-    private void ToggleTripo()
+    private BridgeSettingsWindow EnsureBridgeSettings()
+    {
+        if (BridgeSettingsWindow == null)
+        {
+            BridgeSettingsWindow = new BridgeSettingsWindow { Name = "BridgeSettings", Visible = false, PanelId = "bridgeSettings" };
+            AddChild(BridgeSettingsWindow);
+            BridgeSettingsWindow.Setup(this);
+            Dock.Register(BridgeSettingsWindow);
+        }
+        return BridgeSettingsWindow;
+    }
+
+    private TripoWindow EnsureTripo()
     {
         if (TripoWindow == null)
         {
-            TripoWindow = new TripoWindow { Name = "Tripo", Visible = false };
+            TripoWindow = new TripoWindow { Name = "Tripo", Visible = false, PanelId = "tripo" };
             AddChild(TripoWindow);
             TripoWindow.Setup(this);
+            Dock.Register(TripoWindow);
         }
-        if (TripoWindow.Visible) TripoWindow.Close(); else TripoWindow.Open();
+        return TripoWindow;
+    }
+
+    private void ToggleTripo()
+    {
+        var w = EnsureTripo();
+        if (w.Visible) w.Close(); else w.Open();
     }
 }

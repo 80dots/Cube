@@ -35,8 +35,10 @@ public partial class Outliner : Tree
         NothingSelected += () => { if (!_syncing) UI.Shell.Instance.RecordSelection(s => s.ClearAll()); };
     }
 
-    public override void _ExitTree()
+    /// <summary>도킹/떼어 내기로 트리를 옮겨도 구독을 유지하고, 실제로 지워질 때만 해제한다.</summary>
+    public override void _Notification(int what)
     {
+        if (what != (int)NotificationPredelete) return;
         if (_doc != null) { _doc.Changed -= OnDocChanged; _doc.Selection.Changed -= SyncFromSelection; }
     }
 

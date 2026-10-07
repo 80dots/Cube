@@ -98,7 +98,8 @@ public partial class UvCanvas : Control
         CallDeferred(nameof(FrameAll));
     }
 
-    public override void _ExitTree()
+    /// <summary>도킹/떼어 내기로 트리를 옮겨도 구독을 유지하고, 실제로 지워질 때만 해제한다.</summary>
+    private void Unsubscribe()
     {
         if (_shell != null) { _shell.Document.Changed -= OnDocChanged; _shell.Document.Selection.Changed -= QueueRedraw; }
     }
@@ -543,6 +544,7 @@ public partial class UvCanvas : Control
 
     public override void _Notification(int what)
     {
+        if (what == (int)NotificationPredelete) { Unsubscribe(); return; }
         if (what == NotificationMouseExit) { if (_hover != null || _hoverPart != Part.None || _brushPos != null) { _hover = null; _hoverPart = Part.None; _brushPos = null; QueueRedraw(); } }
     }
 

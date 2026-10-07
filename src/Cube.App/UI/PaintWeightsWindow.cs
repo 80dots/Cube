@@ -86,11 +86,13 @@ public partial class PaintWeightsWindow : FloatingPanel
 
     public void Show(Shell shell)
     {
+        if (Docked) { Open(); return; }
         if (!Visible)
         {
             var host = shell.GetViewport().GetVisibleRect().Size;
+            bool redock = LastDock != null;
             Open();
-            Position = new Vector2(host.X - Size.X - 24, host.Y * 0.25f);
+            if (!redock) Position = new Vector2(host.X - Size.X - 24, host.Y * 0.25f);
         }
     }
 }

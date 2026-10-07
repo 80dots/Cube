@@ -27,14 +27,18 @@ public partial class Shell : Control
     public HBoxContainer RigShelf { get; private set; } = null!;
     private readonly List<(Button button, string action)> _shelfButtons = new();
     public VBoxContainer ToolBox { get; private set; } = null!;
-    public VBoxContainer OutlinerDock { get; private set; } = null!;
-    public PanelContainer OutlinerBody { get; private set; } = null!;
+    /// <summary>Outliner를 담은 도킹 가능한 패널(기본: 왼쪽 도크).</summary>
+    public FloatingPanel OutlinerWindow { get; private set; } = null!;
+    /// <summary>Properties를 담은 도킹 가능한 패널(기본: 오른쪽 도크).</summary>
+    public FloatingPanel PropertiesWindow { get; private set; } = null!;
+    public Docking.DockSide LeftDock { get; private set; } = null!;
+    public Docking.DockSide RightDock { get; private set; } = null!;
+    public Docking.DockManager Dock { get; private set; } = null!;
     public Docks.Outliner Outliner { get; private set; } = null!;
     public ViewportLayout Layout { get; private set; } = null!;
     /// <summary>활성 뷰포트(마우스가 들어갔거나 눌린 패널). 툴·핫키·표시 액션의 대상.</summary>
     public ViewportPanel Viewport => Layout.Active;
-    public VBoxContainer PropertiesDock { get; private set; } = null!;
-    public PanelContainer PropertiesBody { get; private set; } = null!;
+
     public Docks.PropertiesPanel Properties { get; private set; } = null!;
     public Label HelpLine { get; private set; } = null!;
 
@@ -115,35 +119,42 @@ public partial class Shell : Control
         root.AddChild(_mainSplit);
 
         ToolBox = new VBoxContainer { Name = "ToolBox", CustomMinimumSize = new Vector2(40 * s, 0) };
-        // 왼쪽 행은 스플리터가 정한 폭만 쓰고(확장 안 함), 그 안에서 Outliner 도크가 남는 폭을 채운다
+        // 왼쪽 행 = 툴박스 + 왼쪽 도크(스플리터가 폭을 정함), 오른쪽 = 뷰포트 + 오른쪽 도크.
+        // 도크에는 Outliner/Properties와 떠 있는 패널(UV Editor 등)을 탭으로 붙일 수 있다(UI/Docking/DockManager.cs).
         var leftRow = new HBoxContainer { Name = "Left", SizeFlagsVertical = SizeFlags.ExpandFill, SizeFlagsHorizontal = SizeFlags.Fill };
         leftRow.AddChild(Wrap(ToolBox, MayaTheme.PanelDark, expandH: false));
-        (OutlinerDock, OutlinerBody) = MakeDock("Outliner", 200 * s);
-        Outliner = new Docks.Outliner { Name = "Outliner" };
-        OutlinerBody.AddChild(Outliner);
-        leftRow.AddChild(OutlinerDock);
+        LeftDock = new Docking.DockSide { Name = "LeftDock", SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
+        leftRow.AddChild(LeftDock);
         _mainSplit.AddChild(leftRow);
 
         _rightSplit = new HSplitContainer { Name = "RightSplit", SizeFlagsHorizontal = SizeFlags.ExpandFill };
         _mainSplit.AddChild(_rightSplit);
 
-        Layout = new ViewportLayout { Name = "ViewportLayout" };
+        Layout = new ViewportLayout { Name = "ViewportLayout", SizeFlagsHorizontal = SizeFlags.ExpandFill };
         _rightSplit.AddChild(Layout);
+        RightDock = new Docking.DockSide { Name = "RightDock", SizeFlagsHorizontal = SizeFlags.Fill, SizeFlagsVertical = SizeFlags.ExpandFill };
+        _rightSplit.AddChild(RightDock);
 
-        (PropertiesDock, PropertiesBody) = MakeDock("Properties", 240 * s);
+        // Outliner / Properties도 떼어 낼 수 있는 패널이다(처음 자리는 레이아웃 복원이 정함)
+        OutlinerWindow = MakeDockablePanel("outliner", "Outliner", new Vector2(260, 520) * s);
+        Outliner = new Docks.Outliner { Name = "Outliner" };
+        OutlinerWindow.Content.AddChild(Outliner);
+        OutlinerWindow.LastDock = new Docking.DockSlot(Docking.DockSideKind.Left, 0);
+        PropertiesWindow = MakeDockablePanel("properties", "Properties", new Vector2(300, 560) * s);
         Properties = new Docks.PropertiesPanel { Name = "Properties" };
-        PropertiesBody.AddChild(Properties);
-        _rightSplit.AddChild(PropertiesDock);
+        PropertiesWindow.Content.AddChild(Properties);
+        PropertiesWindow.LastDock = new Docking.DockSlot(Docking.DockSideKind.Right, 0);
 
         HelpLine = new Label { Name = "HelpLine", Text = "Select a tool.", CustomMinimumSize = new Vector2(0, 20 * s) };
         root.AddChild(Wrap(HelpLine, MayaTheme.PanelDark));
         // Time Slider(가져온 애니메이션 재생): HelpLine 바로 위
         BuildTimeSlider(root, root.GetChildCount() - 1, s);
 
-        _rightSplit.SplitOffsets = new[] { (int)(10000 * s) };
-        _mainSplit.SplitOffsets = new[] { (int)(240 * s) };
-        AttachDockGrip(OutlinerBody, leftSide: false, dx => _mainSplit.SplitOffsets = new[] { _mainSplit.SplitOffsets[0] + (int)dx });
-        AttachDockGrip(PropertiesBody, leftSide: true, dx => _rightSplit.SplitOffsets = new[] { _rightSplit.SplitOffsets[0] + (int)dx });
+        Dock = new Docking.DockManager { Name = "DockManager" };
+        AddChild(Dock);
+        Dock.Setup(this, LeftDock, RightDock, _mainSplit, _rightSplit);
+        Dock.Register(OutlinerWindow);
+        Dock.Register(PropertiesWindow);
 
         Layout.Bind(Document);
         Outliner.Bind(Document);
@@ -207,6 +218,8 @@ public partial class Shell : Control
         RefreshToolButtons();
         SyncAxisButtons();
         UpdateTitle();
+        // 도킹 레이아웃 복원(기본: Outliner 왼쪽, Properties 오른쪽; 저장된 탭/그룹/폭/떠 있는 패널)
+        Dock.RestoreLayout(EnsurePanel);
         GetTree().AutoAcceptQuit = false;
         Viewport.GrabFocus();
     }
@@ -402,14 +415,37 @@ public partial class Shell : Control
     public override void _Notification(int what)
     {
         if (what == NotificationWMCloseRequest)
-            SceneFiles.ConfirmDiscard(() => { Settings.Save(); GetTree().Quit(); });
+            SceneFiles.ConfirmDiscard(() => { Dock.SaveLayout(); Settings.Save(); GetTree().Quit(); });
+    }
+
+    /// <summary>레이아웃 복원용: 패널 ID → 패널(없으면 만든다). 복원하지 않는 패널은 null.</summary>
+    private FloatingPanel? EnsurePanel(string id) => id switch
+    {
+        "outliner" => OutlinerWindow,
+        "properties" => PropertiesWindow,
+        "uvEditor" => EnsureUvEditor(),
+        "uvSetEditor" => EnsureUvSetEditor(),
+        "materialEditor" => EnsureMaterialEditor(),
+        "animationData" => EnsureAnimationData(),
+        "renderSettings" => EnsureRenderSettings(),
+        "tripo" => EnsureTripo(),
+        "bridgeSettings" => EnsureBridgeSettings(),
+        _ => null, // paintWeights 등 툴에 묶인 패널은 복원하지 않는다
+    };
+
+    /// <summary>Windows 메뉴의 Outliner/Properties: 열려 있으면 닫고, 닫혀 있으면 마지막 자리(도크)에 다시 연다.</summary>
+    private void TogglePanel(FloatingPanel p)
+    {
+        if (p.IsOpen) p.Close(); else p.Open();
+        Dock.SaveLayout();
     }
 
     public void ToggleMaximizeViewport()
     {
         _maximized = !_maximized;
-        foreach (var n in new Control[] { StatusLine.GetParent<Control>(), ShelfRow, _mainSplit.GetChild<Control>(0), PropertiesDock, HelpLine.GetParent<Control>() })
+        foreach (var n in new Control[] { StatusLine.GetParent<Control>(), ShelfRow, _mainSplit.GetChild<Control>(0), HelpLine.GetParent<Control>() })
             n.Visible = !_maximized;
+        Dock.SetMaximized(_maximized);
         UpdateTimeSliderVisibility();
     }
 
@@ -426,27 +462,14 @@ public partial class Shell : Control
         return pc;
     }
 
-    /// <summary>도크 본문 모서리에 크기 조절 그립을 겹친다(PanelContainer는 Shrink 플래그 자식을 모서리에 둔다). 드래그 가로 델타를 스플릿 오프셋에 더한다.</summary>
-    private static void AttachDockGrip(PanelContainer body, bool leftSide, Action<float> dx)
-    {
-        var grip = new ResizeGrip { LeftSide = leftSide, Name = "Grip" };
-        body.AddChild(grip);
-        grip.Dragged += d => dx(d.X);
-    }
 
-    private static (VBoxContainer dock, PanelContainer body) MakeDock(string title, float width)
+    /// <summary>도킹 가능한 일반 패널(내용은 Content에). 셸에 숨겨 두고 레이아웃 복원이 도크에 붙인다.</summary>
+    private FloatingPanel MakeDockablePanel(string id, string title, Vector2 floatSize)
     {
-        // 도크와 본문이 가로로 확장되어야 스플리터를 넓힐 때 내용(Tree 등)도 함께 넓어진다
-        var dock = new VBoxContainer { Name = title.Replace(" ", "") + "Dock", CustomMinimumSize = new Vector2(width, 0), SizeFlagsHorizontal = SizeFlags.ExpandFill };
-        var header = new Label { Text = title };
-        var hp = new PanelContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
-        var sb = new StyleBoxFlat { BgColor = MayaTheme.PanelDark };
-        sb.SetContentMarginAll(4);
-        hp.AddThemeStyleboxOverride("panel", sb);
-        hp.AddChild(header);
-        dock.AddChild(hp);
-        var body = new PanelContainer { Name = "Body", SizeFlagsVertical = SizeFlags.ExpandFill, SizeFlagsHorizontal = SizeFlags.ExpandFill };
-        dock.AddChild(body);
-        return (dock, body);
+        var p = new FloatingPanel { Name = title.Replace(" ", "") + "Window", PanelId = id, Title = title, Visible = false };
+        AddChild(p);
+        p.Size = floatSize; p.FloatSize = floatSize;
+        p.MinPanelSize = new Vector2(180, 160) * CubeApp.Instance.UiScale;
+        return p;
     }
 }

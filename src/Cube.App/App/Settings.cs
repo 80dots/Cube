@@ -4,7 +4,31 @@ using Godot;
 
 namespace Cube.App;
 
-/// <summary>user://settings.json 에 저장되는 사용자 설정.</summary>
+/// <summary>도킹 레이아웃: 좌/우 도크마다 그룹(위→아래) 목록, 그룹은 탭 패널 ID 목록. 떠 있는 패널 위치도 저장.</summary>
+public sealed class DockLayoutSettings
+{
+    [JsonPropertyName("left")] public List<List<string>> Left { get; set; } = new() { new() { "outliner" } };
+    [JsonPropertyName("right")] public List<List<string>> Right { get; set; } = new() { new() { "properties" } };
+    /// <summary>도크 폭(px, 0 = 기본값).</summary>
+    [JsonPropertyName("leftWidth")] public float LeftWidth { get; set; }
+    [JsonPropertyName("rightWidth")] public float RightWidth { get; set; }
+    [JsonPropertyName("floating")] public List<FloatingPanelState> Floating { get; set; } = new();
+    /// <summary>그룹 사이 경계 오프셋(px, UI 배율 1 기준).</summary>
+    [JsonPropertyName("leftSplits")] public List<float> LeftSplits { get; set; } = new();
+    [JsonPropertyName("rightSplits")] public List<float> RightSplits { get; set; } = new();
+    /// <summary>그룹마다 앞에 보이던 탭의 패널 ID.</summary>
+    [JsonPropertyName("active")] public List<string> Active { get; set; } = new();
+}
+
+public sealed class FloatingPanelState
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("x")] public float X { get; set; }
+    [JsonPropertyName("y")] public float Y { get; set; }
+    [JsonPropertyName("w")] public float W { get; set; }
+    [JsonPropertyName("h")] public float H { get; set; }
+}
+
 /// <summary>뷰포트 렌더 설정(Render → Render Settings). 모든 패널의 Environment에 적용된다.</summary>
 public sealed class RenderSettings
 {
@@ -37,6 +61,7 @@ public sealed class BridgeSettings
     [JsonPropertyName("autoReload")] public bool AutoReload { get; set; } = true;
 }
 
+/// <summary>user://settings.json 에 저장되는 사용자 설정.</summary>
 public sealed class Settings
 {
     public const string Path = "user://settings.json";
@@ -79,6 +104,7 @@ public sealed class Settings
     [JsonPropertyName("lastSceneDir")] public string? LastSceneDir { get; set; }
     /// <summary>Render → Render Settings(IBL/톤 매핑/AA).</summary>
     [JsonPropertyName("render")] public RenderSettings Render { get; set; } = new();
+    [JsonPropertyName("dock")] public DockLayoutSettings Dock { get; set; } = new();
     /// <summary>Bridge 메뉴(외부 앱 연동) 설정.</summary>
     [JsonPropertyName("bridge")] public BridgeSettings Bridge { get; set; } = new();
 

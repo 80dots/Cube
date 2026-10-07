@@ -17,7 +17,7 @@ public partial class Shell
         var doc = Document; var sel = doc.Selection;
         bool HasTargets() => UvTargetNodes().Any();
 
-        Actions.Register("windows.uvEditor", "UV Editor", ToggleUvEditor, isChecked: () => UvEditorWindow?.Visible ?? false);
+        Actions.Register("windows.uvEditor", "UV Editor", ToggleUvEditor, isChecked: () => UvEditorWindow?.IsOpen ?? false);
         Actions.Register("uv.planarBest", "Planar Mapping (Best Plane)", () => Project("Planar", (m, f) => UvOps.PlanarProjectBestFit(m, f)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.planarX", "Planar Mapping (X)", () => Project("Planar X", (m, f) => UvOps.PlanarProject(m, f, Vector3.UnitX)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.planarY", "Planar Mapping (Y)", () => Project("Planar Y", (m, f) => UvOps.PlanarProject(m, f, Vector3.UnitY)), canExecute: HasTargets, repeatable: true);
@@ -27,9 +27,9 @@ public partial class Shell
         Actions.Register("uv.unfold", "Unfold", () => ForEachUvShells("Unfold", (m, t, shells) => UvOps.UnfoldRelax(m, t, shells)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.cut", "Cut UV Edges", () => CutSew(true), canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("uv.sew", "Sew UV Edges", () => CutSew(false), canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
-        Actions.Register("uv.frameSelected", "Frame Selected (UV)", () => UvEditorWindow?.Canvas.FrameSelected(), canExecute: () => UvEditorWindow?.Visible ?? false);
-        Actions.Register("uv.frameAll", "Frame All (UV)", () => UvEditorWindow?.Canvas.FrameAll(), canExecute: () => UvEditorWindow?.Visible ?? false);
-        Actions.Register("uv.cycleBackground", "Cycle Background (UV)", () => UvEditorWindow?.CycleBackground(), canExecute: () => UvEditorWindow?.Visible ?? false);
+        Actions.Register("uv.frameSelected", "Frame Selected (UV)", () => UvEditorWindow?.Canvas.FrameSelected(), canExecute: () => UvEditorWindow?.IsOpen ?? false);
+        Actions.Register("uv.frameAll", "Frame All (UV)", () => UvEditorWindow?.Canvas.FrameAll(), canExecute: () => UvEditorWindow?.IsOpen ?? false);
+        Actions.Register("uv.cycleBackground", "Cycle Background (UV)", () => UvEditorWindow?.CycleBackground(), canExecute: () => UvEditorWindow?.IsOpen ?? false);
         Actions.Register("uv.flipU", "Flip U", () => ForEachUvPoints("Flip U", (m, t, p) => UvOps.Flip(m, t, p, true)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.flipV", "Flip V", () => ForEachUvPoints("Flip V", (m, t, p) => UvOps.Flip(m, t, p, false)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.autoSeams", "Auto Seam Select", AutoSeamSelect, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
@@ -40,17 +40,20 @@ public partial class Shell
     /// <summary>UV 브러시 옵션(반지름 px, 세기). Tools → Brush Options... 로 바꾸며 Ctrl+휠로 반지름 조절.</summary>
     public OptionValues BrushOptions => Options("uv.brush");
 
-    private void ToggleUvEditor()
+    private UvEditor.UvEditorWindow EnsureUvEditor()
     {
         if (UvEditorWindow == null)
         {
-            UvEditorWindow = new UvEditor.UvEditorWindow { Name = "UvEditor", Visible = false };
+            UvEditorWindow = new UvEditor.UvEditorWindow { Name = "UvEditor", Visible = false, PanelId = "uvEditor" };
             AddChild(UvEditorWindow);
             UvEditorWindow.Setup(this);
             UvEditorWindow.Closed += RefreshShelf;
+            Dock.Register(UvEditorWindow);
         }
-        UvEditorWindow.Toggle();
+        return UvEditorWindow;
     }
+
+    private void ToggleUvEditor() => EnsureUvEditor().Toggle();
 
     /// <summary>UV 작업 대상 노드와 면 집합: 면 모드면 선택 면, 그 외(오브젝트/UV/엣지)는 관련 노드의 전체 면.</summary>
     private IEnumerable<(SceneNode node, List<int> faces)> UvTargetNodes()

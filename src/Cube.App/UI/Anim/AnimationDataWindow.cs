@@ -76,13 +76,16 @@ public partial class AnimationDataWindow : FloatingPanel
         right.AddChild(keysBox);
 
         _pb.StateChanged += Refresh;
+        VisibilityChanged += () => { if (Visible) Refresh(); }; // 도크 탭으로 전환될 때
         shell.Document.Changed += OnDocChanged;
         shell.Document.Selection.Changed += OnSelChanged;
         Refresh();
     }
 
-    public override void _ExitTree()
+    /// <summary>도킹/떼어 내기로 트리를 옮겨도 구독을 유지하고, 실제로 지워질 때만 해제한다.</summary>
+    public override void _Notification(int what)
     {
+        if (what != (int)NotificationPredelete) return;
         if (_pb == null) return;
         _pb.StateChanged -= Refresh;
         _shell.Document.Changed -= OnDocChanged;

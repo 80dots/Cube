@@ -39,7 +39,7 @@ public partial class DebugDriver : Node
             try { Exec(parts); }
             catch (Exception ex) { GD.PrintErr($"[Drive] '{step}': {ex.Message}"); }
             // 주입된 입력 이벤트는 다음 입력 플러시에서 처리되므로 입력 스텝 뒤에는 한 프레임 양보한다
-            if (parts[0] is "move" or "press" or "dblclick" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
+            if (parts[0] is "move" or "gmove" or "gdrag" or "grab" or "press" or "dblclick" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
         }
         if (_steps.Count == 0 && _wait == 0) { GD.Print("[Drive] done"); QueueFree(); }
     }
@@ -59,6 +59,40 @@ public partial class DebugDriver : Node
         switch (p[0])
         {
             case "wait": _wait = int.Parse(p[1]); break;
+            case "gmove":   // gmove X Y: 창 전역 좌표로 이동(뷰포트 밖 UI용)
+                _pos = new Vector2(float.Parse(p[1]), float.Parse(p[2])) - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });
+                break;
+            case "gdrag":   // gdrag X Y: 버튼을 누른 채 전역 좌표까지 8단계로 이동
+                {
+                    var target = new Vector2(float.Parse(p[1]), float.Parse(p[2])) - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    for (int i = 1; i <= 8; i++)
+                    {
+                        var next = _pos.Lerp(target, i / 8f);
+                        Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(next), GlobalPosition = ToGlobal(next), Relative = next - _pos, ButtonMask = Mask() });
+                        _pos = next;
+                    }
+                    break;
+                }
+            case "grab":    // grab PANELID: 떠 있으면 제목 바, 도크에 붙어 있으면 탭 위로 커서를 옮긴다
+                {
+                    var panel = UI.Shell.Instance.FindChildren("*", "", true, false).OfType<UI.FloatingPanel>().FirstOrDefault(f => f.PanelId == p[1]);
+                    if (panel == null) { GD.Print($"[Drive] grab: no panel {p[1]}"); break; }
+                    Vector2 g;
+                    if (panel.Docked && panel.GetParent() is UI.Docking.DockGroup grp)
+                    {
+                        var bar = grp.GetTabBar();
+                        g = bar.GlobalPosition + bar.GetTabRect(grp.GetTabIdxFromControl(panel)).GetCenter();
+                    }
+                    else g = panel.GlobalPosition + new Vector2(panel.Size.X * 0.4f, 12 * CubeApp.Instance.UiScale);
+                    _pos = g - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });
+                    GD.Print($"[Drive] grab {p[1]} at {g} docked={panel.Docked}");
+                    break;
+                }
+            case "dockinfo":
+                GD.Print($"[Drive] dock {UI.Shell.Instance.Dock.Summary()}");
+                break;
             case "move":
                 _pos = ParseXY(p[1], p[2]);
                 Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });

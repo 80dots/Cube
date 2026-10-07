@@ -93,7 +93,7 @@ public partial class Shell
     {
         var doc = Document; var sel = doc.Selection;
         bool HasTargets() => UvTargetNodes().Any();
-        bool EditorOpen() => UvEditorWindow?.Visible ?? false;
+        bool EditorOpen() => UvEditorWindow?.IsOpen ?? false;
 
         // ---------------------------------------------------------------- Create
         RegisterOptionPair("uv.automatic", "Automatic Mapping", new OptionSpec("Automatic Mapping Options",
@@ -307,7 +307,7 @@ public partial class Shell
         Actions.Register("uv.brushOptions", "Brush Options...", () => ShowOptions("uv.brush", () => { }), canExecute: EditorOpen);
 
         // ---------------------------------------------------------------- UV Sets
-        Actions.Register("uv.setEditor", "UV Set Editor", ToggleUvSetEditor, isChecked: () => UvSetEditor?.Visible ?? false);
+        Actions.Register("uv.setEditor", "UV Set Editor", ToggleUvSetEditor, isChecked: () => UvSetEditor?.IsOpen ?? false);
         _optionSpecs["uv.setCreate"] = new OptionSpec("Create Empty UV Set", v => v.Set("n", 1), new[] { OptionField.I("n", "Name suffix (uvSet<n>)", 1, 99) }, "Create");
         Actions.Register("uv.setCreate", "Create Empty UV Set...", () => ShowOptions("uv.setCreate", () => UvSetOp("Create UV Set", m => m.SwitchUvSet(m.AddUvSet("uvSet" + Options("uv.setCreate").Int("n"), false)))), canExecute: () => UvNodes().Any());
         Actions.Register("uv.setCopy", "Copy UVs to New UV Set", () => UvSetOp("Copy UV Set", m => { m.EnsureUvSets(); m.SwitchUvSet(m.AddUvSet(m.UvSets[m.CurrentUvSet].Name + "_copy", true)); }), canExecute: () => UvNodes().Any(), repeatable: true);
@@ -370,15 +370,18 @@ public partial class Shell
 
     public UvEditor.UvSetEditorWindow? UvSetEditor { get; private set; }
 
-    private void ToggleUvSetEditor()
+    private UvEditor.UvSetEditorWindow EnsureUvSetEditor()
     {
         if (UvSetEditor == null)
         {
-            UvSetEditor = new UvEditor.UvSetEditorWindow { Name = "UvSetEditor", Visible = false };
+            UvSetEditor = new UvEditor.UvSetEditorWindow { Name = "UvSetEditor", Visible = false, PanelId = "uvSetEditor" };
             AddChild(UvSetEditor);
             UvSetEditor.Setup(this);
             UvSetEditor.Closed += RefreshShelf;
+            Dock.Register(UvSetEditor);
         }
-        UvSetEditor.Toggle();
+        return UvSetEditor;
     }
+
+    private void ToggleUvSetEditor() => EnsureUvSetEditor().Toggle();
 }

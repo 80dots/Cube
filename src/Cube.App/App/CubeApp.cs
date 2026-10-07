@@ -42,6 +42,7 @@ public partial class CubeApp : Node
     /// <summary>환경설정 변경 후 셸을 다시 만든다(문서는 유지).</summary>
     public void ReloadShell()
     {
+        UI.Shell.Instance?.Dock?.SaveLayout(); // 도킹 레이아웃(폭·탭) 유지
         ApplyUiScale();
         GetTree().ReloadCurrentScene();
     }

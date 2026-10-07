@@ -76,8 +76,10 @@ public partial class TimeSlider : VBoxContainer
     private void OnSelectionChanged() => _ruler.QueueRedraw();
     private void OnDocChanged(DocChange c) { if (c.Kind is ChangeKind.AnimationsChanged or ChangeKind.Reset) SyncAll(); }
 
-    public override void _ExitTree()
+    /// <summary>도킹/떼어 내기로 트리를 옮겨도 구독을 유지하고, 실제로 지워질 때만 해제한다.</summary>
+    public override void _Notification(int what)
     {
+        if (what != (int)NotificationPredelete) return;
         if (_pb == null) return;
         _pb.StateChanged -= SyncAll; _pb.TimeChanged -= SyncTime;
         _doc.Selection.Changed -= OnSelectionChanged; _doc.Changed -= OnDocChanged;

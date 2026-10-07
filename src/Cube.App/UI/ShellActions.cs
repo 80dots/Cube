@@ -149,8 +149,8 @@ public partial class Shell
         Actions.Register("display.polyCount", "Poly Count (HUD)", () => { Settings.ShowPolyCount = !Settings.ShowPolyCount; Settings.Save(); }, isChecked: () => Settings.ShowPolyCount);
 
         // --- 창
-        Actions.Register("windows.outliner", "Outliner", () => OutlinerDock.Visible = !OutlinerDock.Visible, isChecked: () => OutlinerDock.Visible);
-        Actions.Register("windows.properties", "Properties", () => PropertiesDock.Visible = !PropertiesDock.Visible, isChecked: () => PropertiesDock.Visible);
+        Actions.Register("windows.outliner", "Outliner", () => TogglePanel(OutlinerWindow), isChecked: () => OutlinerWindow.IsOpen);
+        Actions.Register("windows.properties", "Properties", () => TogglePanel(PropertiesWindow), isChecked: () => PropertiesWindow.IsOpen);
         Actions.Register("help.about", "About Cube", () => HelpLine.Text = $"Cube {ProjectSettings.GetSetting("application/config/version")} — Godot {Engine.GetVersionInfo()["string"]}");
 
         Actions.Register("app.escape", "Escape", () =>

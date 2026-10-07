@@ -51,19 +51,22 @@ public partial class Shell
         Actions.Register("anim.prevKey", "Previous Key", () => Playback.StepKey(-1), HasClip);
         Actions.Register("anim.loop", "Loop Playback", () => { Playback.Loop = !Playback.Loop; TimeSlider.QueueRedraw(); }, isChecked: () => Playback?.Loop ?? true);
         Actions.Register("anim.nextClip", "Next Clip", () => Playback.SelectClip((Playback.ClipIndex + 1) % Document.Animations.Count), () => Document.Animations.Count > 1);
-        Actions.Register("windows.animationData", "Animation Data", ToggleAnimationData, isChecked: () => AnimationData?.Visible ?? false);
+        Actions.Register("windows.animationData", "Animation Data", ToggleAnimationData, isChecked: () => AnimationData?.IsOpen ?? false);
         Actions.Register("display.timeSlider", "Time Slider", () => { Settings.ShowTimeSlider = !Settings.ShowTimeSlider; Settings.Save(); UpdateTimeSliderVisibility(); }, isChecked: () => Settings.ShowTimeSlider);
     }
 
-    private void ToggleAnimationData()
+    private AnimationDataWindow EnsureAnimationData()
     {
         if (AnimationData == null)
         {
-            AnimationData = new AnimationDataWindow { Name = "AnimationData", Visible = false };
+            AnimationData = new AnimationDataWindow { Name = "AnimationData", Visible = false, PanelId = "animationData" };
             AddChild(AnimationData);
             AnimationData.Setup(this, Playback);
             AnimationData.Closed += RefreshShelf;
+            Dock.Register(AnimationData);
         }
-        AnimationData.Toggle();
+        return AnimationData;
     }
+
+    private void ToggleAnimationData() => EnsureAnimationData().Toggle();
 }

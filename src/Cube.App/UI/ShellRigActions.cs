@@ -24,12 +24,14 @@ public partial class Shell
             _paintWindow = new PaintWeightsWindow { Name = "PaintWeightsWindow", Visible = false };
             AddChild(_paintWindow);
             _paintWindow.Setup(this, tool);
+            Dock.Register(_paintWindow);
         }
         _paintWindow.RefreshTarget();
         _paintWindow.Show(this);
     }
 
-    public void HidePaintWeightsWindow() { if (_paintWindow != null && _paintWindow.Visible) _paintWindow.Visible = false; }
+    /// <summary>툴을 끝내면 떠 있는 가중치 창은 숨긴다(도크에 붙어 있으면 그대로 둔다).</summary>
+    public void HidePaintWeightsWindow() { if (_paintWindow != null && !_paintWindow.Docked && _paintWindow.Visible) _paintWindow.Visible = false; }
 
     private void RegisterRigActions()
     {

@@ -10,7 +10,7 @@ public partial class Shell
     private void RegisterRenderActions()
     {
         var r = () => Settings.Render;
-        Actions.Register("windows.renderSettings", "Render Settings...", ToggleRenderSettings, isChecked: () => RenderSettingsWindow?.Visible ?? false);
+        Actions.Register("windows.renderSettings", "Render Settings...", ToggleRenderSettings, isChecked: () => RenderSettingsWindow?.IsOpen ?? false);
         Actions.Register("render.ibl", "Image Based Lighting (IBL)", () => { r().IblEnabled = !r().IblEnabled; ApplyRenderSettings(); }, isChecked: () => r().IblEnabled);
         Actions.Register("render.background", "Show HDRI Background", () => { r().ShowBackground = !r().ShowBackground; ApplyRenderSettings(); }, canExecute: () => r().IblEnabled, isChecked: () => r().ShowBackground);
         Actions.Register("render.nextHdri", "Next Built-in HDRI", () =>
@@ -33,14 +33,21 @@ public partial class Shell
         RenderSettingsWindow?.Rebuild();
     }
 
-    private void ToggleRenderSettings()
+    private RenderSettingsWindow EnsureRenderSettings()
     {
         if (RenderSettingsWindow == null)
         {
-            RenderSettingsWindow = new RenderSettingsWindow { Name = "RenderSettings", Visible = false };
+            RenderSettingsWindow = new RenderSettingsWindow { Name = "RenderSettings", Visible = false, PanelId = "renderSettings" };
             AddChild(RenderSettingsWindow);
             RenderSettingsWindow.Setup(this);
+            Dock.Register(RenderSettingsWindow);
         }
-        if (RenderSettingsWindow.Visible) RenderSettingsWindow.Close(); else RenderSettingsWindow.Open();
+        return RenderSettingsWindow;
+    }
+
+    private void ToggleRenderSettings()
+    {
+        var w = EnsureRenderSettings();
+        if (w.Visible) w.Close(); else w.Open();
     }
 }
