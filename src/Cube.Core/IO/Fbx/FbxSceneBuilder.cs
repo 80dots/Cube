@@ -5,7 +5,8 @@ using Cube.Core.Scene;
 namespace Cube.Core.IO.Fbx;
 
 /// <summary>FBX 내보내기 옵션. 단위는 cm(UnitScaleFactor 1)로 쓰고 정점·이동·행렬 이동 성분에 UnitScale(기본 100)을 곱한다(Blender/Maya 방식).</summary>
-public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = true, string Creator = "Cube FBX writer", bool EmbedLights = true, string? BaseDir = null)
+/// <param name="BakePivots">true(기본)면 Rotation/ScalingPivot 속성 대신 피벗을 지오메트리에 베이크한다(정점 −P, Lcl Translation = P+T, 자식 Translation −P). 가져오는 앱(Blender origin, Unity/Godot)의 원점이 Cube 피벗과 일치한다.</param>
+public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = true, string Creator = "Cube FBX writer", bool EmbedLights = true, string? BaseDir = null, bool BakePivots = true)
 {
     public static readonly FbxExportOptions Default = new();
 }
@@ -54,7 +55,7 @@ public sealed class FbxSceneBuilder
         }
 
         // 객체: 모델 트리(부모가 내보내기 대상이 아니면 월드 베이크)
-        foreach (var t in tops) BuildNode(t, 0, bakeWorld: t.Parent != null && !t.Parent.IsRoot);
+        foreach (var t in tops) BuildNode(t, 0, bakeWorld: t.Parent != null && !t.Parent.IsRoot, parentShift: Vector3.Zero);
         // 스킨(모든 모델 ID가 정해진 뒤)
         foreach (var n in inSet) if (n.Skin != null && n.Mesh != null && _geometryIds.TryGetValue(n, out long geomId)) BuildSkin(n, geomId);
 
@@ -253,8 +254,10 @@ public sealed class FbxSceneBuilder
     // ---------------------------------------------------------------- 노드
 
     private readonly Dictionary<SceneNode, long> _geometryIds = new();
+    /// <summary>BakePivots일 때 노드마다 지오메트리/자식에 적용한 피벗 오프셋(오브젝트 공간, m).</summary>
+    private readonly Dictionary<SceneNode, Vector3> _bakedPivot = new();
 
-    private void BuildNode(SceneNode n, long parentId, bool bakeWorld)
+    private void BuildNode(SceneNode n, long parentId, bool bakeWorld, Vector3 parentShift)
     {
         NodeCount++;
         string type = n.IsJoint ? "LimbNode" : n.Mesh != null ? "Mesh" : n.IsLight ? "Light" : "Null";
@@ -264,7 +267,16 @@ public sealed class FbxSceneBuilder
         model.Add("Version", 232);
         var t = bakeWorld ? Transform3.FromMatrix(n.WorldMatrix, n.Local.Pivot) : n.Local;
         var p = model.Add("Properties70");
-        if (t.Pivot != Vector3.Zero)
+        var shift = Vector3.Zero; // 이 노드의 지오메트리와 자식에 적용할 −피벗 오프셋
+        if (_opt.BakePivots)
+        {
+            // M = T(−P)·S·R·T(P+T) 를 지오메트리에 T(−P)를 흡수시켜 S·R·T(P+T)로 쓴다. 부모가 베이크한 P_parent만큼 이 노드의 Translation을 당긴다.
+            shift = t.Pivot;
+            t.Translation = t.Translation + t.Pivot - parentShift;
+            t.Pivot = Vector3.Zero;
+            _bakedPivot[n] = shift;
+        }
+        else if (t.Pivot != Vector3.Zero)
         {
             p.Add("P", "RotationPivot", "Vector3D", "Vector", "", (double)(t.Pivot.X * S), (double)(t.Pivot.Y * S), (double)(t.Pivot.Z * S));
             p.Add("P", "ScalingPivot", "Vector3D", "Vector", "", (double)(t.Pivot.X * S), (double)(t.Pivot.Y * S), (double)(t.Pivot.Z * S));
@@ -330,7 +342,7 @@ public sealed class FbxSceneBuilder
             _connections.Add((aid, id, null));
         }
 
-        foreach (var c in n.Children) BuildNode(c, id, bakeWorld: false);
+        foreach (var c in n.Children) BuildNode(c, id, bakeWorld: false, parentShift: shift);
     }
 
     // ---------------------------------------------------------------- 지오메트리
@@ -353,7 +365,7 @@ public sealed class FbxSceneBuilder
         {
             if (!mesh.Verts[v].Alive) { remap[v] = -1; continue; }
             remap[v] = vi++;
-            var pos = mesh.Verts[v].Position;
+            var pos = mesh.Verts[v].Position - (_bakedPivot.TryGetValue(n, out var bp) ? bp : Vector3.Zero);
             verts.Add(pos.X * S); verts.Add(pos.Y * S); verts.Add(pos.Z * S);
         }
         _vertexRemap[n] = remap;
@@ -527,7 +539,8 @@ public sealed class FbxSceneBuilder
         _objects.Add(sk);
         _connections.Add((sid, geomId, null));
 
-        var meshWorld = Scaled(n.WorldMatrix);
+        // 피벗을 베이크했으면 메시 모델의 월드는 T(P)·M (지오메트리가 −P만큼 옮겨졌으므로)
+        var meshWorld = Scaled(_bakedPivot.TryGetValue(n, out var mp) ? Matrix4x4.CreateTranslation(mp) * n.WorldMatrix : n.WorldMatrix);
         long poseId = NewId("Pose");
         var pose = new FbxNode("Pose", poseId, FbxNode.Id("Pose", n.Name + "_bind"), "BindPose");
         pose.Add("Type", "BindPose");

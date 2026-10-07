@@ -5,7 +5,8 @@
 # Use:     View3D sidebar (N) > Cube tab.
 #          Receive from Cube  — imports cube_bridge.fbx written by Cube > Bridge > Send to Blender
 #                               (FBX keeps n-gons, shared vertices, custom normals, UVs, materials/textures, joints/skin).
-#          Send to Cube       — exports the scene (or the selection) to cube_bridge.obj (n-gons, normals, UVs); Cube reloads it.
+#          Send to Cube       — exports the scene (or the selection) to cube_bridge.obj (n-gons, normals, UVs) plus cube_bridge.json
+#                               (object origins = world matrices, so Cube restores pivot/rotation/scale); Cube reloads it.
 #          Auto receive       — watches cube_bridge.fbx and imports it whenever Cube writes it.
 #          Export on save     — also sends to Cube every time the .blend is saved.
 # The bridge folder defaults to %APPDATA%/Godot/app_userdata/Cube/bridge/blender (Cube's user:// folder on Windows).
@@ -13,7 +14,7 @@
 bl_info = {
     "name": "Cube Bridge",
     "author": "Cube",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > Cube",
     "description": "Send meshes to and receive meshes from Cube (FBX in, OBJ out, polygons intact)",
@@ -159,6 +160,23 @@ def receive(context, report=None):
     return True
 
 
+
+def _write_origins(path_json, objects):
+    """Export-space (Y-up, -Z forward) world matrices of the exported mesh objects: Cube restores origin/rotation/scale from them."""
+    import json
+    from bpy_extras.io_utils import axis_conversion
+    G = axis_conversion(to_forward='-Z', to_up='Y').to_4x4()
+    Ginv = G.inverted()
+    data = {}
+    for ob in objects:
+        if ob.type != 'MESH':
+            continue
+        M = G @ ob.matrix_world @ Ginv
+        data[ob.name] = [[float(M[r][c]) for c in range(4)] for r in range(4)]
+    with open(path_json, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "axes": "Y-up,-Z forward", "objects": data}, f)
+
+
 def _export_obj(path, use_sel):
     # Blender 3.3+/4.x: new OBJ exporter (keeps n-gons, writes normals/UVs). Older: legacy python exporter.
     if hasattr(bpy.ops.wm, "obj_export"):
@@ -178,6 +196,8 @@ def send(context, report=None):
     use_sel = bool(p.use_selection and context.selected_objects)
     try:
         _export_obj(path, use_sel)
+        objects = context.selected_objects if use_sel else list(context.view_layer.objects)
+        _write_origins(os.path.splitext(path)[0] + ".json", objects)
     except Exception as e:
         msg = "OBJ export failed: %s" % e
         if report: report({'ERROR'}, msg)

@@ -70,7 +70,7 @@ public class FbxWriterTests
         doc.Undo.Push(new AddMaterialCommand(mat));
         doc.Undo.Push(new AssignMaterialCommand(new[] { cube.Node.Id }, mat.Id));
 
-        var builder = new FbxSceneBuilder(doc);
+        var builder = new FbxSceneBuilder(doc, FbxExportOptions.Default with { BakePivots = false });
         var top = builder.Build(new[] { cube.Node });
         Assert.Equal(1, builder.NodeCount);
         Assert.Equal(12, builder.TriangleCount);
@@ -97,6 +97,23 @@ public class FbxWriterTests
         Assert.Equal(2.0, props["Lcl Scaling"].Prop<double>(4), 3);
         Assert.Equal(50.0, props["RotationPivot"].Prop<double>(4), 3);
         Assert.Equal(50.0, props["ScalingPivot"].Prop<double>(4), 3);
+
+        // 기본(BakePivots): 피벗 속성 없이 정점을 −P 옮기고 Lcl Translation = P+T. 월드 위치는 같아야 한다.
+        var baked = new FbxSceneBuilder(doc);
+        var (_, nodes2) = FbxBinaryReader.Read(FbxBinaryWriter.Write(baked.Build(new[] { cube.Node })));
+        var objects2 = nodes2.First(n => n.Name == "Objects");
+        var props2 = objects2.All("Model").Single().Child("Properties70")!.All("P").ToDictionary(p => p.Prop<string>(0), p => p);
+        Assert.False(props2.ContainsKey("RotationPivot"));
+        Assert.Equal(150.0, props2["Lcl Translation"].Prop<double>(4), 3); // (0.5 + 1) m
+        var verts2 = objects2.All("Geometry").Single().Child("Vertices")!.Prop<double[]>(0);
+        Assert.Equal(-100.0, verts2.Where((_, i) => i % 3 == 0).Min(), 3); // x: −0.5 − 0.5 = −1 m
+        Assert.Equal(0.0, verts2.Where((_, i) => i % 3 == 0).Max(), 3);
+        // 월드 검증: 베이크된 정점에 S·R·T(P+T)를 적용한 결과 = 원래 정점에 ToMatrix 적용
+        var tr = cube.Node.Local; var bakedT = new Transform3(tr.Translation + tr.Pivot, tr.RotationDegrees, tr.Scale, Vector3.Zero);
+        var p0 = cube.Node.Mesh!.Verts[0].Position;
+        var w1 = Vector3.Transform(p0, tr.ToMatrix());
+        var w2 = Vector3.Transform(p0 - tr.Pivot, bakedT.ToMatrix());
+        Assert.True((w1 - w2).Length() < 1e-4f);
 
         var material = objects.All("Material").Single();
         Assert.Equal("Material::wood", FbxNode.ReadableId(material.Prop<string>(1)));

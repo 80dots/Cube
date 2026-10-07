@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Matrix4x4 = System.Numerics.Matrix4x4;
+using NVec3 = System.Numerics.Vector3;
 using Cube.Core.Commands;
 using Cube.Core.IO;
 using Cube.Core.Scene;
@@ -204,6 +206,18 @@ def _import():
     try: bpy.ops.import_scene.fbx(filepath=BRIDGE, use_custom_normals=True, use_image_search=True)
     except TypeError: bpy.ops.import_scene.fbx(filepath=BRIDGE)
 
+def _write_origins(objects):
+    import json
+    from bpy_extras.io_utils import axis_conversion
+    G = axis_conversion(to_forward='-Z', to_up='Y').to_4x4(); Ginv = G.inverted()
+    data = {{}}
+    for ob in objects:
+        if ob.type != 'MESH': continue
+        M = G @ ob.matrix_world @ Ginv
+        data[ob.name] = [[float(M[r][c]) for c in range(4)] for r in range(4)]
+    with open(os.path.splitext(BRIDGE_OBJ)[0] + "".json"", ""w"", encoding=""utf-8"") as f:
+        json.dump({{""version"": 1, ""axes"": ""Y-up,-Z forward"", ""objects"": data}}, f)
+
 def _export():
     sel = bool(bpy.context.selected_objects)
     try:
@@ -212,6 +226,7 @@ def _export():
     except AttributeError:
         bpy.ops.export_scene.obj(filepath=BRIDGE_OBJ, use_selection=sel, use_mesh_modifiers=True, use_normals=True, use_uvs=True,
                                  use_materials=False, use_triangles=False, axis_forward='-Z', axis_up='Y', global_scale=1.0)
+    _write_origins(bpy.context.selected_objects if sel else list(bpy.context.view_layer.objects))
 
 if ""cube_bridge"" in bpy.context.preferences.addons:
     bpy.ops.wm.read_homefile(use_empty=True)
@@ -281,9 +296,22 @@ print(""Cube bridge ready:"", BRIDGE)
             // 보낸 노드를 지우고 다시 가져온다. 이름이 같은 노드는 머티리얼 할당을 이어받는다(OBJ에는 머티리얼이 없음)
             var oldMaterials = new Dictionary<string, int>();
             foreach (var (id, _) in b.Nodes) { var n = doc.Find(id); if (n != null && n.MaterialId > 0) oldMaterials[n.Name] = n.MaterialId; }
-            var existing = b.Nodes.Select(n => n.id).Where(id => doc.Find(id) != null).ToList();
-            if (existing.Count > 0) { var del = new DeleteNodesCommand(doc, existing); if (!del.IsEmpty) doc.Undo.Push(del); }
-            var res = Files.Import(b.ReturnPath);
+            // 먼저 파일을 읽고(실패하면 아무것도 지우지 않음) 보낸 노드를 지운 뒤 새 노드를 넣는다
+            ImportResult res;
+            if (b.App == BridgeApp.Blender)
+            {
+                res = ImportObjWithOrigins(b.ReturnPath);
+                if (!res.Ok) { HelpLine.Text = "Bridge: " + res.Message; return; }
+                var existing = b.Nodes.Select(n => n.id).Where(id => doc.Find(id) != null).ToList();
+                if (existing.Count > 0) { var del = new DeleteNodesCommand(doc, existing); if (!del.IsEmpty) doc.Undo.Push(del); }
+                doc.Undo.Push(new ImportNodesCommand(res.Nodes));
+            }
+            else
+            {
+                var existing = b.Nodes.Select(n => n.id).Where(id => doc.Find(id) != null).ToList();
+                if (existing.Count > 0) { var del = new DeleteNodesCommand(doc, existing); if (!del.IsEmpty) doc.Undo.Push(del); }
+                res = Files.Import(b.ReturnPath);
+            }
             if (res.Ok)
             {
                 b.Nodes = res.Nodes.Select(n => (n.Id, n.Name)).ToList();
@@ -292,6 +320,62 @@ print(""Cube bridge ready:"", BRIDGE)
             }
         }
         HelpLine.Text = $"Bridge: reloaded {System.IO.Path.GetFileName(b.ReturnPath)} from {AppLabel(b.App)} (replaced {b.Nodes.Count} node(s); Undo to revert).";
+    }
+
+    /// <summary>
+    /// Blender → Cube: OBJ(월드 좌표)와 함께 온 cube_bridge.json(오브젝트별 월드 행렬, Y-up 내보내기 공간)으로
+    /// 정점을 로컬 좌표로 되돌리고 노드 트랜스폼(T = Blender origin, R, S, Pivot 0)을 복원한다. JSON이 없으면 그냥 가져온다.
+    /// </summary>
+    private ImportResult ImportObjWithOrigins(string objPath)
+    {
+        var res = new ObjImporter().Import(objPath, Document, ImportOptions.Default);
+        if (!res.Ok) { HelpLine.Text = res.Message; return res; }
+        string jsonPath = System.IO.Path.ChangeExtension(objPath, ".json");
+        var matrices = new Dictionary<string, Matrix4x4>();
+        try
+        {
+            if (System.IO.File.Exists(jsonPath) && Math.Abs((System.IO.File.GetLastWriteTimeUtc(jsonPath) - System.IO.File.GetLastWriteTimeUtc(objPath)).TotalSeconds) < 30)
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(jsonPath));
+                if (doc.RootElement.TryGetProperty("objects", out var objs))
+                    foreach (var o in objs.EnumerateObject())
+                    {
+                        var rows = o.Value.EnumerateArray().Select(r => r.EnumerateArray().Select(x => (float)x.GetDouble()).ToArray()).ToArray();
+                        if (rows.Length != 4 || rows.Any(r => r.Length != 4)) continue;
+                        // Blender(열벡터, M·v) → System.Numerics(행벡터, v·M) = 전치
+                        matrices[o.Name] = new Matrix4x4(
+                            rows[0][0], rows[1][0], rows[2][0], rows[3][0],
+                            rows[0][1], rows[1][1], rows[2][1], rows[3][1],
+                            rows[0][2], rows[1][2], rows[2][2], rows[3][2],
+                            rows[0][3], rows[1][3], rows[2][3], rows[3][3]);
+                    }
+            }
+        }
+        catch (Exception ex) { GD.PushWarning($"[Bridge] origins json: {ex.Message}"); }
+        if (matrices.Count == 0) return res;
+        int restored = 0;
+        foreach (var n in res.Nodes)
+        {
+            if (n.Mesh == null) continue;
+            if (!matrices.TryGetValue(n.Name, out var m))
+            {
+                var key = matrices.Keys.FirstOrDefault(k => n.Name.StartsWith(k + "_", StringComparison.Ordinal) || Sanitize(k) == n.Name);
+                if (key == null) continue;
+                m = matrices[key];
+            }
+            if (!Matrix4x4.Invert(m, out var inv)) continue;
+            var mesh = n.Mesh;
+            for (int v = 0; v < mesh.VertexCount; v++)
+            {
+                if (!mesh.Verts[v].Alive) continue;
+                var vert = mesh.Verts[v]; vert.Position = NVec3.Transform(vert.Position, inv); mesh.Verts[v] = vert;
+            }
+            Core.Mesh.MeshNormals.Recompute(mesh);
+            mesh.BumpGeometry();
+            n.Local = Transform3.FromMatrix(m);
+            restored++;
+        }
+        return new ImportResult(true, res.Message + $" (origins restored for {restored})", res.Nodes);
     }
 
     /// <summary>RizomUV 왕복: OBJ의 오브젝트를 이름(없으면 순서)으로 원본 노드와 짝지어 면 순서대로 UV만 복사한다.</summary>
