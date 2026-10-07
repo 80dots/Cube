@@ -232,6 +232,12 @@ public partial class Shell
             else
             {
                 var existing = b.Nodes.Select(n => n.id).Where(id => doc.Find(id) != null).ToList();
+                // 보낸 노드(하위 포함)만 가리키는 기존 애니메이션 클립은 다시 가져온 클립으로 교체한다(Cascadeur 왕복)
+                var sent = new HashSet<Core.Scene.NodeId>();
+                void Collect(Core.Scene.SceneNode n) { sent.Add(n.Id); foreach (var c in n.Children) Collect(c); }
+                foreach (var id in existing) Collect(doc.Get(id));
+                var stale = doc.Animations.Where(c => c.Tracks.Count > 0 && c.Tracks.All(t => sent.Contains(t.Node))).ToList();
+                if (stale.Count > 0) doc.Undo.Push(new Core.Scene.SetAnimationsCommand("Remove Old Animations", Array.Empty<Core.Scene.AnimationClip>(), stale));
                 if (existing.Count > 0) { var del = new DeleteNodesCommand(doc, existing); if (!del.IsEmpty) doc.Undo.Push(del); }
                 res = Files.Import(b.ReturnPath);
             }

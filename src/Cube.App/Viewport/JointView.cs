@@ -65,7 +65,7 @@ public partial class JointView : Node3D
         foreach (var c in Node.Children)
         {
             if (!c.IsJoint) continue;
-            var tip = c.Local.Translation.ToGodot();
+            var tip = c.Evaluated.Translation.ToGodot();
             float len = tip.Length();
             if (len < 1e-5f) continue;
             var dir = tip / len;

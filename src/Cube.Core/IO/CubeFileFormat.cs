@@ -83,18 +83,41 @@ public static class CubeFileFormat
         [JsonPropertyName("texture")] public string? Texture { get; set; }
     }
 
+    private sealed class AnimationDto
+    {
+        [JsonPropertyName("name")] public string Name { get; set; } = "Take";
+        [JsonPropertyName("length")] public float Length { get; set; }
+        [JsonPropertyName("frameRate")] public float FrameRate { get; set; } = 30f;
+        [JsonPropertyName("loop")] public bool Loop { get; set; }
+        [JsonPropertyName("tracks")] public TrackDto[] Tracks { get; set; } = Array.Empty<TrackDto>();
+    }
+
+    private sealed class TrackDto
+    {
+        [JsonPropertyName("node")] public int Node { get; set; } = -1;                // nodes 배열 인덱스(-1 = 없음)
+        [JsonPropertyName("nodeName")] public string NodeName { get; set; } = "";
+        [JsonPropertyName("pt")] public float[]? PosTimes { get; set; }                 // 키 시간(초)
+        [JsonPropertyName("pv")] public float[]? PosValues { get; set; }                // xyz 연속
+        [JsonPropertyName("rt")] public float[]? RotTimes { get; set; }
+        [JsonPropertyName("rv")] public float[]? RotValues { get; set; }                // 쿼터니언 xyzw 연속
+        [JsonPropertyName("st")] public float[]? ScaleTimes { get; set; }
+        [JsonPropertyName("sv")] public float[]? ScaleValues { get; set; }              // xyz 연속
+    }
+
     private sealed class FileDto
     {
         [JsonPropertyName("format")] public string Format { get; set; } = "cube";
         [JsonPropertyName("version")] public int Version { get; set; } = CubeFileFormat.Version;
         [JsonPropertyName("materials")] public List<MaterialDto> Materials { get; set; } = new();
         [JsonPropertyName("nodes")] public List<NodeDto> Nodes { get; set; } = new();
+        [JsonPropertyName("animations")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<AnimationDto>? Animations { get; set; }
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     public static string Serialize(Document doc)
     {
+        using var restPose = Cube.Core.Scene.AnimationPose.RestScope(doc); // 재생 포즈가 아니라 rest(바인드) 포즈로 기록
         var dto = new FileDto();
         var index = new Dictionary<SceneNode, int>();
         var order = new List<SceneNode>();
@@ -125,6 +148,7 @@ public static class CubeFileFormat
             ToDto(n.Mesh, out var remap);
             dto.Nodes[i].Skin = SkinToDto(n.Skin, remap, doc, index);
         }
+        if (doc.Animations.Count > 0) dto.Animations = doc.Animations.Select(c => AnimToDto(c, doc, index)).ToList();
         return JsonSerializer.Serialize(dto, JsonOptions);
     }
 
@@ -175,8 +199,53 @@ public static class CubeFileFormat
             if (dto.Nodes[i].Parent < 0 || dto.Nodes[i].Parent >= nodes.Count) doc.AddNode(nodes[i]);
         for (int i = 0; i < nodes.Count; i++)
             if (dto.Nodes[i].Skin is { } sd && nodes[i].MeshShape is { } ms) { ms.Skin = SkinFromDto(sd, nodes); doc.Notify(new DocChange(ChangeKind.SkinChanged, nodes[i].Id)); }
+        if (dto.Animations is { Count: > 0 } anims)
+        {
+            foreach (var ad in anims) doc.Animations.Add(AnimFromDto(ad, nodes));
+            doc.Notify(new DocChange(ChangeKind.AnimationsChanged, NodeId.None));
+        }
         doc.Undo.Clear();
         doc.IsDirty = false;
+    }
+
+    // ---------------------------------------------------------------- 애니메이션
+
+    private static AnimationDto AnimToDto(AnimationClip c, Document doc, Dictionary<SceneNode, int> index)
+    {
+        static float[]? Times<T>(List<AnimKey<T>> keys) => keys.Count == 0 ? null : keys.Select(k => k.Time).ToArray();
+        static float[]? Vec(List<AnimKey<Vector3>> keys) => keys.Count == 0 ? null : keys.SelectMany(k => new[] { k.Value.X, k.Value.Y, k.Value.Z }).ToArray();
+        return new AnimationDto
+        {
+            Name = c.Name, Length = c.Length, FrameRate = c.FrameRate, Loop = c.Loop,
+            Tracks = c.Tracks.Select(t => new TrackDto
+            {
+                Node = doc.Find(t.Node) is { } n && index.TryGetValue(n, out int ix) ? ix : -1,
+                NodeName = t.NodeName,
+                PosTimes = Times(t.Position), PosValues = Vec(t.Position),
+                RotTimes = Times(t.Rotation), RotValues = t.Rotation.Count == 0 ? null : t.Rotation.SelectMany(k => new[] { k.Value.X, k.Value.Y, k.Value.Z, k.Value.W }).ToArray(),
+                ScaleTimes = Times(t.Scale), ScaleValues = Vec(t.Scale),
+            }).ToArray(),
+        };
+    }
+
+    private static AnimationClip AnimFromDto(AnimationDto d, List<SceneNode> nodes)
+    {
+        var c = new AnimationClip { Name = d.Name, Length = d.Length, FrameRate = d.FrameRate > 0 ? d.FrameRate : 30f, Loop = d.Loop };
+        foreach (var td in d.Tracks)
+        {
+            var t = new NodeTrack { Node = td.Node >= 0 && td.Node < nodes.Count ? nodes[td.Node].Id : NodeId.None, NodeName = td.NodeName };
+            if (td.PosTimes != null && td.PosValues != null)
+                for (int i = 0; i < td.PosTimes.Length && i * 3 + 2 < td.PosValues.Length; i++)
+                    t.Position.Add(new AnimKey<Vector3>(td.PosTimes[i], new Vector3(td.PosValues[i * 3], td.PosValues[i * 3 + 1], td.PosValues[i * 3 + 2])));
+            if (td.RotTimes != null && td.RotValues != null)
+                for (int i = 0; i < td.RotTimes.Length && i * 4 + 3 < td.RotValues.Length; i++)
+                    t.Rotation.Add(new AnimKey<Quaternion>(td.RotTimes[i], new Quaternion(td.RotValues[i * 4], td.RotValues[i * 4 + 1], td.RotValues[i * 4 + 2], td.RotValues[i * 4 + 3])));
+            if (td.ScaleTimes != null && td.ScaleValues != null)
+                for (int i = 0; i < td.ScaleTimes.Length && i * 3 + 2 < td.ScaleValues.Length; i++)
+                    t.Scale.Add(new AnimKey<Vector3>(td.ScaleTimes[i], new Vector3(td.ScaleValues[i * 3], td.ScaleValues[i * 3 + 1], td.ScaleValues[i * 3 + 2])));
+            c.Tracks.Add(t);
+        }
+        return c;
     }
 
     // ---------------------------------------------------------------- 메시

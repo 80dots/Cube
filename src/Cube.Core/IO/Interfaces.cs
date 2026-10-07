@@ -19,6 +19,8 @@ public sealed record ExportResult(bool Ok, string Message, int NodeCount = 0, in
 
 public sealed record ImportResult(bool Ok, string Message, IReadOnlyList<SceneNode> Nodes)
 {
+    /// <summary>파일에 들어 있던 애니메이션(트랙의 Node는 Nodes 트리의 노드 ID; 호출자가 문서에 넣는다).</summary>
+    public IReadOnlyList<AnimationClip> Animations { get; init; } = Array.Empty<AnimationClip>();
     public static ImportResult Fail(string msg) => new(false, msg, Array.Empty<SceneNode>());
 }
 

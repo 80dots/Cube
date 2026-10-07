@@ -46,7 +46,11 @@ public sealed class FileActions
         _status(result.Message);
         if (result.Ok && result.Nodes.Count > 0)
         {
-            _doc.Undo.Push(new ImportNodesCommand(result.Nodes));
+            using (_doc.Undo.BeginGroup("Import"))
+            {
+                _doc.Undo.Push(new ImportNodesCommand(result.Nodes));
+                if (result.Animations.Count > 0) _doc.Undo.Push(new SetAnimationsCommand("Import Animations", result.Animations));
+            }
             _settings.LastExportDir = System.IO.Path.GetDirectoryName(path); _settings.Save();
         }
         return result;

@@ -6,7 +6,8 @@ namespace Cube.Core.IO.Fbx;
 
 /// <summary>FBX 내보내기 옵션. 단위는 cm(UnitScaleFactor 1)로 쓰고 정점·이동·행렬 이동 성분에 UnitScale(기본 100)을 곱한다(Blender/Maya 방식).</summary>
 /// <param name="BakePivots">true(기본)면 Rotation/ScalingPivot 속성 대신 피벗을 지오메트리에 베이크한다(정점 −P, Lcl Translation = P+T, 자식 Translation −P). 가져오는 앱(Blender origin, Unity/Godot)의 원점이 Cube 피벗과 일치한다.</param>
-public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = true, string Creator = "Cube FBX writer", bool EmbedLights = true, string? BaseDir = null, bool BakePivots = true)
+/// <param name="ExportAnimations">true(기본)면 Document.Animations의 클립마다 AnimationStack/Layer/CurveNode/Curve와 Take를 쓴다(FbxSceneBuilder.Animation.cs).</param>
+public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = true, string Creator = "Cube FBX writer", bool EmbedLights = true, string? BaseDir = null, bool BakePivots = true, bool ExportAnimations = true)
 {
     public static readonly FbxExportOptions Default = new();
 }
@@ -17,7 +18,7 @@ public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = tr
 /// Material(Phong + DiffuseColor 텍스처 Texture/Video), 조인트(Model LimbNode + NodeAttribute Skeleton), 라이트(NodeAttribute Light),
 /// 스킨(Deformer Skin/Cluster + Pose BindPose; 바인드 포즈 = 내보내는 시점의 현재 포즈, glTF와 동일).
 /// </summary>
-public sealed class FbxSceneBuilder
+public sealed partial class FbxSceneBuilder
 {
     private readonly Document _doc;
     private readonly FbxExportOptions _opt;
@@ -58,6 +59,8 @@ public sealed class FbxSceneBuilder
         foreach (var t in tops) BuildNode(t, 0, bakeWorld: t.Parent != null && !t.Parent.IsRoot, parentShift: Vector3.Zero);
         // 스킨(모든 모델 ID가 정해진 뒤)
         foreach (var n in inSet) if (n.Skin != null && n.Mesh != null && _geometryIds.TryGetValue(n, out long geomId)) BuildSkin(n, geomId);
+        // 애니메이션(모델 ID와 베이크 피벗이 정해진 뒤)
+        if (_opt.ExportAnimations) BuildAnimations();
 
         var top = new List<FbxNode>
         {
@@ -80,7 +83,7 @@ public sealed class FbxSceneBuilder
             else conns.Add("C", "OP", child, parent, prop);
         }
         top.Add(conns);
-        var takes = new FbxNode("Takes"); takes.Add("Current", ""); top.Add(takes);
+        top.Add(Takes());
         return top;
     }
 
@@ -118,7 +121,7 @@ public sealed class FbxSceneBuilder
         return h;
     }
 
-    private static FbxNode GlobalSettings()
+    private FbxNode GlobalSettings()
     {
         var g = new FbxNode("GlobalSettings");
         g.Add("Version", 1000);
@@ -135,10 +138,11 @@ public sealed class FbxSceneBuilder
         p.Add("P", "OriginalUnitScaleFactor", "double", "Number", "", 1.0);
         p.Add("P", "AmbientColor", "ColorRGB", "Color", "", 0.0, 0.0, 0.0);
         p.Add("P", "DefaultCamera", "KString", "", "", "Producer Perspective");
-        p.Add("P", "TimeMode", "enum", "", "", 11);
-        p.Add("P", "TimeSpanStart", "KTime", "Time", "", 0L);
-        p.Add("P", "TimeSpanStop", "KTime", "Time", "", 46186158000L);
-        p.Add("P", "CustomFrameRate", "double", "Number", "", 24.0);
+        var (timeMode, customRate, spanStart, spanStop) = TimeSettings();
+        p.Add("P", "TimeMode", "enum", "", "", timeMode);
+        p.Add("P", "TimeSpanStart", "KTime", "Time", "", spanStart);
+        p.Add("P", "TimeSpanStop", "KTime", "Time", "", spanStop);
+        p.Add("P", "CustomFrameRate", "double", "Number", "", customRate);
         return g;
     }
 
@@ -149,7 +153,7 @@ public sealed class FbxSceneBuilder
         var doc = d.Add("Document", _nextId++, "Scene", "Scene");
         var p = doc.Add("Properties70");
         p.Add("P", "SourceObject", "object", "", "");
-        p.Add("P", "ActiveAnimStackName", "KString", "", "", "");
+        p.Add("P", "ActiveAnimStackName", "KString", "", "", ExportedClips.Count > 0 ? ExportedClips[0].Name : "");
         doc.Add("RootNode", 0L);
         return d;
     }
@@ -239,6 +243,11 @@ public sealed class FbxSceneBuilder
                         p.Add("P", "UseMipMap", "bool", "", "", 0);
                         break;
                     }
+                case "AnimationStack":
+                case "AnimationLayer":
+                case "AnimationCurveNode":
+                    AnimationTemplate(type, ot);
+                    break;
                 case "Video":
                     {
                         var p = ot.Add("PropertyTemplate", "FbxVideo").Add("Properties70");
@@ -263,6 +272,7 @@ public sealed class FbxSceneBuilder
         string type = n.IsJoint ? "LimbNode" : n.Mesh != null ? "Mesh" : n.IsLight ? "Light" : "Null";
         long id = NewId("Model");
         _modelIds[n] = id;
+        if (bakeWorld) _bakedWorldNodes.Add(n);
         var model = new FbxNode("Model", id, FbxNode.Id("Model", n.Name), type);
         model.Add("Version", 232);
         var t = bakeWorld ? Transform3.FromMatrix(n.WorldMatrix, n.Local.Pivot) : n.Local;
@@ -275,6 +285,7 @@ public sealed class FbxSceneBuilder
             t.Translation = t.Translation + t.Pivot - parentShift;
             t.Pivot = Vector3.Zero;
             _bakedPivot[n] = shift;
+            _parentShiftOf[n] = parentShift;
         }
         else if (t.Pivot != Vector3.Zero)
         {

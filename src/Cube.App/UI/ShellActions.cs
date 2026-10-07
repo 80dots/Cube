@@ -162,6 +162,7 @@ public partial class Shell
         RegisterUvActions();
         RegisterRigActions();
         RegisterSceneActions();
+        RegisterAnimActions();
         RegisterMeshActions();
         RegisterRenderActions();
         RegisterBridgeActions();
@@ -629,9 +630,15 @@ public partial class Shell
         Menus.Build(Add("Display"))
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
-            .Item("display.jointAxes").Separator()
+            .Item("display.jointAxes").Item("display.timeSlider").Separator()
             .Item("display.grid").Item("display.polyCount").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
+
+        Menus.Build(Add("Animation"))
+            .Item("anim.playToggle").Item("anim.rest").Separator()
+            .Item("anim.start").Item("anim.end").Item("anim.prevFrame").Item("anim.nextFrame").Item("anim.prevKey").Item("anim.nextKey").Separator()
+            .Item("anim.loop").Item("anim.nextClip").Separator()
+            .Item("windows.animationData").Item("display.timeSlider");
 
         Menus.Build(Add("Render"))
             .Item("windows.renderSettings").Separator()
@@ -645,7 +652,7 @@ public partial class Shell
             .Item("bridge.reload").Item("bridge.autoReload").Item("bridge.openFolder").Separator()
             .Item("bridge.settings");
 
-        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor").Item("windows.renderSettings");
+        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor").Item("windows.renderSettings").Item("windows.animationData");
         Menus.Build(Add("Help")).Item("help.about");
     }
 }

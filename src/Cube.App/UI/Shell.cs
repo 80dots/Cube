@@ -137,6 +137,8 @@ public partial class Shell : Control
 
         HelpLine = new Label { Name = "HelpLine", Text = "Select a tool.", CustomMinimumSize = new Vector2(0, 20 * s) };
         root.AddChild(Wrap(HelpLine, MayaTheme.PanelDark));
+        // Time Slider(가져온 애니메이션 재생): HelpLine 바로 위
+        BuildTimeSlider(root, root.GetChildCount() - 1, s);
 
         _rightSplit.SplitOffsets = new[] { (int)(10000 * s) };
         _mainSplit.SplitOffsets = new[] { (int)(240 * s) };
@@ -408,6 +410,7 @@ public partial class Shell : Control
         _maximized = !_maximized;
         foreach (var n in new Control[] { StatusLine.GetParent<Control>(), ShelfRow, _mainSplit.GetChild<Control>(0), PropertiesDock, HelpLine.GetParent<Control>() })
             n.Visible = !_maximized;
+        UpdateTimeSliderVisibility();
     }
 
     // ---------------------------------------------------------------- 헬퍼

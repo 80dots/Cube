@@ -33,8 +33,10 @@ public abstract class GodotSceneImporterBase : IImporter
             if (scene is Node3D rootN3 && HasMesh(rootN3)) nodes.Add(Convert(rootN3, ictx));
             else foreach (var child in scene.GetChildren()) if (child is Node3D c3) nodes.Add(Convert(c3, ictx));
             ictx.ResolveSkins(nodes);
-            string msg = $"Imported {ictx.Meshes} mesh(es)" + (ictx.Joints > 0 ? $", {ictx.Joints} joint(s), {ictx.Skins} skin(s)" : "") + $" from {System.IO.Path.GetFileName(path)}";
-            return new ImportResult(true, msg, nodes);
+            var clips = AnimationImport.Extract(scene, ictx.NodeMap, ictx.BoneNodes);
+            string msg = $"Imported {ictx.Meshes} mesh(es)" + (ictx.Joints > 0 ? $", {ictx.Joints} joint(s), {ictx.Skins} skin(s)" : "")
+                + (clips.Count > 0 ? $", {clips.Count} animation(s)" : "") + $" from {System.IO.Path.GetFileName(path)}";
+            return new ImportResult(true, msg, nodes) { Animations = clips };
         }
         catch (Exception ex) { return ImportResult.Fail(ex.Message); }
         finally { scene?.Free(); }
@@ -62,6 +64,8 @@ public abstract class GodotSceneImporterBase : IImporter
         }
         /// <summary>Skeleton3D → 본 인덱스별 조인트 노드.</summary>
         public readonly Dictionary<Skeleton3D, SceneNode[]> BoneNodes = new();
+        /// <summary>Godot 노드 → 만든 SceneNode(애니메이션 트랙 경로 해석용).</summary>
+        public readonly Dictionary<Node, SceneNode> NodeMap = new();
         /// <summary>트리 조립 후 조인트 ID·바인드 행렬을 채울 스킨 메시.</summary>
         public readonly List<(SceneNode mesh, SkinCluster skin, List<SceneNode> joints)> Pending = new();
         public ImportCtx(Document doc, ImportOptions options) { Doc = doc; Options = options; }
@@ -89,6 +93,7 @@ public abstract class GodotSceneImporterBase : IImporter
         var doc = ctx.Doc;
         var node = new SceneNode { Name = ctx.Unique(SafeName(g.Name)) };
         node.Local = Transform3.FromMatrix(g.Transform.ToNumerics());
+        ctx.NodeMap[g] = node;
         if (g is Skeleton3D skel)
         {
             // 본 → 조인트 노드(부모 본 아래, 루트 본은 스켈레톤 노드 아래)

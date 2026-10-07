@@ -65,15 +65,20 @@ public partial class SceneView : Node3D
                     {
                         var newParent = ParentViewFor(n);
                         if (v.GetParent() != newParent) v.Reparent(newParent, keepGlobalTransform: false);
-                        v.Transform = n.Local.ToGodot();
+                        v.Transform = n.Evaluated.ToGodot();
                     }
                     RefreshJoints(); UpdateSkins();
                     break;
                 }
             case ChangeKind.TransformChanged:
-                if (_views.TryGetValue(c.Node, out var tv)) tv.Transform = _doc!.Get(c.Node).Local.ToGodot();
+                if (_views.TryGetValue(c.Node, out var tv)) tv.Transform = _doc!.Get(c.Node).Evaluated.ToGodot();
                 if (_doc!.Get(c.Node).IsJoint || _doc.Get(c.Node).Parent?.IsJoint == true) RefreshJoints();
                 UpdateSkins();
+                break;
+            case ChangeKind.PoseChanged:
+                foreach (var (id, view) in _views)
+                    if (_doc!.Find(id) is { } pn) view.Transform = pn.Evaluated.ToGodot();
+                RefreshJoints(); UpdateSkins();
                 break;
             case ChangeKind.VisibilityChanged:
                 if (_views.TryGetValue(c.Node, out var vv)) vv.Visible = _doc!.Get(c.Node).Visible;
@@ -118,7 +123,7 @@ public partial class SceneView : Node3D
             view = lv;
         }
         else view = new Node3D { Name = n.Name };
-        view.Transform = n.Local.ToGodot();
+        view.Transform = n.Evaluated.ToGodot();
         view.Visible = n.Visible;
         _views[n.Id] = view;
         ParentViewFor(n).AddChild(view);

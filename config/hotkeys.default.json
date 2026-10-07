@@ -49,6 +49,12 @@
     { "action": "display.smoothPreviewOn", "chord": "3", "context": "viewport" },
     { "action": "display.background", "chord": "Alt+B", "context": "viewport" },
     { "action": "view.maximize", "chord": "Ctrl+Space" },
+    { "action": "anim.playToggle", "chord": "Alt+V" },
+    { "action": "anim.start", "chord": "Shift+Alt+V" },
+    { "action": "anim.prevFrame", "chord": "Alt+Comma" },
+    { "action": "anim.nextFrame", "chord": "Alt+Period" },
+    { "action": "anim.prevKey", "chord": "Comma" },
+    { "action": "anim.nextKey", "chord": "Period" },
     { "action": "app.escape", "chord": "Escape" }
   ]
 }

@@ -20,6 +20,8 @@ public enum ChangeKind
     LightChanged,     // 라이트 속성 변경
     MaterialChanged,  // 머티리얼 라이브러리(Node=None) 또는 노드 할당/속성 변경
     DisplayChanged,   // 표시 옵션(스무스 프리뷰 등) 변경 → 뷰 재빌드
+    AnimationsChanged, // 애니메이션 클립 목록 변경(Node=None)
+    PoseChanged, // 재생 포즈(SceneNode.Pose) 변경(Node=None). 문서 데이터는 그대로
     Selection,
 }
 
@@ -39,6 +41,8 @@ public sealed class Document
     public UndoStack Undo { get; }
     /// <summary>문서 머티리얼 라이브러리(ID 1부터; 0은 기본 lambert1).</summary>
     public List<MaterialDef> Materials { get; } = new();
+    /// <summary>가져온 애니메이션 클립(보기·재생·내보내기 전용; Cube는 키를 만들거나 편집하지 않는다).</summary>
+    public List<AnimationClip> Animations { get; } = new();
     private int _nextMaterialId = 1;
     public int NextMaterialId() => _nextMaterialId++;
     public string UniqueMaterialName(string baseName)
@@ -128,6 +132,7 @@ public sealed class Document
         _nodes.Clear();
         _nextId = 1;
         Materials.Clear(); _nextMaterialId = 1;
+        Animations.Clear();
         Selection.ClearAll(silent: true);
         Undo.Clear();
         FilePath = null;

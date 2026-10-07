@@ -55,6 +55,7 @@ public sealed class Settings
     /// <summary>v0.0.22: Wireframe on Shaded 기본값을 OFF로 바꾼 1회 마이그레이션 적용 여부.</summary>
     [JsonPropertyName("wireOnShadedDefaultOff")] public bool WireOnShadedDefaultOff { get; set; }
     [JsonPropertyName("showGrid")] public bool ShowGrid { get; set; } = true;
+    [JsonPropertyName("showTimeSlider")] public bool ShowTimeSlider { get; set; } = true;
     /// <summary>뷰포트 좌상단 Poly Count HUD(Verts/Edges/Faces/Tris/Objects).</summary>
     [JsonPropertyName("showPolyCount")] public bool ShowPolyCount { get; set; } = true;
     [JsonPropertyName("quadView")] public bool QuadView { get; set; }

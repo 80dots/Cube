@@ -27,6 +27,13 @@ public class SceneNode
     public NodeId Id { get; internal set; }
     public string Name { get; set; } = "node";
     public Transform3 Local = Transform3.Identity;
+    /// <summary>
+    /// 애니메이션 재생/스크럽 중의 포즈(표시·월드 계산용). null이면 Local. 편집 데이터(Local)와 분리되어 저장·Undo 대상이 아니다.
+    /// 내보내기·저장 전에는 비운다(AnimationPose.RestScope).
+    /// </summary>
+    public Transform3? Pose;
+    /// <summary>현재 보이는 로컬 트랜스폼(포즈가 있으면 포즈).</summary>
+    public Transform3 Evaluated => Pose ?? Local;
     public SceneNode? Parent { get; internal set; }
     public List<SceneNode> Children { get; } = new();
     public Shape? Shape { get; set; }
@@ -46,15 +53,15 @@ public class SceneNode
     {
         get
         {
-            var m = Local.ToMatrix();
+            var m = Evaluated.ToMatrix();
             var p = Parent;
-            while (p != null && !p.IsRoot) { m *= p.Local.ToMatrix(); p = p.Parent; }
+            while (p != null && !p.IsRoot) { m *= p.Evaluated.ToMatrix(); p = p.Parent; }
             return m;
         }
     }
 
     /// <summary>회전/스케일 피벗의 월드 위치.</summary>
-    public Vector3 PivotWorld => Vector3.Transform(Local.Pivot, WorldMatrix);
+    public Vector3 PivotWorld => Vector3.Transform(Evaluated.Pivot, WorldMatrix);
 
     /// <summary>문서 루트 여부(루트는 표시·선택되지 않는다).</summary>
     public bool IsRoot { get; internal set; }

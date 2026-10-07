@@ -237,6 +237,8 @@ public abstract class TransformToolBase : SelectTool
 
     protected virtual void BeginDrag(GizmoPart part, NVec2 px, CameraProjection proj)
     {
+        // 애니메이션 재생 포즈는 표시 전용: 편집은 항상 rest(바인드) 포즈 기준이므로 먼저 되돌리고 조작기를 다시 놓는다
+        if (Anim.AnimationPlayback.Current is { } pb && (pb.Posed || pb.Playing)) { pb.Rest(); RefreshGizmo(); }
         Dragging = true; DragPart = part; PressPx = px; PressRay = proj.Unproject(px);
         _virtualPx = px; _lastPx = px;
         Gizmo.SetActive(part);

@@ -177,6 +177,96 @@ public partial class DebugDriver : Node
             case "import":
                 GD.Print($"[Drive] import: {UI.Shell.Instance.Files.Import(p[1])}");
                 break;
+            case "skincheck":  // skincheck PATH CLIP TIME: Godot 자체 스킨/애니메이션 결과와 비교용 수치 출력
+                {
+                    var fd = p[1].EndsWith(".fbx") ? new FbxDocument() : new GltfDocument();
+                    var st = p[1].EndsWith(".fbx") ? new FbxState() : new GltfState();
+                    fd.AppendFromFile(p[1], st);
+                    var scene = fd.GenerateScene(st);
+                    var stack = new Stack<Node>(); stack.Push(scene);
+                    Skeleton3D? sk = null; MeshInstance3D? mi = null; ImporterMeshInstance3D? imi = null; AnimationPlayer? ap = null;
+                    while (stack.Count > 0) { var n = stack.Pop(); if (n is Skeleton3D s3) sk = s3; if (n is MeshInstance3D m3 && m3.Skin != null) mi = m3; if (n is ImporterMeshInstance3D im && im.Skin != null) imi = im; if (n is AnimationPlayer a) ap = a; foreach (var c in n.GetChildren()) stack.Push(c); }
+                    var skin = mi?.Skin ?? imi?.Skin;
+                    GD.Print($"[Drive] skincheck skel={sk?.Name} mesh={(mi?.Name ?? imi?.Name)} binds={skin?.GetBindCount()} meshXform={(mi as Node3D ?? imi)?.Transform}");
+                    if (sk != null && skin != null)
+                    {
+                        float worst = 0; string worstName = "";
+                        for (int b = 0; b < skin.GetBindCount(); b++)
+                        {
+                            int bone = skin.GetBindBone(b); if (bone < 0) bone = sk.FindBone(skin.GetBindName(b));
+                            var restG = sk.GetBoneGlobalRest(bone);
+                            var prod = restG * skin.GetBindPose(b);
+                            float d = (prod.Origin).Length() + (prod.Basis.X - Vector3.Right).Length() + (prod.Basis.Y - Vector3.Up).Length() + (prod.Basis.Z - Vector3.Back).Length();
+                            if (d > worst) { worst = d; worstName = sk.GetBoneName(bone); }
+                        }
+                        GD.Print($"[Drive] skincheck rest*bind deviation worst={worst:F4} at {worstName}");
+                    }
+                    if (sk != null && ap != null && p.Length > 3)
+                    {
+                        var lib = ap.GetAnimationLibrary(""); var names = lib.GetAnimationList();
+                        int gi = Array.FindIndex(names.ToArray(), n => n.ToString() == p[2]);
+                        if (gi < 0) { GD.Print($"[Drive] skincheck: clip {p[2]} not in file ({string.Join(",", names)})"); scene.Free(); break; }
+                        var an = lib.GetAnimation(names[gi]);
+                        double t = double.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture);
+                        var docA = CubeApp.Instance.Document.Animations;
+                        int di = docA.FindIndex(a => a.Name == p[2]);
+                        if (di < 0) { GD.Print($"[Drive] skincheck: clip {p[2]} not in document"); scene.Free(); break; }
+                        UI.Shell.Instance.Playback.SelectClip(di); UI.Shell.Instance.Playback.SetTime((float)t);
+                        GD.Print($"[Drive] skincheck anim length={an.Length} tracks={an.GetTrackCount()}");
+                        var clipDoc = docA[di];
+                        for (int tr = 0; tr < Math.Min(6, an.GetTrackCount()); tr++)
+                        {
+                            int kc = an.TrackGetKeyCount(tr);
+                            GD.Print($"[Drive]  track {an.TrackGetPath(tr)} {an.TrackGetType(tr)} keys={kc} t0={(kc > 0 ? an.TrackGetKeyTime(tr, 0) : -1)} tN={(kc > 0 ? an.TrackGetKeyTime(tr, kc - 1) : -1)} v0={(kc > 0 ? an.TrackGetKeyValue(tr, 0) : default)} interp@t={(an.TrackGetType(tr) == Animation.TrackType.Rotation3D ? an.RotationTrackInterpolate(tr, t).ToString() : an.TrackGetType(tr) == Animation.TrackType.Position3D ? an.PositionTrackInterpolate(tr, t).ToString() : "")}");
+                        }
+                        foreach (var ctr in clipDoc.Tracks.Take(4))
+                            GD.Print($"[Drive]  ours {ctr.NodeName} P={ctr.Position.Count} R={ctr.Rotation.Count} S={ctr.Scale.Count} rt0={(ctr.Rotation.Count > 0 ? ctr.Rotation[0].Time : -1)} r0={(ctr.Rotation.Count > 0 ? ctr.Rotation[0].Value.ToString() : "")} rAt={(ctr.Rotation.Count > 0 ? Core.Scene.NodeTrack.Sample(ctr.Rotation, (float)t, System.Numerics.Quaternion.Identity).ToString() : "")}");
+                        for (int tr = 0; tr < an.GetTrackCount(); tr++)
+                        {
+                            var path = an.TrackGetPath(tr); if (path.GetSubNameCount() == 0) continue;
+                            int bi = sk.FindBone(path.GetSubName(0)); if (bi < 0) continue;
+                            switch (an.TrackGetType(tr))
+                            {
+                                case Animation.TrackType.Position3D: sk.SetBonePosePosition(bi, an.PositionTrackInterpolate(tr, t)); break;
+                                case Animation.TrackType.Rotation3D: sk.SetBonePoseRotation(bi, an.RotationTrackInterpolate(tr, t)); break;
+                                case Animation.TrackType.Scale3D: sk.SetBonePoseScale(bi, an.ScaleTrackInterpolate(tr, t)); break;
+                            }
+                        }
+                        var doc = CubeApp.Instance.Document;
+                        float worst = 0; string wn = "";
+                        var glob = new Transform3D[sk.GetBoneCount()];
+                        for (int b = 0; b < sk.GetBoneCount(); b++) { int pb2 = sk.GetBoneParent(b); var lp = sk.GetBonePose(b); glob[b] = pb2 >= 0 ? glob[pb2] * lp : lp; }
+                        for (int b = 0; b < sk.GetBoneCount(); b++)
+                        {
+                            var g = glob[b];
+                            var jn = doc.Nodes.Values.FirstOrDefault(n => n.IsJoint && n.Name.EndsWith(sk.GetBoneName(b)));
+                            if (jn == null) continue;
+                            var parentSk = jn; while (parentSk.Parent != null && parentSk.Parent.IsJoint) parentSk = parentSk.Parent;
+                            var skelWorld = parentSk.Parent?.WorldMatrix ?? System.Numerics.Matrix4x4.Identity;
+                            var ours = (jn.WorldMatrix * (System.Numerics.Matrix4x4.Invert(skelWorld, out var inv) ? inv : System.Numerics.Matrix4x4.Identity)).Translation;
+                            float d = (new System.Numerics.Vector3(g.Origin.X, g.Origin.Y, g.Origin.Z) - ours).Length();
+                            if (d > worst) { worst = d; wn = sk.GetBoneName(b); }
+                        }
+                        GD.Print($"[Drive] skincheck pose t={t} clip={p[2]} worst bone position diff={worst:F4} at {wn}");
+                    }
+                    scene.Free();
+                    break;
+                }
+            case "anim":   // anim play|pause|rest|frame N|clip N|key +1/-1: 애니메이션 재생기 조작
+                {
+                    var pb = UI.Shell.Instance.Playback;
+                    switch (p[1])
+                    {
+                        case "play": pb.Play(); break;
+                        case "pause": pb.Pause(); break;
+                        case "rest": pb.Rest(); break;
+                        case "frame": pb.SetFrame(int.Parse(p[2])); break;
+                        case "clip": pb.SelectClip(int.Parse(p[2])); break;
+                        case "key": pb.StepKey(int.Parse(p[2])); break;
+                    }
+                    GD.Print($"[Drive] anim {p[1]} clip={pb.ClipIndex} frame={pb.Frame} playing={pb.Playing} posed={pb.Posed}");
+                    break;
+                }
             case "save":
                 GD.Print($"[Drive] save: {UI.Shell.Instance.SceneFiles.Save(p[1])} title='{UI.Shell.Instance.SceneFiles.Title}'");
                 break;
@@ -330,6 +420,11 @@ public partial class DebugDriver : Node
                     var doc = CubeApp.Instance.Document;
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen} cursor={DisplayServer.CursorGetShape()}");
                     GD.Print($"[Drive] {UI.Shell.Instance.ActionPopup.DebugSummary()}");
+                    if (doc.Animations.Count > 0)
+                    {
+                        var pb = UI.Shell.Instance.Playback;
+                        GD.Print($"[Drive] anims={doc.Animations.Count} {string.Join(",", doc.Animations.Select(a => $"{a.Name}:{a.Length:F2}s@{a.FrameRate:0.#}/{a.Tracks.Count}tr/{a.KeyCount}k"))} current={pb.ClipIndex} frame={pb.Frame}/{pb.EndFrame} playing={pb.Playing} posed={pb.Posed} posedNodes={doc.Nodes.Values.Count(n => n.Pose != null)}");
+                    }
                     var lights = doc.LightNodes().ToList();
                     if (lights.Count > 0) GD.Print($"[Drive] lights={lights.Count} {string.Join(",", lights.Select(l => $"{l.Name}:{l.Light!.Type}/{l.Light.Intensity:F1}"))} materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");
                     else if (doc.Materials.Count > 0) GD.Print($"[Drive] materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");

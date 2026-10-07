@@ -29,11 +29,13 @@ public static class DocumentToGodotScene
         public readonly Node3D Root;
         public readonly Dictionary<NodeId, (Skeleton3D skel, int bone, NMat skelWorld)> Bones = new();
         public readonly HashSet<NodeId> InSet = new();
+        /// <summary>일반 노드 → 만든 Godot 노드와(월드 베이크 시) 부모 월드 행렬. 애니메이션 트랙 경로/값 변환용.</summary>
+        public readonly Dictionary<NodeId, (Node3D node, NMat? parentWorld)> Nodes = new();
         public int Count, Tris;
         public Ctx(Node3D root) { Root = root; }
     }
 
-    public static (Node3D root, int nodeCount, int triCount) Build(IReadOnlyList<SceneNode> nodes, string rootName)
+    public static (Node3D root, int nodeCount, int triCount) Build(IReadOnlyList<SceneNode> nodes, string rootName, IReadOnlyList<AnimationClip>? clips = null)
     {
         var root = new Node3D { Name = rootName };
         var ctx = new Ctx(root);
@@ -60,6 +62,7 @@ public static class DocumentToGodotScene
             if (t.IsJoint) { foreach (var c in t.Children) if (!c.IsJoint) BuildNode(ctx, c, root, bakeWorld: true); continue; }
             BuildNode(ctx, t, root, t.Parent != null && !t.Parent.IsRoot);
         }
+        if (clips is { Count: > 0 }) AddAnimations(ctx, clips);
         return (root, ctx.Count, ctx.Tris);
     }
 
@@ -121,6 +124,7 @@ public static class DocumentToGodotScene
             gl.Name = n.Name;
             gl.Transform = bakeWorld ? n.WorldMatrix.ToGodot() : n.Local.ToGodot();
             parent.AddChild(gl);
+            ctx.Nodes[n.Id] = (gl, bakeWorld ? ParentWorld(n) : null);
             ctx.Count++;
             foreach (var c in n.Children) BuildNode(ctx, c, gl, false);
             return;
@@ -143,6 +147,7 @@ public static class DocumentToGodotScene
         // 부모가 내보내기 대상이 아니면 월드 트랜스폼을 베이크
         g.Transform = bakeWorld ? n.WorldMatrix.ToGodot() : n.Local.ToGodot();
         parent.AddChild(g);
+        ctx.Nodes[n.Id] = (g, bakeWorld ? ParentWorld(n) : null);
         ctx.Count++;
         foreach (var c in n.Children) BuildNode(ctx, c, g, false);
     }
@@ -208,5 +213,85 @@ public static class DocumentToGodotScene
         skel.AddChild(mi);
         mi.Skeleton = mi.GetPathTo(skel);
         return true;
+    }
+
+    private static NMat ParentWorld(SceneNode n) => n.Parent != null && !n.Parent.IsRoot ? n.Parent.WorldMatrix : NMat.Identity;
+
+    // ---------------------------------------------------------------- 애니메이션
+
+    /// <summary>
+    /// 클립마다 Godot Animation(position/rotation/scale 3D 트랙)을 만들어 루트의 AnimationPlayer에 넣는다. GltfDocument가 glTF 애니메이션으로 기록한다.
+    /// 조인트는 "스켈레톤:본" 경로(본 로컬), 일반 노드는 노드 경로(월드를 베이크한 노드는 부모 rest 월드를 곱한 값).
+    /// 피벗이 없고 베이크하지 않는 노드는 채널별 원래 키를 그대로, 그 밖에는 모든 키 시간에서 행렬을 분해해 세 채널을 쓴다.
+    /// </summary>
+    private static void AddAnimations(Ctx ctx, IReadOnlyList<AnimationClip> clips)
+    {
+        var doc = CubeApp.Instance.Document;
+        var lib = new AnimationLibrary();
+        var usedNames = new HashSet<string>();
+        foreach (var clip in clips)
+        {
+            var anim = new Animation { Length = Math.Max(clip.Length, 1f / Math.Max(1f, clip.FrameRate)), Step = 1f / Math.Max(1f, clip.FrameRate), LoopMode = clip.Loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None };
+            int written = 0;
+            foreach (var tr in clip.Tracks)
+            {
+                var sn = doc.Find(tr.Node);
+                if (sn == null || tr.KeyCount == 0) continue;
+                string path; NMat? parentWorld = null;
+                if (ctx.Bones.TryGetValue(tr.Node, out var b)) path = ctx.Root.GetPathTo(b.skel) + ":" + b.skel.GetBoneName(b.bone);
+                else if (ctx.Nodes.TryGetValue(tr.Node, out var gn)) { path = ctx.Root.GetPathTo(gn.node); parentWorld = gn.parentWorld; }
+                else continue;
+                var rest = sn.Local;
+                if (parentWorld == null && rest.Pivot == NVec3.Zero)
+                {
+                    // 원래 키 그대로
+                    if (tr.Position.Count > 0) { int t = Track(anim, Animation.TrackType.Position3D, path); foreach (var k in tr.Position) anim.PositionTrackInsertKey(t, k.Time, k.Value.ToGodot()); }
+                    if (tr.Rotation.Count > 0) { int t = Track(anim, Animation.TrackType.Rotation3D, path); foreach (var k in tr.Rotation) anim.RotationTrackInsertKey(t, k.Time, ToGodot(k.Value)); }
+                    if (tr.Scale.Count > 0) { int t = Track(anim, Animation.TrackType.Scale3D, path); foreach (var k in tr.Scale) anim.ScaleTrackInsertKey(t, k.Time, k.Value.ToGodot()); }
+                }
+                else
+                {
+                    var times = tr.KeyTimes.Distinct().OrderBy(x => x).ToList();
+                    int tp = Track(anim, Animation.TrackType.Position3D, path), trr = Track(anim, Animation.TrackType.Rotation3D, path), ts = Track(anim, Animation.TrackType.Scale3D, path);
+                    foreach (var time in times)
+                    {
+                        var m = tr.Evaluate(time, rest).ToMatrix();
+                        if (parentWorld is { } pw) m *= pw;
+                        NMat.Decompose(m, out var sc, out var q, out var p);
+                        anim.PositionTrackInsertKey(tp, time, p.ToGodot());
+                        anim.RotationTrackInsertKey(trr, time, ToGodot(System.Numerics.Quaternion.Normalize(q)));
+                        anim.ScaleTrackInsertKey(ts, time, sc.ToGodot());
+                    }
+                }
+                written++;
+            }
+            if (written == 0) { anim.Dispose(); continue; }
+            string name = SafeAnimName(clip.Name);
+            string unique = name; for (int i = 2; usedNames.Contains(unique); i++) unique = name + "_" + i;
+            usedNames.Add(unique);
+            lib.AddAnimation(unique, anim);
+        }
+        if (usedNames.Count == 0) return;
+        var player = new AnimationPlayer { Name = "AnimationPlayer" };
+        ctx.Root.AddChild(player);
+        player.AddAnimationLibrary("", lib);
+        player.RootNode = player.GetPathTo(ctx.Root);
+    }
+
+    private static int Track(Animation anim, Animation.TrackType type, NodePath path)
+    {
+        int t = anim.AddTrack(type);
+        anim.TrackSetPath(t, path);
+        anim.TrackSetInterpolationType(t, Animation.InterpolationType.Linear);
+        return t;
+    }
+
+    private static Godot.Quaternion ToGodot(System.Numerics.Quaternion q) => new(q.X, q.Y, q.Z, q.W);
+
+    private static string SafeAnimName(string s)
+    {
+        var chars = s.Select(c => c is '/' or ':' or ',' or '[' ? '_' : c).ToArray();
+        var r = new string(chars).Trim();
+        return r.Length == 0 ? "Take" : r;
     }
 }

@@ -319,6 +319,7 @@ public sealed class ObjExporter : IExporter
 
     public ExportResult Export(Document doc, IReadOnlyList<SceneNode> nodes, string path, ExportPreset preset)
     {
+        using var restPose = Cube.Core.Scene.AnimationPose.RestScope(doc); // 재생 포즈가 아니라 rest(바인드) 포즈로 기록
         var meshNodes = nodes.Where(n => n.Mesh != null).ToList();
         if (meshNodes.Count == 0) return ExportResult.Fail("Nothing to export (no mesh nodes).");
         try
