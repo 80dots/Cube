@@ -12,7 +12,10 @@ public enum BridgeApp { Blender, RizomUv, Marmoset, Cascadeur }
 public sealed class BridgeSession
 {
     public BridgeApp App;
+    /// <summary>Cube가 외부 앱으로 보낸 파일.</summary>
     public string Path = "";
+    /// <summary>외부 앱이 되돌려 주는 파일(감시 대상). Blender는 OBJ(n각형·공유 정점 유지), 나머지는 보낸 파일과 같다.</summary>
+    public string ReturnPath = "";
     /// <summary>보낸 노드(ID, 보낸 시점의 이름). UV 전송은 이름으로, 교체 가져오기는 ID로 찾는다.</summary>
     public List<(NodeId id, string name)> Nodes = new();
     public DateTime Stamp;
@@ -34,12 +37,12 @@ public partial class Shell
 
     private void RegisterBridgeActions()
     {
-        Actions.Register("bridge.blender", "Send to Blender (glTF)", () => SendToBridge(BridgeApp.Blender), canExecute: HasBridgeNodes, repeatable: true);
+        Actions.Register("bridge.blender", "Send to Blender (FBX, OBJ back)", () => SendToBridge(BridgeApp.Blender), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.rizom", "Send to RizomUV (OBJ, UVs round-trip)", () => SendToBridge(BridgeApp.RizomUv), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.marmoset", "Send to Marmoset Toolbag (FBX)", () => SendToBridge(BridgeApp.Marmoset), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.cascadeur", "Send to Cascadeur (FBX)", () => SendToBridge(BridgeApp.Cascadeur), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.tripo", "Tripo3D: Generate Model...", ToggleTripo, isChecked: () => TripoWindow?.Visible ?? false);
-        Actions.Register("bridge.reload", "Reload from Bridge File", () => ReloadBridge(), canExecute: () => Bridge is { CanReload: true } && System.IO.File.Exists(Bridge.Path), repeatable: true);
+        Actions.Register("bridge.reload", "Reload from Bridge File", () => ReloadBridge(), canExecute: () => Bridge is { CanReload: true } && System.IO.File.Exists(Bridge.ReturnPath), repeatable: true);
         Actions.Register("bridge.autoReload", "Auto Reload When File Changes", () => { Settings.Bridge.AutoReload = !Settings.Bridge.AutoReload; Settings.Save(); }, isChecked: () => Settings.Bridge.AutoReload);
         Actions.Register("bridge.openFolder", "Open Bridge Folder", () => { var d = BridgeDir(null); OS.ShellOpen(d); });
         Actions.Register("bridge.settings", "Bridge Settings...", ToggleBridgeSettings, isChecked: () => BridgeSettingsWindow?.Visible ?? false);
@@ -92,9 +95,10 @@ public partial class Shell
             switch (app)
             {
                 case BridgeApp.Blender:
-                    path = System.IO.Path.Combine(dir, "cube_bridge.glb");
+                    // FBX(자체 writer): n각형·공유 정점·코너 노멀/UV·머티리얼/텍스처·조인트/스킨이 그대로 간다(glTF는 삼각형 + 코너 분리)
+                    path = System.IO.Path.Combine(dir, "cube_bridge.fbx");
                     if (!Files.Export(path, selOnly).Ok) return;
-                    WriteBlenderScript(System.IO.Path.Combine(dir, "cube_bridge.py"), path);
+                    WriteBlenderScript(System.IO.Path.Combine(dir, "cube_bridge.py"), path, System.IO.Path.Combine(dir, "cube_bridge.obj"));
                     break;
                 case BridgeApp.RizomUv:
                     path = System.IO.Path.Combine(dir, "cube_bridge.obj");
@@ -108,7 +112,8 @@ public partial class Shell
         }
         catch (Exception ex) { HelpLine.Text = $"Bridge: export failed — {ex.Message}"; return; }
 
-        Bridge = new BridgeSession { App = app, Path = path, Nodes = nodes.Select(n => (n.Id, n.Name)).ToList(), Stamp = System.IO.File.GetLastWriteTimeUtc(path) };
+        string ret = app == BridgeApp.Blender ? System.IO.Path.Combine(dir, "cube_bridge.obj") : path;
+        Bridge = new BridgeSession { App = app, Path = path, ReturnPath = ret, Nodes = nodes.Select(n => (n.Id, n.Name)).ToList(), Stamp = System.IO.File.Exists(ret) ? System.IO.File.GetLastWriteTimeUtc(ret) : DateTime.UtcNow };
         if (!launch) { HelpLine.Text = $"Bridge: wrote {System.IO.Path.GetFileName(path)} — the Blender add-on (Cube tab) receives it; 'Send to Cube' there reloads it here."; return; }
         string? exe = ResolveExe(app);
         if (exe == null)
@@ -130,7 +135,7 @@ public partial class Shell
             Process.Start(psi);
             HelpLine.Text = app switch
             {
-                BridgeApp.Blender => "Sent to Blender. Edit, then press 'Send to Cube' in the Cube sidebar tab (N) or save the .blend — Cube reloads the file automatically.",
+                BridgeApp.Blender => "Sent to Blender (FBX, polygons intact). Edit, then press 'Send to Cube' in the Cube sidebar tab (N) — it writes cube_bridge.obj and Cube reloads it automatically.",
                 BridgeApp.RizomUv => "Sent to RizomUV. Edit UVs and save (Ctrl+S) — Cube copies the UVs back onto the original meshes.",
                 BridgeApp.Marmoset => "Sent to Marmoset Toolbag (FBX with materials and textures).",
                 _ => "Sent to Cascadeur. Save/export back to the same FBX — Cube reloads it.",
@@ -186,21 +191,33 @@ public partial class Shell
     }
 
     /// <summary>Cube에서 실행한 Blender용 세션 스크립트. Cube Bridge 애드온이 켜져 있으면 패널을 다시 만들지 않고 애드온에 맡긴다(가져오기만).</summary>
-    private static void WriteBlenderScript(string scriptPath, string glbPath)
+    private static void WriteBlenderScript(string scriptPath, string fbxPath, string objPath)
     {
-        string p = glbPath.Replace("\\", "/");
-        string script = $@"# Generated by Cube — Blender bridge session. Imports the glTF and adds a 'Cube' sidebar tab with 'Send to Cube'
-# unless the Cube Bridge add-on (assets/addons/blender/cube_bridge.py) is enabled, in which case the add-on's panel is used.
+        string p = fbxPath.Replace("\\", "/"); string q = objPath.Replace("\\", "/");
+        string script = $@"# Generated by Cube — Blender bridge session. Imports the FBX (polygons, shared vertices, normals, UVs, materials)
+# and adds a 'Cube' sidebar tab with 'Send to Cube' (writes OBJ with n-gons back) unless the Cube Bridge add-on is enabled.
 import bpy, os
 BRIDGE = r""{p}""
+BRIDGE_OBJ = r""{q}""
+
+def _import():
+    try: bpy.ops.import_scene.fbx(filepath=BRIDGE, use_custom_normals=True, use_image_search=True)
+    except TypeError: bpy.ops.import_scene.fbx(filepath=BRIDGE)
+
+def _export():
+    sel = bool(bpy.context.selected_objects)
+    try:
+        bpy.ops.wm.obj_export(filepath=BRIDGE_OBJ, export_selected_objects=sel, apply_modifiers=True, export_normals=True, export_uv=True,
+                              export_materials=False, export_triangulated_mesh=False, forward_axis='NEGATIVE_Z', up_axis='Y', global_scale=1.0)
+    except AttributeError:
+        bpy.ops.export_scene.obj(filepath=BRIDGE_OBJ, use_selection=sel, use_mesh_modifiers=True, use_normals=True, use_uvs=True,
+                                 use_materials=False, use_triangles=False, axis_forward='-Z', axis_up='Y', global_scale=1.0)
+
 if ""cube_bridge"" in bpy.context.preferences.addons:
     bpy.ops.wm.read_homefile(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=BRIDGE)
+    _import()
     print(""Cube bridge: add-on active, session panel skipped"")
     raise SystemExit  # 아래 세션 패널은 만들지 않는다(이름 충돌 방지)
-
-def _export(_=None):
-    bpy.ops.export_scene.gltf(filepath=BRIDGE, export_format='GLB', export_apply=True, export_yup=True, export_animations=False, export_skins=True, export_materials='EXPORT')
 
 class CUBE_OT_send_back(bpy.types.Operator):
     bl_idname = ""cube.send_back""
@@ -208,7 +225,7 @@ class CUBE_OT_send_back(bpy.types.Operator):
     bl_description = ""Export the scene back to the Cube bridge file (Cube reloads it automatically)""
     def execute(self, context):
         _export()
-        self.report({{'INFO'}}, ""Sent to Cube: "" + os.path.basename(BRIDGE))
+        self.report({{'INFO'}}, ""Sent to Cube: "" + os.path.basename(BRIDGE_OBJ))
         return {{'FINISHED'}}
 
 class CUBE_PT_bridge_session(bpy.types.Panel):
@@ -225,7 +242,7 @@ def _on_save(_dummy):
     except Exception as e: print(""Cube bridge export failed:"", e)
 
 bpy.ops.wm.read_homefile(use_empty=True)
-bpy.ops.import_scene.gltf(filepath=BRIDGE)
+_import()
 bpy.utils.register_class(CUBE_OT_send_back)
 bpy.utils.register_class(CUBE_PT_bridge_session)
 bpy.app.handlers.save_post.append(_on_save)
@@ -242,13 +259,13 @@ print(""Cube bridge ready:"", BRIDGE)
         if (b == null || !b.CanReload) return;
         try
         {
-            if (!System.IO.File.Exists(b.Path)) return;
-            var t = System.IO.File.GetLastWriteTimeUtc(b.Path);
+            if (!System.IO.File.Exists(b.ReturnPath)) return;
+            var t = System.IO.File.GetLastWriteTimeUtc(b.ReturnPath);
             if (t <= b.Stamp) return;
             // 쓰는 중일 수 있으니 1초 이상 지난 뒤에 읽는다
             if ((DateTime.UtcNow - t).TotalSeconds < 1.0) return;
             if (Settings.Bridge.AutoReload) ReloadBridge();
-            else if (!b.Notified) { b.Notified = true; HelpLine.Text = $"Bridge: {System.IO.Path.GetFileName(b.Path)} changed in {AppLabel(b.App)} — Bridge → Reload from Bridge File."; }
+            else if (!b.Notified) { b.Notified = true; HelpLine.Text = $"Bridge: {System.IO.Path.GetFileName(b.ReturnPath)} changed in {AppLabel(b.App)} — Bridge → Reload from Bridge File."; }
         }
         catch { /* 잠금 등 */ }
     }
@@ -256,24 +273,32 @@ print(""Cube bridge ready:"", BRIDGE)
     private void ReloadBridge()
     {
         var b = Bridge; if (b == null) return;
-        b.Stamp = System.IO.File.GetLastWriteTimeUtc(b.Path); b.Notified = false;
+        b.Stamp = System.IO.File.GetLastWriteTimeUtc(b.ReturnPath); b.Notified = false;
         if (b.UvOnly) { ReloadUvsFromObj(b); return; }
         var doc = Document;
         using (doc.Undo.BeginGroup($"Bridge Reload ({AppLabel(b.App)})"))
         {
+            // 보낸 노드를 지우고 다시 가져온다. 이름이 같은 노드는 머티리얼 할당을 이어받는다(OBJ에는 머티리얼이 없음)
+            var oldMaterials = new Dictionary<string, int>();
+            foreach (var (id, _) in b.Nodes) { var n = doc.Find(id); if (n != null && n.MaterialId > 0) oldMaterials[n.Name] = n.MaterialId; }
             var existing = b.Nodes.Select(n => n.id).Where(id => doc.Find(id) != null).ToList();
             if (existing.Count > 0) { var del = new DeleteNodesCommand(doc, existing); if (!del.IsEmpty) doc.Undo.Push(del); }
-            var res = Files.Import(b.Path);
-            if (res.Ok) b.Nodes = res.Nodes.Select(n => (n.Id, n.Name)).ToList();
+            var res = Files.Import(b.ReturnPath);
+            if (res.Ok)
+            {
+                b.Nodes = res.Nodes.Select(n => (n.Id, n.Name)).ToList();
+                foreach (var grp in res.Nodes.Where(n => n.Mesh != null && oldMaterials.ContainsKey(n.Name)).GroupBy(n => oldMaterials[n.Name]))
+                    doc.Undo.Push(new AssignMaterialCommand(grp.Select(n => n.Id), grp.Key));
+            }
         }
-        HelpLine.Text = $"Bridge: reloaded {System.IO.Path.GetFileName(b.Path)} from {AppLabel(b.App)} (replaced {b.Nodes.Count} node(s); Undo to revert).";
+        HelpLine.Text = $"Bridge: reloaded {System.IO.Path.GetFileName(b.ReturnPath)} from {AppLabel(b.App)} (replaced {b.Nodes.Count} node(s); Undo to revert).";
     }
 
     /// <summary>RizomUV 왕복: OBJ의 오브젝트를 이름(없으면 순서)으로 원본 노드와 짝지어 면 순서대로 UV만 복사한다.</summary>
     private void ReloadUvsFromObj(BridgeSession b)
     {
         List<ObjObject> objs;
-        try { objs = ObjFormat.Read(b.Path); }
+        try { objs = ObjFormat.Read(b.ReturnPath); }
         catch (Exception ex) { HelpLine.Text = $"Bridge: could not read OBJ — {ex.Message}"; return; }
         var doc = Document;
         int done = 0, skipped = 0, missing = 0;
@@ -303,9 +328,9 @@ print(""Cube bridge ready:"", BRIDGE)
     private void WatchBlenderBridgeFile()
     {
         if (Bridge != null) return;
-        string path = System.IO.Path.Combine(BridgeDir(BridgeApp.Blender), "cube_bridge.glb");
-        if (!System.IO.File.Exists(path)) { try { System.IO.File.WriteAllBytes(path + ".placeholder", Array.Empty<byte>()); System.IO.File.Delete(path + ".placeholder"); } catch { } }
-        Bridge = new BridgeSession { App = BridgeApp.Blender, Path = path, Stamp = System.IO.File.Exists(path) ? System.IO.File.GetLastWriteTimeUtc(path) : DateTime.UtcNow };
+        string dir = BridgeDir(BridgeApp.Blender);
+        string ret = System.IO.Path.Combine(dir, "cube_bridge.obj");
+        Bridge = new BridgeSession { App = BridgeApp.Blender, Path = System.IO.Path.Combine(dir, "cube_bridge.fbx"), ReturnPath = ret, Stamp = System.IO.File.Exists(ret) ? System.IO.File.GetLastWriteTimeUtc(ret) : DateTime.UtcNow };
     }
 
     private static string BlenderAddonSource() => Godot.FileAccess.GetFileAsString(BlenderAddonRes);

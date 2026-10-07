@@ -1,21 +1,22 @@
 # Cube Bridge — Blender add-on for exchanging meshes with Cube (https://github.com/80dots/Cube).
 #
 # Install: Blender > Edit > Preferences > Add-ons > Install... > choose this file > enable "Cube Bridge"
-#          (or Cube > Bridge > Install Blender Add-on, which copies it into your Blender add-on folders).
+#          (or Cube > Bridge > Add-ons > Install Blender Add-on, which copies it into your Blender add-on folders).
 # Use:     View3D sidebar (N) > Cube tab.
-#          Receive from Cube  — imports the bridge file (user://bridge/blender/cube_bridge.glb written by Cube > Bridge > Send to Blender).
-#          Send to Cube       — exports the scene (or the selection) back to the same file; Cube reloads it automatically.
-#          Auto receive       — watches the bridge file and imports it whenever Cube writes it.
+#          Receive from Cube  — imports cube_bridge.fbx written by Cube > Bridge > Send to Blender
+#                               (FBX keeps n-gons, shared vertices, custom normals, UVs, materials/textures, joints/skin).
+#          Send to Cube       — exports the scene (or the selection) to cube_bridge.obj (n-gons, normals, UVs); Cube reloads it.
+#          Auto receive       — watches cube_bridge.fbx and imports it whenever Cube writes it.
 #          Export on save     — also sends to Cube every time the .blend is saved.
 # The bridge folder defaults to %APPDATA%/Godot/app_userdata/Cube/bridge/blender (Cube's user:// folder on Windows).
 
 bl_info = {
     "name": "Cube Bridge",
     "author": "Cube",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > Cube",
-    "description": "Send meshes to and receive meshes from Cube through a glTF bridge file",
+    "description": "Send meshes to and receive meshes from Cube (FBX in, OBJ out, polygons intact)",
     "category": "Import-Export",
 }
 
@@ -25,7 +26,8 @@ import bpy
 from bpy.props import StringProperty, BoolProperty
 from bpy.app.handlers import persistent
 
-BRIDGE_NAME = "cube_bridge.glb"
+RECEIVE_NAME = "cube_bridge.fbx"   # Cube -> Blender
+SEND_NAME = "cube_bridge.obj"      # Blender -> Cube
 COLLECTION_NAME = "Cube Bridge"
 _last_mtime = 0.0
 _status = "Idle"
@@ -46,9 +48,17 @@ def prefs():
     return bpy.context.preferences.addons[__name__].preferences
 
 
-def bridge_file():
+def bridge_dir():
     d = prefs().bridge_dir or default_bridge_dir()
-    return os.path.join(bpy.path.abspath(d), BRIDGE_NAME)
+    return bpy.path.abspath(d)
+
+
+def receive_file():
+    return os.path.join(bridge_dir(), RECEIVE_NAME)
+
+
+def send_file():
+    return os.path.join(bridge_dir(), SEND_NAME)
 
 
 def file_mtime(path):
@@ -61,17 +71,20 @@ def file_mtime(path):
 def set_status(text):
     global _status
     _status = text
-    for win in bpy.context.window_manager.windows:
-        for area in win.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+    try:
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass
 
 
 class CubeBridgePreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
     bridge_dir: StringProperty(name="Bridge folder", subtype='DIR_PATH', default=default_bridge_dir(),
-                               description="Folder where Cube writes cube_bridge.glb (Cube user://bridge/blender)")
-    auto_receive: BoolProperty(name="Auto receive", default=True, description="Import the bridge file whenever Cube writes it")
+                               description="Folder where Cube writes cube_bridge.fbx and reads cube_bridge.obj (Cube user://bridge/blender)")
+    auto_receive: BoolProperty(name="Auto receive", default=True, description="Import cube_bridge.fbx whenever Cube writes it")
     export_on_save: BoolProperty(name="Send to Cube when saving the .blend", default=False)
     replace_previous: BoolProperty(name="Replace previously received objects", default=True,
                                    description="Delete the objects imported last time (kept in the 'Cube Bridge' collection) before importing again")
@@ -84,7 +97,8 @@ class CubeBridgePreferences(bpy.types.AddonPreferences):
         col.prop(self, "export_on_save")
         col.prop(self, "replace_previous")
         col.prop(self, "use_selection")
-        col.label(text="Bridge file: " + bridge_file())
+        col.label(text="Receive: " + receive_file())
+        col.label(text="Send:    " + send_file())
 
 
 def _bridge_collection(create=True):
@@ -95,9 +109,22 @@ def _bridge_collection(create=True):
     return coll
 
 
+def _remove_previous(coll):
+    for ob in list(coll.objects):
+        data = ob.data
+        bpy.data.objects.remove(ob, do_unlink=True)
+        if data is not None and getattr(data, "users", 1) == 0:
+            try:
+                if isinstance(data, bpy.types.Mesh): bpy.data.meshes.remove(data)
+                elif isinstance(data, bpy.types.Armature): bpy.data.armatures.remove(data)
+                elif isinstance(data, bpy.types.Light): bpy.data.lights.remove(data)
+            except Exception:
+                pass
+
+
 def receive(context, report=None):
     global _last_mtime
-    path = bridge_file()
+    path = receive_file()
     if not os.path.isfile(path):
         msg = "Bridge file not found: " + path
         if report: report({'WARNING'}, msg)
@@ -106,21 +133,15 @@ def receive(context, report=None):
     p = prefs()
     coll = _bridge_collection(create=True)
     if p.replace_previous:
-        for ob in list(coll.objects):
-            data = ob.data
-            bpy.data.objects.remove(ob, do_unlink=True)
-            if data is not None and getattr(data, "users", 1) == 0:
-                try:
-                    if isinstance(data, bpy.types.Mesh): bpy.data.meshes.remove(data)
-                    elif isinstance(data, bpy.types.Armature): bpy.data.armatures.remove(data)
-                    elif isinstance(data, bpy.types.Light): bpy.data.lights.remove(data)
-                except Exception:
-                    pass
+        _remove_previous(coll)
     before = set(bpy.data.objects)
     try:
-        bpy.ops.import_scene.gltf(filepath=path)
+        try:
+            bpy.ops.import_scene.fbx(filepath=path, use_custom_normals=True, use_image_search=True)
+        except TypeError:
+            bpy.ops.import_scene.fbx(filepath=path)
     except Exception as e:
-        msg = "glTF import failed: %s" % e
+        msg = "FBX import failed: %s" % e
         if report: report({'ERROR'}, msg)
         set_status(msg)
         return False
@@ -138,25 +159,30 @@ def receive(context, report=None):
     return True
 
 
+def _export_obj(path, use_sel):
+    # Blender 3.3+/4.x: new OBJ exporter (keeps n-gons, writes normals/UVs). Older: legacy python exporter.
+    if hasattr(bpy.ops.wm, "obj_export"):
+        bpy.ops.wm.obj_export(filepath=path, export_selected_objects=use_sel, apply_modifiers=True,
+                              export_normals=True, export_uv=True, export_materials=False,
+                              export_triangulated_mesh=False, forward_axis='NEGATIVE_Z', up_axis='Y', global_scale=1.0)
+    else:
+        bpy.ops.export_scene.obj(filepath=path, use_selection=use_sel, use_mesh_modifiers=True, use_normals=True,
+                                 use_uvs=True, use_materials=False, use_triangles=False,
+                                 axis_forward='-Z', axis_up='Y', global_scale=1.0)
+
+
 def send(context, report=None):
-    global _last_mtime
-    path = bridge_file()
+    path = send_file()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     p = prefs()
     use_sel = bool(p.use_selection and context.selected_objects)
-    kwargs = dict(filepath=path, export_format='GLB', export_apply=True, export_yup=True,
-                  export_animations=False, export_skins=True, export_materials='EXPORT', use_selection=use_sel)
     try:
-        bpy.ops.export_scene.gltf(**kwargs)
-    except TypeError:
-        kwargs.pop("export_materials", None)
-        bpy.ops.export_scene.gltf(**kwargs)
+        _export_obj(path, use_sel)
     except Exception as e:
-        msg = "glTF export failed: %s" % e
+        msg = "OBJ export failed: %s" % e
         if report: report({'ERROR'}, msg)
         set_status(msg)
         return False
-    _last_mtime = file_mtime(path)  # our own write: don't re-import it
     msg = "Sent %s to Cube (%s)" % ("selection" if use_sel else "scene", time.strftime("%H:%M:%S"))
     if report: report({'INFO'}, msg)
     set_status(msg)
@@ -166,7 +192,7 @@ def send(context, report=None):
 class CUBE_OT_receive(bpy.types.Operator):
     bl_idname = "cube.receive_from_cube"
     bl_label = "Receive from Cube"
-    bl_description = "Import the bridge file written by Cube (Bridge > Send to Blender)"
+    bl_description = "Import cube_bridge.fbx written by Cube (Bridge > Send to Blender)"
 
     def execute(self, context):
         return {'FINISHED'} if receive(context, self.report) else {'CANCELLED'}
@@ -175,7 +201,7 @@ class CUBE_OT_receive(bpy.types.Operator):
 class CUBE_OT_send(bpy.types.Operator):
     bl_idname = "cube.send_to_cube"
     bl_label = "Send to Cube"
-    bl_description = "Export the scene (or the selection) to the bridge file; Cube reloads it automatically"
+    bl_description = "Export the scene (or the selection) to cube_bridge.obj; Cube reloads it automatically"
 
     def execute(self, context):
         return {'FINISHED'} if send(context, self.report) else {'CANCELLED'}
@@ -186,7 +212,7 @@ class CUBE_OT_open_folder(bpy.types.Operator):
     bl_label = "Open Bridge Folder"
 
     def execute(self, context):
-        d = os.path.dirname(bridge_file())
+        d = bridge_dir()
         os.makedirs(d, exist_ok=True)
         bpy.ops.wm.path_open(filepath=d)
         return {'FINISHED'}
@@ -209,8 +235,9 @@ class CUBE_PT_bridge(bpy.types.Panel):
         layout.prop(p, "replace_previous")
         layout.prop(p, "use_selection")
         box = layout.box()
-        path = bridge_file()
-        box.label(text=os.path.basename(path), icon='FILE_3D' if os.path.isfile(path) else 'ERROR')
+        rp = receive_file()
+        box.label(text="in: " + RECEIVE_NAME, icon='FILE_3D' if os.path.isfile(rp) else 'ERROR')
+        box.label(text="out: " + SEND_NAME)
         box.label(text=_status)
         layout.operator("cube.open_bridge_folder", icon='FILE_FOLDER')
 
@@ -220,7 +247,7 @@ def _watch():
     try:
         p = prefs()
         if p.auto_receive:
-            path = bridge_file()
+            path = receive_file()
             m = file_mtime(path)
             if m > _last_mtime and (time.time() - m) > 1.0:  # wait until Cube has finished writing
                 if _last_mtime == 0.0:

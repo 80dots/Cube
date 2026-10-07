@@ -68,6 +68,31 @@ public class ObjFormatTests
     }
 
     [Fact]
+    public void Read_InfersHardEdgesFromSplitCornerNormals()
+    {
+        // 기본 큐브는 12개 엣지가 모두 하드(면마다 코너 노멀이 다름) → OBJ 왕복 후에도 Hard가 유지되어야 한다
+        var mesh = MeshBuilder.Cube();
+        int hardBefore = 0; foreach (var e in mesh.Edges) if (e.Alive && e.Hard) hardBefore++;
+        Assert.Equal(12, hardBefore);
+        string path = TempPath("cube_hard.obj");
+        try
+        {
+            ObjFormat.Write(path, new[] { new SceneNode { Name = "c", Shape = new MeshShape(mesh) } });
+            var m2 = ObjFormat.Read(path)[0].Mesh;
+            int hardAfter = 0; foreach (var e in m2.Edges) if (e.Alive && e.Hard) hardAfter++;
+            Assert.Equal(12, hardAfter);
+            // 부드러운 메시(구)는 하드 엣지가 생기지 않아야 한다
+            var sphere = MeshBuilder.Sphere();
+            ObjFormat.Write(path, new[] { new SceneNode { Name = "s", Shape = new MeshShape(sphere) } });
+            var s2 = ObjFormat.Read(path)[0].Mesh;
+            int sphereHard = 0; foreach (var e in s2.Edges) if (e.Alive && e.Hard) sphereHard++;
+            int sphereHardBefore = 0; foreach (var e in sphere.Edges) if (e.Alive && e.Hard) sphereHardBefore++;
+            Assert.Equal(sphereHardBefore, sphereHard);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void TwoTransformedNodes_RoundTrip_BakesWorldSpace()
     {
         var doc = new Document();

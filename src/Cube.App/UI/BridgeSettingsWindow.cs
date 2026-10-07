@@ -64,7 +64,7 @@ public partial class BridgeSettingsWindow : FloatingPanel
         box.AddChild(_auto);
 
         var note = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, Text =
-            "Blender: glTF + a 'Cube' sidebar tab with 'Send to Cube' (saving the .blend also sends).  RizomUV: OBJ, only UVs come back (same topology).  " +
+            "Blender: FBX out (polygons, shared vertices, normals/UVs, materials, rig) and OBJ back via the 'Cube' sidebar tab 'Send to Cube'.  RizomUV: OBJ, only UVs come back (same topology).  " +
             "Marmoset Toolbag: FBX with materials/textures (send only).  Cascadeur: FBX with skeleton/skin; export back to the same file.  " +
             "Tripo3D: text-to-model via the Tripo API, the result is imported as glTF." };
         note.AddThemeColorOverride("font_color", MayaTheme.TextDim);

@@ -231,11 +231,33 @@ public static class ObjFormat
                     face.Normal = len > 1e-12f ? n / len : Vector3.UnitY;
                     m.Faces[f] = face;
                 }
+                InferHardEdges(m);
             }
             else MeshNormals.Recompute(m);
             result.Add(g.Obj);
         }
         return result;
+    }
+
+    /// <summary>파일의 코너 노멀이 엣지 양쪽에서 갈라지면(각도 &gt; angleDeg) Edge.Hard로 표시한다(Blender 등에서 돌아온 OBJ의 샤프 엣지 유지).</summary>
+    public static int InferHardEdges(PolyMesh m, float angleDeg = 1f)
+    {
+        float cosHard = MathF.Cos(angleDeg * MathF.PI / 180f);
+        int hard = 0;
+        for (int e = 0; e < m.EdgeCount; e++)
+        {
+            var ed = m.Edges[e];
+            if (!ed.Alive || ed.He1 < 0) continue;
+            var h0 = m.Hes[ed.He0]; var h1 = m.Hes[ed.He1];
+            // 정점 a(h0 시작)에서의 두 코너: h0와 h1.Next
+            var na = h0.Normal; var nb = m.Hes[h1.Next].Normal;
+            var nc = m.Hes[h0.Next].Normal; var nd = h1.Normal;
+            if (na.LengthSquared() < 1e-12f || nb.LengthSquared() < 1e-12f) continue;
+            bool split = Vector3.Dot(Vector3.Normalize(na), Vector3.Normalize(nb)) < cosHard
+                      || (nc.LengthSquared() > 1e-12f && nd.LengthSquared() > 1e-12f && Vector3.Dot(Vector3.Normalize(nc), Vector3.Normalize(nd)) < cosHard);
+            if (split) { ed.Hard = true; m.Edges[e] = ed; hard++; }
+        }
+        return hard;
     }
 
     private static void AddFace(Group g, List<Vector3> positions, List<Vector2> uvs, List<Vector3> normals,
