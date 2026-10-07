@@ -54,47 +54,72 @@ public static partial class MeshOps
         var result = new List<int>();
         if (region.Count == 0) return result;
 
-        // 경계 하프에지(영역 안, 트윈이 영역 밖)
-        var boundaryHes = new List<(int a, int b, bool hard)>();
-        var boundaryVerts = new HashSet<int>();
+        // 코너(= 그 정점에서 출발하는 영역 면의 하프에지)를 영역 내부 엣지로 이어지는 묶음(팬)으로 나눈다.
+        // 경계 정점은 묶음마다 따로 복제한다: 선택 면들이 한 정점에서만 맞닿는 경우(나비넥타이, 삼각형 팬 중심 등)
+        // 하나로 복제하면 옆면들이 같은 방향 엣지를 중복해 추가가 거부되고 구멍/뒤집힌 면이 생긴다.
+        var parent = new Dictionary<int, int>();
+        int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+        void Union(int x, int y) { int rx = Find(x), ry = Find(y); if (rx != ry) parent[rx] = ry; }
+        var faceHes = new Dictionary<int, List<int>>();
         foreach (int f in region)
         {
-            int start = m.Faces[f].HalfEdge, he = start;
-            do
+            var hes = new List<int>(); m.GetFaceHalfEdges(f, hes);
+            faceHes[f] = hes;
+            foreach (int he in hes) parent[he] = he;
+        }
+        foreach (int f in region)
+            foreach (int he in faceHes[f])
+            {
+                int tw = m.Hes[he].Twin;
+                if (tw < 0 || !region.Contains(m.Hes[tw].Face)) continue;
+                // he: vi -> vj, tw: vj -> vi. vi의 코너 = he와 tw.Next, vj의 코너 = he.Next와 tw
+                Union(he, m.Hes[tw].Next);
+                Union(m.Hes[he].Next, tw);
+            }
+
+        // 경계 하프에지(영역 안, 트윈이 영역 밖)와 경계 코너 묶음
+        var boundaryHes = new List<(int a, int b, int groupA, int groupB, bool hard)>();
+        var boundaryGroups = new Dictionary<int, int>(); // 묶음 대표 -> 원래 정점
+        foreach (int f in region)
+            foreach (int he in faceHes[f])
             {
                 var h = m.Hes[he];
                 bool boundary = h.Twin < 0 || !region.Contains(m.Hes[h.Twin].Face);
-                if (boundary)
-                {
-                    int a = h.Vertex, b = m.Hes[h.Next].Vertex;
-                    boundaryHes.Add((a, b, m.Edges[h.Edge].Hard));
-                    boundaryVerts.Add(a); boundaryVerts.Add(b);
-                }
-                he = h.Next;
-            } while (he != start);
-        }
+                if (!boundary) continue;
+                int a = h.Vertex, b = m.Hes[h.Next].Vertex;
+                int ga = Find(he), gb = Find(h.Next);
+                boundaryHes.Add((a, b, ga, gb, m.Edges[h.Edge].Hard));
+                boundaryGroups[ga] = a; boundaryGroups[gb] = b;
+            }
 
         // 원본 면 코너 캡처 + 내부 엣지 하드 플래그
-        var faceCorners = new Dictionary<int, (List<Corner> corners, int material, List<bool> hard)>();
+        var faceCorners = new Dictionary<int, (List<Corner> corners, List<int> hes, int material, List<bool> hard)>();
         foreach (int f in region)
         {
             var corners = CaptureCorners(m, f);
             var hard = new List<bool>();
             for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
-            faceCorners[f] = (corners, m.Faces[f].Material, hard);
+            faceCorners[f] = (corners, faceHes[f], m.Faces[f].Material, hard);
         }
 
-        // 경계 정점 복제
+        // 경계 코너 묶음마다 정점 복제(묶음 대표는 면 제거 전에 계산)
         var dup = new Dictionary<int, int>();
-        foreach (int v in boundaryVerts) dup[v] = m.AddVertex(m.Verts[v].Position);
+        foreach (var (g, v) in boundaryGroups) dup[g] = m.AddVertex(m.Verts[v].Position);
+        var cornerGroup = new Dictionary<int, int>();
+        foreach (var hes in faceHes.Values) foreach (int he in hes) cornerGroup[he] = Find(he);
 
         // 영역 면 제거(정점은 유지)
         foreach (int f in region) m.RemoveFace(f, removeIsolated: false);
 
-        // 캡 면 재생성(경계 정점 → 복제본)
-        foreach (var (f, (corners, material, hard)) in faceCorners)
+        // 캡 면 재생성(경계 정점 -> 그 코너 묶음의 복제본)
+        foreach (var (f, (corners, hes, material, hard)) in faceCorners)
         {
-            var mapped = corners.Select(c => c with { Vertex = dup.TryGetValue(c.Vertex, out int d) ? d : c.Vertex }).ToList();
+            var mapped = new List<Corner>(corners.Count);
+            for (int i = 0; i < corners.Count; i++)
+            {
+                var c = corners[i];
+                mapped.Add(dup.TryGetValue(cornerGroup[hes[i]], out int d) ? c with { Vertex = d } : c);
+            }
             int nf = AddFaceWithCorners(m, mapped, material);
             if (nf >= 0)
             {
@@ -104,9 +129,9 @@ public static partial class MeshOps
         }
 
         // 측면 쿼드 (a, b, b', a')
-        foreach (var (a, b, hard) in boundaryHes)
+        foreach (var (a, b, ga, gb, hard) in boundaryHes)
         {
-            int a2 = dup[a], b2 = dup[b];
+            int a2 = dup[ga], b2 = dup[gb];
             var quad = new List<Corner>
             {
                 new(a, new Vector2(0, 0), Vector3.Zero), new(b, new Vector2(1, 0), Vector3.Zero),
