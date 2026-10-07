@@ -76,12 +76,14 @@ public sealed class MoveVerticesCommand : ICommand, IAppliedHook
 {
     private readonly NodeId _node; private readonly int[] _ids; private readonly Vector3[] _before, _after;
     private readonly ComponentTransformOp? _op; private readonly HistoryParams? _params;
+    private readonly Func<PolyMesh, HistoryParams, bool>? _replay;
     private HistoryEntry? _entry;
     public string Name { get; }
 
-    public MoveVerticesCommand(string name, NodeId node, int[] ids, Vector3[] before, Vector3[] after, ComponentTransformOp? op = null, HistoryParams? parameters = null)
+    /// <param name="replay">op 대신 쓰는 히스토리 재실행(예: Extrude 두께 = 정점별 방향 오프셋). Before 스냅샷에서 시작한 메시에 파라미터를 적용한다.</param>
+    public MoveVerticesCommand(string name, NodeId node, int[] ids, Vector3[] before, Vector3[] after, ComponentTransformOp? op = null, HistoryParams? parameters = null, Func<PolyMesh, HistoryParams, bool>? replay = null)
     {
-        Name = name; _node = node; _ids = ids; _before = before; _after = after; _op = op; _params = parameters;
+        Name = name; _node = node; _ids = ids; _before = before; _after = after; _op = op; _params = parameters; _replay = replay;
     }
 
     public bool IsNoop { get { for (int i = 0; i < _ids.Length; i++) if (_before[i] != _after[i]) return false; return true; } }
@@ -95,7 +97,7 @@ public sealed class MoveVerticesCommand : ICommand, IAppliedHook
     /// <summary>드래그로 이미 적용된 상태로 들어올 때 히스토리 항목만 등록한다.</summary>
     public void OnPushedApplied(Document doc)
     {
-        if (_op != null && _params != null && doc.Get(_node).MeshShape is { } shape)
+        if ((_op != null || _replay != null) && _params != null && doc.Get(_node).MeshShape is { } shape)
         {
             if (_entry == null)
             {
@@ -105,26 +107,27 @@ public sealed class MoveVerticesCommand : ICommand, IAppliedHook
                 _entry = new HistoryEntry
                 {
                     Name = Name, Params = _params.Clone(), Before = snapshot,
-                    Replay = (m, p) =>
+                    Replay = _replay ?? ((m, p) =>
                     {
-                        var mat = op.LocalMatrix(p);
+                        var mat = op!.LocalMatrix(p);
                         for (int i = 0; i < ids.Length; i++)
                         {
                             if (ids[i] >= m.VertexCount || !m.Verts[ids[i]].Alive) continue;
                             var v = m.Verts[ids[i]]; v.Position = Vector3.Transform(v.Position, mat); m.Verts[ids[i]] = v;
                         }
                         return true;
-                    },
+                    }),
                 };
             }
             shape.History.Add(_entry);
+            doc.Notify(new DocChange(ChangeKind.HistoryChanged, _node));
         }
     }
 
     public void Undo(Document doc)
     {
         Apply(doc, _before);
-        if (_entry != null) doc.Get(_node).MeshShape?.History.Remove(_entry);
+        if (_entry != null && doc.Get(_node).MeshShape?.History.Remove(_entry) == true) doc.Notify(new DocChange(ChangeKind.HistoryChanged, _node));
     }
 
     private void Apply(Document doc, Vector3[] pos)

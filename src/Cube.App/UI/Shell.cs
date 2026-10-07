@@ -329,8 +329,7 @@ public partial class Shell : Control
             new[] { ("uv.automaticApply", "Automatic", "uv_automatic"), ("uv.optimize", "Optimize", "uv_optimize"), ("uv.straightenApply", "Straighten", "uv_straighten"), ("uv.pin", "Pin", "uv_pin"), ("uv.cutSewTool", "3D Cut/Sew", "uv_cutsew"), ("uv.setEditor", "UV Sets", "uv_sets") });
         Fill(BridgeShelf,
             new[] { ("bridge.blenderAll", "All → Blender", "bridge_blender_all"), ("bridge.blenderSelected", "Sel → Blender", "bridge_blender_sel"), ("bridge.rizom", "RizomUV", "bridge_rizom"), ("bridge.marmoset", "Marmoset", "bridge_marmoset"), ("bridge.cascadeur", "Cascadeur", "bridge_cascadeur"), ("bridge.tripo", "Tripo Editor", "bridge_tripo") },
-            new[] { ("bridge.reload", "Reload", "bridge_reload"), ("bridge.autoReload", "Auto", "bridge_auto"), ("bridge.openFolder", "Folder", "bridge_folder") },
-            new[] { ("bridge.installBlenderAddon", "Add-on", "bridge_addon"), ("bridge.settings", "Settings", "preferences") });
+            new[] { ("bridge.openFolder", "Folder", "bridge_folder") });
         Fill(RigShelf,
             new[] { ("skeleton.jointTool", "Joint Tool", "rig_joint"), ("skeleton.insertJointTool", "Insert Joint", "rig_insert_joint"), ("skeleton.mirror", "Mirror Joint", "rig_mirror"), ("skeleton.orient", "Orient Joint", "rig_orient"), ("skeleton.orientApply", "Orient Now", "rig_orient") },
             new[] { ("skin.bind", "Bind Skin", "skin_bind"), ("skin.detach", "Detach Skin", "skin_detach"), ("skin.paintTool", "Paint Weights", "skin_paint"), ("skin.normalize", "Normalize", "skin_normalize"), ("skin.rebind", "Reset Weights", "skin_rebind") });

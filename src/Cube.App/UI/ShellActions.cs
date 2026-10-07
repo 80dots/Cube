@@ -399,10 +399,11 @@ public partial class Shell
             bool first = true;
             foreach (var (id, faces) in merged) { doc.Selection.SelectComponents(id, SelectMode.Face, faces, replace: first); first = false; }
         }
-        // Maya 압출 조작기 간이판: 법선 방향 Move 툴로 전환
+        // Maya 압출 조작기: 법선 방향 Move 툴로 전환하고, 파란(Z) 화살표 드래그 = 두께(면마다 자기 법선 방향)
         ToolContext.AxisOrientation = AxisOrientation.Normal;
         Tools.SetTool("move");
-        HelpLine.Text = "Extrude: drag the manipulator to offset the new faces.";
+        (Tools.Current as MoveTool)?.BeginExtrudeManip();
+        HelpLine.Text = "Extrude: drag the blue (normal) arrow to pull the faces out (thickness); other handles move them.";
     }
 
     private void DeleteComponents()

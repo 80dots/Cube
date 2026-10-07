@@ -279,6 +279,8 @@ public abstract class TransformToolBase : SelectTool
     }
 
     protected virtual void OnDragBegin(CameraProjection proj) { }
+    /// <summary>파생 툴이 컴포넌트 드래그 결과를 다른 명령(히스토리 파라미터)으로 커밋하려면 반환한다. null이면 기본(이동/회전/스케일 op).</summary>
+    protected virtual MoveVerticesCommand? MakeComponentCommand(NodeId id, int[] verts, NVec3[] init, NVec3[] after) => null;
     protected abstract void UpdateDrag(NVec2 px, CameraProjection proj);
 
     protected virtual void EndDrag(bool commit)
@@ -312,6 +314,8 @@ public abstract class TransformToolBase : SelectTool
                 var after = new NVec3[verts.Length];
                 for (int i = 0; i < verts.Length; i++) after[i] = mesh.Verts[verts[i]].Position;
                 if (!commit) { MoveVerticesCommand.Preview(doc, id, verts, init); continue; }
+                var custom = MakeComponentCommand(id, verts, init, after);
+                if (custom != null) { if (!custom.IsNoop) doc.Undo.Push(custom, alreadyApplied: true); continue; }
                 ComponentTransformOp? op = null;
                 if (_lastOp != null) op = new ComponentTransformOp { Type = _lastOp.Type, Pivot = _lastOp.Pivot, Axis = _lastOp.Axis, BasisX = _lastOp.BasisX, BasisY = _lastOp.BasisY, BasisZ = _lastOp.BasisZ, MeshWorld = doc.Get(id).WorldMatrix };
                 var cmd = new MoveVerticesCommand(Label, id, verts, init, after, op, _lastParams?.Clone());
