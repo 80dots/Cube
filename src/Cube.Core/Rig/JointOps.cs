@@ -64,7 +64,7 @@ public static class JointOps
             Matrix4x4.Invert(j.WorldMatrix, out var inv);
             foreach (var (c, w) in childWorlds)
             {
-                var cb = c.Local; var ca = Transform3.FromMatrix(w * inv);
+                var cb = c.Local; var ca = Transform3.FromMatrix(w * inv, c.Local.Pivot);
                 if (set.Contains(c)) { c.Local = ca; continue; } // 곧 다시 정렬됨(위치만 반영)
                 c.Local = ca; result.Add((c, cb, ca));
             }

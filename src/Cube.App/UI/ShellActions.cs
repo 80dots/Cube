@@ -23,6 +23,7 @@ public partial class Shell
         Tools.Register(new PaintWeightsTool());
         Tools.Register(new CreatePolygonTool());
         Tools.Register(new InsertJointTool());
+        Tools.Register(new EditPivotTool());
     }
 
     private void RegisterActions()
@@ -60,6 +61,13 @@ public partial class Shell
         Actions.Register("select.toBoundaryEdges", "To Boundary Edges", ConvertToBoundaryEdges, canExecute: () => sel.IsComponentMode);
         Actions.Register("select.toUv", "To UV", () => ConvertToUv(island: false), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.toUvIsland", "To UV Island", () => ConvertToUv(island: true), canExecute: () => sel.IsComponentMode);
+        Actions.Register("select.hierarchy", "Select Hierarchy", SelectHierarchy, canExecute: () => sel.Objects.Count > 0);
+
+        // --- 피벗 / 스냅
+        Actions.Register("edit.centerPivot", "Center Pivot", CenterPivot, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
+        Actions.Register("edit.editPivot", "Edit Pivot", ToggleEditPivot, isChecked: () => Tools.Current?.Id == "editPivot");
+        Actions.Register("snap.grid", "Snap to Grid", () => { Settings.SnapToGrid = !Settings.SnapToGrid; Settings.Save(); SyncStatusLine(); }, isChecked: () => Settings.SnapToGrid);
+        Actions.Register("snap.point", "Snap to Points", () => { Settings.SnapToPoints = !Settings.SnapToPoints; Settings.Save(); SyncStatusLine(); }, isChecked: () => Settings.SnapToPoints);
 
         // --- 편집
         Actions.Register("edit.undo", "Undo", () => doc.Undo.Undo(), canExecute: () => doc.Undo.CanUndo);
@@ -146,7 +154,12 @@ public partial class Shell
         Actions.Register("windows.properties", "Properties", () => PropertiesDock.Visible = !PropertiesDock.Visible, isChecked: () => PropertiesDock.Visible);
         Actions.Register("help.about", "About Cube", () => HelpLine.Text = $"Cube {ProjectSettings.GetSetting("application/config/version")} — Godot {Engine.GetVersionInfo()["string"]}");
 
-        Actions.Register("app.escape", "Escape", () => { Tools.CancelCurrent(); Viewport.GrabFocus(); });
+        Actions.Register("app.escape", "Escape", () =>
+        {
+            foreach (var p in Layout.Panels) p.Pie.Close();
+            if (Tools.Current?.Id == "editPivot") Tools.SetTool(Tools.Previous != null && Tools.Previous.Id != "editPivot" ? Tools.Previous.Id : "select");
+            Tools.CancelCurrent(); Viewport.GrabFocus();
+        });
         RegisterUvActions();
         RegisterRigActions();
         RegisterSceneActions();
@@ -270,6 +283,60 @@ public partial class Shell
             foreach (var (id, set) in converted) { s.SelectComponents(id, SelectMode.Uv, set, replace: first); first = false; }
         });
         UvEditorWindow?.Canvas.QueueRedraw();
+    }
+
+    /// <summary>Select Hierarchy: 선택 오브젝트의 모든 자손을 선택에 더한다.</summary>
+    private void SelectHierarchy()
+    {
+        RecordSelection(s =>
+        {
+            var ids = new List<NodeId>();
+            foreach (var id in s.Objects)
+            {
+                var n = Document.Find(id); if (n == null) continue;
+                ids.Add(id);
+                foreach (var d in n.Descendants()) ids.Add(d.Id);
+            }
+            s.Mode = SelectMode.Object;
+            s.SelectObjects(ids.Distinct());
+        });
+    }
+
+    /// <summary>Center Pivot: 메시 바운딩 박스 중심(오브젝트 공간)으로 피벗을 옮긴다(월드는 그대로).</summary>
+    private void CenterPivot()
+    {
+        var ids = new List<NodeId>(); var before = new List<Transform3>(); var after = new List<Transform3>();
+        foreach (var id in Document.Selection.Objects)
+        {
+            var n = Document.Find(id); if (n?.Mesh == null) continue;
+            var mn = new System.Numerics.Vector3(float.MaxValue); var mx = new System.Numerics.Vector3(float.MinValue);
+            int cnt = 0;
+            foreach (var v in n.Mesh.Verts) if (v.Alive) { mn = System.Numerics.Vector3.Min(mn, v.Position); mx = System.Numerics.Vector3.Max(mx, v.Position); cnt++; }
+            if (cnt == 0) continue;
+            var t = n.Local.WithPivotKeepingMatrix((mn + mx) * 0.5f);
+            if (t == n.Local) continue;
+            ids.Add(id); before.Add(n.Local); after.Add(t);
+        }
+        if (ids.Count == 0) return;
+        Document.Undo.Push(new TransformNodesCommand("Center Pivot", ids.ToArray(), before.ToArray(), after.ToArray()));
+        HelpLine.Text = $"Center Pivot: {ids.Count} object(s).";
+    }
+
+    /// <summary>Insert: Edit Pivot 모드 토글. 오브젝트 모드로 바꾸고 Move 조작기로 피벗만 옮긴다. 다시 누르면 이전 툴로.</summary>
+    private void ToggleEditPivot()
+    {
+        if (Tools.Current?.Id == "editPivot") { Tools.SetTool(Tools.Previous != null && Tools.Previous.Id != "editPivot" ? Tools.Previous.Id : "move"); return; }
+        if (Document.Selection.Mode != SelectMode.Object) Document.Selection.Mode = SelectMode.Object;
+        Tools.SetTool("editPivot");
+    }
+
+    /// <summary>선택 오브젝트에 머티리얼 할당(0 = lambert1). Material Editor와 Assign Material 파이가 쓴다.</summary>
+    public void AssignMaterialToSelection(int id)
+    {
+        var ids = Document.Selection.Objects.Where(x => Document.Find(x)?.Mesh != null).ToArray();
+        if (ids.Length == 0) { HelpLine.Text = "Assign Material: select an object first."; return; }
+        Document.Undo.Push(new AssignMaterialCommand(ids, id));
+        HelpLine.Text = $"Assigned {(id == 0 ? "lambert1" : Document.FindMaterial(id)?.Name)} to {ids.Length} object(s).";
     }
 
     private void DeleteSelection()
@@ -563,6 +630,8 @@ public partial class Shell
     public void SyncStatusLine()
     {
         _cameraBased.SetPressedNoSignal(Settings.CameraBasedSelection);
+        _snapGrid.SetPressedNoSignal(Settings.SnapToGrid);
+        _snapPoint.SetPressedNoSignal(Settings.SnapToPoints);
     }
 
     private PopupMenu? _recentMenu;
@@ -606,7 +675,9 @@ public partial class Shell
         Menus.Build(Add("Edit"))
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
             .Item("edit.delete").Item("edit.duplicate").Separator().Item("edit.deleteHistory").Separator()
+            .Item("edit.centerPivot").Item("edit.editPivot").Separator()
             .Item("select.all").Item("select.none").Separator()
+            .Item("snap.grid").Item("snap.point").Separator()
             .Item("edit.preferences");
 
         Menus.Build(Add("Create"))
@@ -616,6 +687,7 @@ public partial class Shell
 
         Menus.Build(Add("Select"))
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
+            .Item("select.all").Item("select.none").Item("select.hierarchy").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
 

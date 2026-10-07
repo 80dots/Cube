@@ -104,7 +104,7 @@ public abstract class TransformToolBase : SelectTool
         {
             var active = doc.Find(sel.ActiveObject);
             if (active == null) return false;
-            pivot = active.WorldMatrix.Translation;
+            pivot = active.PivotWorld;
             return true;
         }
         var sum = NVec3.Zero; int n = 0;
@@ -301,7 +301,7 @@ public abstract class TransformToolBase : SelectTool
         foreach (var (c, _, world) in _childComp)
         {
             Matrix4x4.Invert(c.Parent!.WorldMatrix, out var inv);
-            c.Local = Transform3.FromMatrix(world * inv);
+            c.Local = Transform3.FromMatrix(world * inv, c.Local.Pivot);
             doc.Notify(new DocChange(ChangeKind.TransformChanged, c.Id));
         }
     }
@@ -348,7 +348,8 @@ public abstract class TransformToolBase : SelectTool
             var pivotParent = NVec3.Transform(PivotWorld, parentInv);
             var local = initial;
             local.RotationDegrees = Transform3.QuaternionToEulerXYZDegrees(NQuat.Concatenate(initial.Rotation, qParent));
-            local.Translation = pivotParent + NVec3.Transform(initial.Translation - pivotParent, qParent);
+            // 오브젝트 피벗의 부모 공간 위치는 Pivot + Translation. 그 점을 조작기 피벗 기준으로 회전시킨다
+            local.Translation = pivotParent + NVec3.Transform(initial.Pivot + initial.Translation - pivotParent, qParent) - initial.Pivot;
             node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
@@ -379,10 +380,10 @@ public abstract class TransformToolBase : SelectTool
             local.Scale = initial.Scale * localScale;
             // 피벗이 오브젝트 원점이 아니면(다중 선택) 위치도 피벗 기준으로 스케일
             var pivotParent = NVec3.Transform(PivotWorld, parentInv);
-            var rel = initial.Translation - pivotParent;
+            var rel = initial.Pivot + initial.Translation - pivotParent;
             var relWorld = NVec3.TransformNormal(rel, parentWorld);
             var scaledWorld = gx * (NVec3.Dot(relWorld, gx) * scaleInGizmoAxes.X) + gy * (NVec3.Dot(relWorld, gy) * scaleInGizmoAxes.Y) + gz * (NVec3.Dot(relWorld, gz) * scaleInGizmoAxes.Z);
-            local.Translation = pivotParent + NVec3.TransformNormal(scaledWorld, parentInv);
+            local.Translation = pivotParent + NVec3.TransformNormal(scaledWorld, parentInv) - initial.Pivot;
             node.Local = local;
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
@@ -390,6 +391,63 @@ public abstract class TransformToolBase : SelectTool
         var b = new Matrix4x4(gx.X, gx.Y, gx.Z, 0, gy.X, gy.Y, gy.Z, 0, gz.X, gz.Y, gz.Z, 0, 0, 0, 0, 1);
         var m = Matrix4x4.CreateTranslation(-PivotWorld) * Matrix4x4.Transpose(b) * Matrix4x4.CreateScale(scaleInGizmoAxes) * b * Matrix4x4.CreateTranslation(PivotWorld);
         ApplyComponentsWorldMatrix(m);
+    }
+
+    /// <summary>점 스냅(Retain component spacing off): 선택 정점/오브젝트 피벗을 모두 한 월드 점으로 모은다(프리뷰).</summary>
+    protected void ApplyCollapseTo(NVec3 worldTarget)
+    {
+        var doc = Ctx.Doc;
+        _lastOp = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Move, Pivot = PivotWorld };
+        _lastParams = _lastOp.DefaultParams(worldTarget - PivotWorld, 0, NVec3.One);
+        foreach (var (node, initial, parentWorld, parentInv) in ObjectTargets)
+        {
+            var pivotWorld = NVec3.Transform(initial.Pivot, initial.ToMatrix() * parentWorld);
+            var local = initial;
+            local.Translation = initial.Translation + NVec3.TransformNormal(worldTarget - pivotWorld, parentInv);
+            node.Local = local;
+            doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
+        }
+        CompensateChildren();
+        foreach (var (id, verts, _, _, worldInv) in ComponentTargets)
+        {
+            var p = NVec3.Transform(worldTarget, worldInv);
+            var pos = new NVec3[verts.Length];
+            for (int i = 0; i < verts.Length; i++) pos[i] = p;
+            MoveVerticesCommand.Preview(doc, id, verts, pos);
+        }
+        Gizmo.Pivot = worldTarget;
+        Gizmo.MarkDirty();
+    }
+
+    /// <summary>Edit Pivot: 오브젝트는 그대로 두고 피벗만 월드 델타만큼 옮긴다(프리뷰).</summary>
+    protected void ApplyPivotMove(NVec3 worldDelta)
+    {
+        var doc = Ctx.Doc;
+        foreach (var (node, initial, parentWorld, _) in ObjectTargets)
+        {
+            var world = initial.ToMatrix() * parentWorld;
+            Matrix4x4.Invert(world, out var inv);
+            var pivotWorld = NVec3.Transform(initial.Pivot, world) + worldDelta;
+            node.Local = initial.WithPivotKeepingMatrix(NVec3.Transform(pivotWorld, inv));
+            doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
+        }
+        Gizmo.Pivot = PivotWorld + worldDelta;
+        Gizmo.MarkDirty();
+    }
+
+    /// <summary>Edit Pivot + 점 스냅: 선택 오브젝트의 피벗을 모두 한 월드 점으로.</summary>
+    protected void ApplyPivotTo(NVec3 worldTarget)
+    {
+        var doc = Ctx.Doc;
+        foreach (var (node, initial, parentWorld, _) in ObjectTargets)
+        {
+            var world = initial.ToMatrix() * parentWorld;
+            Matrix4x4.Invert(world, out var inv);
+            node.Local = initial.WithPivotKeepingMatrix(NVec3.Transform(worldTarget, inv));
+            doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
+        }
+        Gizmo.Pivot = worldTarget;
+        Gizmo.MarkDirty();
     }
 
     private void ApplyComponentsWorldMatrix(Matrix4x4 worldDelta)

@@ -53,6 +53,9 @@ public class SceneNode
         }
     }
 
+    /// <summary>회전/스케일 피벗의 월드 위치.</summary>
+    public Vector3 PivotWorld => Vector3.Transform(Local.Pivot, WorldMatrix);
+
     /// <summary>문서 루트 여부(루트는 표시·선택되지 않는다).</summary>
     public bool IsRoot { get; internal set; }
 

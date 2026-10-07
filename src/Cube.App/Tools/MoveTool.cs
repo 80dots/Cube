@@ -7,7 +7,7 @@ using NVec3 = System.Numerics.Vector3;
 namespace Cube.App.Tools;
 
 /// <summary>Maya Move Tool (W). 축/평면/중앙(화면 평행) 드래그.</summary>
-public sealed class MoveTool : TransformToolBase
+public class MoveTool : TransformToolBase
 {
     public override string Id => "move";
     public override string Label => "Move";
@@ -20,6 +20,13 @@ public sealed class MoveTool : TransformToolBase
     private NVec2 _axisDir2D;
 
     protected override GizmoBase CreateGizmo() => new MoveGizmo();
+
+    /// <summary>점 스냅 후보에서 움직이는 정점/오브젝트를 뺄지(Edit Pivot은 자기 정점에도 붙는다).</summary>
+    protected virtual bool ExcludeMovingFromPointSnap => true;
+    /// <summary>스냅까지 끝난 월드 델타를 적용한다. Edit Pivot은 피벗만 옮긴다.</summary>
+    protected virtual void ApplyMove(NVec3 worldDelta) => ApplyTranslation(worldDelta);
+    /// <summary>점 스냅(Retain component spacing off): 모두 한 점으로.</summary>
+    protected virtual void ApplyCollapse(NVec3 worldTarget) => ApplyCollapseTo(worldTarget);
 
     protected override void OnDragBegin(CameraProjection proj)
     {
@@ -65,21 +72,35 @@ public sealed class MoveTool : TransformToolBase
             if (!DragMath.RayPlane(ray, PivotWorld, _planeNormal, out var hit)) return;
             delta = hit - _startHit;
         }
-        delta = ApplySnap(delta, px, proj);
-        ApplyTranslation(delta);
+        delta = ApplySnap(delta, px, proj, out var collapse);
+        if (collapse != null) ApplyCollapse(collapse.Value);
+        else ApplyMove(delta);
     }
 
-    /// <summary>X: 그리드(1단위) 스냅, V: 커서 근처 정점으로 스냅. 축 드래그면 축 성분만 취한다.</summary>
-    private NVec3 ApplySnap(NVec3 delta, NVec2 px, CameraProjection proj)
+    /// <summary>
+    /// Maya 스냅: V/Snap to Points = 커서 근처 점(정점, 조인트·라이트 위치)으로, X/Snap to Grid = 그리드 간격(Preferences) 단위로.
+    /// 축 드래그면 축 성분만 취한다. 점 스냅에서 Retain Component Spacing이 꺼져 있으면 collapse 대상(모든 선택을 그 점으로)을 돌려준다.
+    /// </summary>
+    private NVec3 ApplySnap(NVec3 delta, NVec2 px, CameraProjection proj, out NVec3? collapse)
     {
+        collapse = null;
         var vp = Ctx.Viewport;
+        var settings = CubeApp.Instance.Settings;
         NVec3? target = null;
         if (vp.IsPointSnapHeld)
         {
             float best = 30f * CubeApp.Instance.UiScale; best *= best;
+            bool exclude = ExcludeMovingFromPointSnap;
             var movingVerts = new HashSet<(Core.Scene.NodeId, int)>();
-            foreach (var (id, verts, _, _, _) in ComponentTargets) foreach (int v in verts) movingVerts.Add((id, v));
-            var movingNodes = new HashSet<Core.Scene.NodeId>(ObjectTargets.Select(t => t.node.Id));
+            if (exclude) foreach (var (id, verts, _, _, _) in ComponentTargets) foreach (int v in verts) movingVerts.Add((id, v));
+            var movingNodes = new HashSet<Core.Scene.NodeId>(exclude ? ObjectTargets.Select(t => t.node.Id) : Enumerable.Empty<Core.Scene.NodeId>());
+            void Consider(NVec3 w)
+            {
+                var p = proj.Project(w, out _);
+                if (p == null) return;
+                float d2 = NVec2.DistanceSquared(p.Value, px);
+                if (d2 < best) { best = d2; target = w; }
+            }
             foreach (var t in Picker.Targets())
             {
                 if (movingNodes.Contains(t.Id)) continue;
@@ -87,17 +108,16 @@ public sealed class MoveTool : TransformToolBase
                 for (int v = 0; v < m.VertexCount; v++)
                 {
                     if (!m.Verts[v].Alive || movingVerts.Contains((t.Id, v))) continue;
-                    var w = NVec3.Transform(m.Verts[v].Position, t.World);
-                    var p = proj.Project(w, out _);
-                    if (p == null) continue;
-                    float d2 = NVec2.DistanceSquared(p.Value, px);
-                    if (d2 < best) { best = d2; target = w; }
+                    Consider(NVec3.Transform(m.Verts[v].Position, t.World));
                 }
             }
+            foreach (var n in Ctx.Doc.Nodes.Values)
+                if ((n.IsJoint || n.Light != null) && !movingNodes.Contains(n.Id)) Consider(n.WorldMatrix.Translation);
+            if (target != null && !settings.RetainComponentSpacing && !_axisMode) { collapse = target; return delta; }
         }
         else if (vp.IsGridSnapHeld)
         {
-            const float step = 1f;
+            float step = MathF.Max(settings.GridSpacingCm, 1f) / 100f;
             var np = PivotWorld + delta;
             target = new NVec3(MathF.Round(np.X / step) * step, MathF.Round(np.Y / step) * step, MathF.Round(np.Z / step) * step);
         }

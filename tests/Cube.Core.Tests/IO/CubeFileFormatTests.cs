@@ -18,7 +18,10 @@ public class CubeFileFormatTests
         doc.Undo.Push(new ExtrudeFacesCommand(cube.Node.Id, new[] { top }));
         MeshOps.SetEdgesHard(mesh, new[] { 0, 1 }, false); // 소프트 엣지 둘
         var sphere = CreatePrimitiveCommand.Sphere(doc); doc.Undo.Push(sphere);
-        sphere.Node.Local = new Transform3(new Vector3(1, 2, 3), new Vector3(10, 20, 30), new Vector3(2, 2, 2));
+        sphere.Node.Local = new Transform3(new Vector3(1, 2, 3), new Vector3(10, 20, 30), new Vector3(2, 2, 2), new Vector3(0.5f, -0.25f, 1));
+        var mat = new MaterialDef { Name = "wood", Type = MaterialType.Pbr, Color = new Vector3(0.8f, 0.6f, 0.4f), Roughness = 0.7f, TexturePath = "C:/tex/wood.png" };
+        doc.Undo.Push(new AddMaterialCommand(mat));
+        doc.Undo.Push(new AssignMaterialCommand(new[] { cube.Node.Id }, mat.Id));
         var child = new SceneNode { Name = "child", Local = new Transform3(new Vector3(0, 1, 0), Vector3.Zero, Vector3.One) };
         doc.AddNode(child, sphere.Node);
         child.Visible = false;
@@ -35,6 +38,12 @@ public class CubeFileFormatTests
         Assert.Equal("child", sphere2.Children[0].Name);
         Assert.False(sphere2.Children[0].Visible);
         Assert.Equal(sphere.Node.Local, sphere2.Local);
+        Assert.Equal(new Vector3(0.5f, -0.25f, 1), sphere2.Local.Pivot);
+        var mat2 = doc2.FindMaterial(cube2.MaterialId);
+        Assert.NotNull(mat2);
+        Assert.Equal("wood", mat2!.Name);
+        Assert.Equal("C:/tex/wood.png", mat2.TexturePath);
+        Assert.Equal(MaterialType.Pbr, mat2.Type);
 
         var m2 = cube2.Mesh!;
         Assert.Empty(MeshValidator.Check(m2));

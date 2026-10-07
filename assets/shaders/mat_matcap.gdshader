@@ -4,6 +4,8 @@ render_mode cull_disabled, unshaded;
 
 uniform vec4 albedo : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform sampler2D matcap : source_color, filter_linear;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic;
+uniform bool use_texture = false;
 
 void fragment() {
 	if (!FRONT_FACING) { ALBEDO = vec3(0.0); }
@@ -11,6 +13,7 @@ void fragment() {
 		vec3 n = normalize(NORMAL); // 뷰 공간
 		vec2 uv = n.xy * 0.5 + 0.5;
 		uv.y = 1.0 - uv.y;
-		ALBEDO = texture(matcap, uv).rgb * albedo.rgb;
+		vec3 c = use_texture ? texture(albedo_tex, UV).rgb : albedo.rgb;
+		ALBEDO = texture(matcap, uv).rgb * c;
 	}
 }

@@ -107,6 +107,7 @@ public sealed class ViewportDisplay
         s.ShowSurface = Mode != ShadingMode.Wireframe;
         var matDef = _doc?.FindMaterial(mv.Node.MaterialId);
         s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : matDef != null ? MaterialCache.Get(matDef) : null;
+        mv.MappedTexture = matDef != null ? MaterialCache.LoadTexture(matDef.TexturePath) : null;
         var wd = UI.Shell.Instance?.WeightDisplay;
         s.WeightOf = wd is { } w && w.node == id ? w.weight : null;
         s.ShowWire = Mode == ShadingMode.Wireframe || WireOnShaded || objSelected || compMode;

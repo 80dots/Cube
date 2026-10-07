@@ -3,7 +3,13 @@ using Godot;
 
 namespace Cube.App.UI;
 
-public sealed record PieItem(string Label, string ActionId, bool Enabled = true);
+public sealed record PieItem(string Label, string ActionId, bool Enabled = true)
+{
+    /// <summary>하위 파이 항목 생성기. 있으면 이 항목을 고를 때 서브 파이가 열린다.</summary>
+    public Func<List<PieItem>>? Sub { get; init; }
+    /// <summary>ActionId 대신 직접 실행할 동작(동적 항목용).</summary>
+    public Action? Run { get; init; }
+}
 
 /// <summary>
 /// Maya 마킹 메뉴식 파이 메뉴. 마우스 버튼을 누른 채 열리고, 누른 채 항목 방향으로 이동한 뒤 떼면 실행된다.
@@ -19,6 +25,10 @@ public partial class PieMenu : Control
     private int _fontSize;
 
     public bool IsOpen { get; private set; }
+    /// <summary>버튼을 뗀 뒤에도 열려 있는 서브 파이(LMB로 선택, RMB/Esc로 닫음).</summary>
+    public bool Sticky { get; private set; }
+    public string? Title { get; private set; }
+    public Vector2 Center => _center;
     public float Radius => 90f * CubeApp.Instance.UiScale;
     public float DeadZone => 18f * CubeApp.Instance.UiScale;
 
@@ -36,11 +46,12 @@ public partial class PieMenu : Control
         _font = GetThemeDefaultFont();
     }
 
-    public void Open(IEnumerable<PieItem> items, Vector2 centerLocal)
+    public void Open(IEnumerable<PieItem> items, Vector2 centerLocal, bool sticky = false, string? title = null)
     {
         _items.Clear(); _items.AddRange(items);
         _center = centerLocal;
         _hover = -1;
+        Sticky = sticky; Title = title;
         _fontSize = (int)(12 * CubeApp.Instance.UiScale);
         Layout();
         IsOpen = _items.Count > 0;
@@ -123,7 +134,7 @@ public partial class PieMenu : Control
 
     public void Close()
     {
-        IsOpen = false; Visible = false; _hover = -1;
+        IsOpen = false; Visible = false; _hover = -1; Sticky = false; Title = null;
         QueueRedraw();
     }
 
@@ -139,6 +150,16 @@ public partial class PieMenu : Control
         // 중심 표시와 안내선
         DrawCircle(_center, 5 * s, MathConvert.Rgb(0xdddddd));
         DrawArc(_center, DeadZone, 0, MathF.Tau, 32, MathConvert.Rgb(0x888888, 0.6f), 1 * s, true);
+        if (!string.IsNullOrEmpty(Title))
+        {
+            // 서브 파이 제목: 중심 아래 작은 상자
+            var ts = _font.GetStringSize(Title, HorizontalAlignment.Left, -1, _fontSize);
+            var tr = new Rect2(_center.X - ts.X / 2 - 6 * s, _center.Y + DeadZone + 4 * s, ts.X + 12 * s, ts.Y + 4 * s);
+            var tstyle = new StyleBoxFlat { BgColor = MathConvert.Rgb(0x1e1e1e, 0.9f), BorderColor = border };
+            tstyle.SetBorderWidthAll((int)(1 * s)); tstyle.SetCornerRadiusAll((int)(3 * s));
+            DrawStyleBox(tstyle, tr);
+            DrawString(_font, new Vector2(tr.Position.X + 6 * s, tr.Position.Y + 2 * s + ts.Y - _font.GetDescent(_fontSize)), Title, HorizontalAlignment.Left, -1, _fontSize, dim);
+        }
         for (int i = 0; i < _rects.Count; i++)
         {
             var r = _rects[i];

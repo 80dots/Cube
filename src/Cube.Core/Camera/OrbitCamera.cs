@@ -25,9 +25,9 @@ public sealed class OrbitCamera
 
     public static OrbitCamera MayaDefault()
     {
-        // Maya 기본 persp: (28, 21, 28)에서 원점을 봄
+        // Maya 기본 persp 방향(28, 21, 28)을 유지하되 1m 큐브가 크게 보이도록 가까이(거리 ≈ 4.5m)
         var c = new OrbitCamera();
-        c.LookFrom(new Vector3(28, 21, 28), Vector3.Zero);
+        c.LookFrom(new Vector3(2.8f, 2.1f, 2.8f), Vector3.Zero);
         return c;
     }
 

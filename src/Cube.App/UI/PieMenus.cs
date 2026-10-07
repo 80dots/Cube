@@ -38,7 +38,34 @@ public static class PieMenus
             SelectMode.Vertex => new[] { "mesh.merge", "select.toFaces", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toEdges" },
             _ => new[] { "mode.object", "mode.vertex", "mode.edge", "mode.face" },
         };
-        return ids.Select(id => Item(shell, id)).ToList();
+        var items = ids.Select(id => Item(shell, id)).ToList();
+        if (sel.Mode == SelectMode.Object)
+        {
+            bool hasMesh = sel.Objects.Any(id => shell.Document.Find(id)?.Mesh != null);
+            items.Insert(8, new PieItem("Assign Material ▸", "material.assign", hasMesh) { Sub = () => MaterialItems(shell) });
+            items.Insert(9, Item(shell, "edit.centerPivot", "Center Pivot"));
+            items.Insert(10, Item(shell, "edit.editPivot", "Edit Pivot"));
+        }
+        return items;
+    }
+
+    /// <summary>Assign Material 서브 파이: lambert1 + 문서 머티리얼(현재 할당은 •) + Material Editor 열기.</summary>
+    public static List<PieItem> MaterialItems(Shell shell)
+    {
+        var doc = shell.Document;
+        var active = doc.Find(doc.Selection.ActiveObject);
+        int current = active?.MaterialId ?? -1;
+        var list = new List<PieItem>
+        {
+            new("lambert1" + (current == 0 ? " •" : ""), "material.assign.0") { Run = () => shell.AssignMaterialToSelection(0) },
+        };
+        foreach (var m in doc.Materials)
+        {
+            int id = m.Id;
+            list.Add(new PieItem(m.Name + (current == id ? " •" : ""), "material.assign." + id) { Run = () => shell.AssignMaterialToSelection(id) });
+        }
+        list.Add(Item(shell, "windows.materialEditor", "Material Editor..."));
+        return list;
     }
 
     /// <summary>Ctrl+RMB: 선택 변환. N To Edge, NE To Boundary Edge, E To Vertex, SE To Face, S To UV, SW To UV Island, W Grow, NW Shrink.</summary>
@@ -52,6 +79,7 @@ public static class PieMenus
         Item(shell, "select.toUvIsland", "To UV Island"),
         Item(shell, "select.grow", "Grow"),
         Item(shell, "select.shrink", "Shrink"),
+        Item(shell, "select.hierarchy", "Select Hierarchy"),
         Item(shell, "select.all", "Select All"),
         Item(shell, "select.none", "Deselect All"),
     };

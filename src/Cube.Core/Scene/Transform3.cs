@@ -4,19 +4,36 @@ namespace Cube.Core.Scene;
 
 /// <summary>
 /// Maya 채널 박스와 동일한 TRS 표현. 회전은 도(degree) 단위 오일러, 회전 순서 XYZ(Maya 기본).
-/// 행렬은 System.Numerics 행벡터 규약: M = S · Rx · Ry · Rz · T.
+/// 행렬은 System.Numerics 행벡터 규약: M = T(-Pivot) · S · Rx · Ry · Rz · T(Pivot + Translation).
+/// Pivot은 오브젝트 공간의 회전/스케일 피벗(Maya rotatePivot = scalePivot). 피벗의 월드 위치는 부모 공간에서 Pivot + Translation.
 /// </summary>
 public struct Transform3 : IEquatable<Transform3>
 {
     public Vector3 Translation;
     public Vector3 RotationDegrees;
     public Vector3 Scale;
+    public Vector3 Pivot;
 
-    public static readonly Transform3 Identity = new() { Translation = Vector3.Zero, RotationDegrees = Vector3.Zero, Scale = Vector3.One };
+    public static readonly Transform3 Identity = new() { Translation = Vector3.Zero, RotationDegrees = Vector3.Zero, Scale = Vector3.One, Pivot = Vector3.Zero };
 
     public Transform3(Vector3 translation, Vector3 rotationDegrees, Vector3 scale)
     {
-        Translation = translation; RotationDegrees = rotationDegrees; Scale = scale;
+        Translation = translation; RotationDegrees = rotationDegrees; Scale = scale; Pivot = Vector3.Zero;
+    }
+
+    public Transform3(Vector3 translation, Vector3 rotationDegrees, Vector3 scale, Vector3 pivot)
+    {
+        Translation = translation; RotationDegrees = rotationDegrees; Scale = scale; Pivot = pivot;
+    }
+
+    /// <summary>스케일·회전 부분만(피벗/이동 없음).</summary>
+    public readonly Matrix4x4 ScaleRotationMatrix()
+    {
+        const float d2r = MathF.PI / 180f;
+        return Matrix4x4.CreateScale(Scale)
+             * Matrix4x4.CreateRotationX(RotationDegrees.X * d2r)
+             * Matrix4x4.CreateRotationY(RotationDegrees.Y * d2r)
+             * Matrix4x4.CreateRotationZ(RotationDegrees.Z * d2r);
     }
 
     public readonly Quaternion Rotation
@@ -34,20 +51,38 @@ public struct Transform3 : IEquatable<Transform3>
 
     public readonly Matrix4x4 ToMatrix()
     {
-        const float d2r = MathF.PI / 180f;
-        return Matrix4x4.CreateScale(Scale)
-             * Matrix4x4.CreateRotationX(RotationDegrees.X * d2r)
-             * Matrix4x4.CreateRotationY(RotationDegrees.Y * d2r)
-             * Matrix4x4.CreateRotationZ(RotationDegrees.Z * d2r)
-             * Matrix4x4.CreateTranslation(Translation);
+        if (Pivot == Vector3.Zero) return ScaleRotationMatrix() * Matrix4x4.CreateTranslation(Translation);
+        return Matrix4x4.CreateTranslation(-Pivot) * ScaleRotationMatrix() * Matrix4x4.CreateTranslation(Pivot + Translation);
     }
 
-    /// <summary>행렬에서 TRS를 복원한다(스케일이 양수이고 전단이 없다고 가정).</summary>
-    public static Transform3 FromMatrix(Matrix4x4 m)
+    /// <summary>행렬에서 TRS를 복원한다(스케일이 양수이고 전단이 없다고 가정). 피벗은 0.</summary>
+    public static Transform3 FromMatrix(Matrix4x4 m) => FromMatrix(m, Vector3.Zero);
+
+    /// <summary>주어진 피벗을 유지하며 행렬에서 TRS를 복원한다: M = T(-p)·S·R·T(p+t) → t = translation(inv(T(-p)·S·R)·M) - p.</summary>
+    public static Transform3 FromMatrix(Matrix4x4 m, Vector3 pivot)
     {
-        if (!Matrix4x4.Decompose(m, out var s, out var q, out var t))
-            return new Transform3(m.Translation, Vector3.Zero, Vector3.One);
-        return new Transform3(t, QuaternionToEulerXYZDegrees(q), s);
+        if (!Matrix4x4.Decompose(m, out var s, out var q, out _))
+            return new Transform3(m.Translation - pivot, Vector3.Zero, Vector3.One, pivot) { Translation = m.Translation };
+        var result = new Transform3(Vector3.Zero, QuaternionToEulerXYZDegrees(q), s, pivot);
+        result.Translation = SolveTranslation(m, result);
+        return result;
+    }
+
+    /// <summary>S/R/Pivot이 정해진 상태에서 목표 행렬을 만드는 Translation.</summary>
+    public static Vector3 SolveTranslation(Matrix4x4 target, Transform3 sr)
+    {
+        var head = Matrix4x4.CreateTranslation(-sr.Pivot) * sr.ScaleRotationMatrix();
+        Matrix4x4.Invert(head, out var inv);
+        return (inv * target).Translation - sr.Pivot;
+    }
+
+    /// <summary>피벗만 바꾸고 월드(행렬)는 그대로 유지한다.</summary>
+    public readonly Transform3 WithPivotKeepingMatrix(Vector3 newPivot)
+    {
+        var m = ToMatrix();
+        var t = this; t.Pivot = newPivot;
+        t.Translation = SolveTranslation(m, t);
+        return t;
     }
 
     /// <summary>쿼터니언을 XYZ 순서 오일러(도)로 변환한다.</summary>
@@ -75,10 +110,10 @@ public struct Transform3 : IEquatable<Transform3>
         return new Vector3(rx * r2d, ry * r2d, rz * r2d);
     }
 
-    public readonly bool Equals(Transform3 o) => Translation == o.Translation && RotationDegrees == o.RotationDegrees && Scale == o.Scale;
+    public readonly bool Equals(Transform3 o) => Translation == o.Translation && RotationDegrees == o.RotationDegrees && Scale == o.Scale && Pivot == o.Pivot;
     public override readonly bool Equals(object? obj) => obj is Transform3 t && Equals(t);
-    public override readonly int GetHashCode() => HashCode.Combine(Translation, RotationDegrees, Scale);
+    public override readonly int GetHashCode() => HashCode.Combine(Translation, RotationDegrees, Scale, Pivot);
     public static bool operator ==(Transform3 a, Transform3 b) => a.Equals(b);
     public static bool operator !=(Transform3 a, Transform3 b) => !a.Equals(b);
-    public override readonly string ToString() => $"T{Translation} R{RotationDegrees} S{Scale}";
+    public override readonly string ToString() => $"T{Translation} R{RotationDegrees} S{Scale}" + (Pivot == Vector3.Zero ? "" : $" P{Pivot}");
 }

@@ -278,6 +278,24 @@ public partial class DebugDriver : Node
                     else GD.Print("[Drive] gizmo: (no transform tool)");
                     break;
                 }
+            case "mattex":
+                {
+                    // mattex ID PATH  : 머티리얼 ID에 컬러 텍스처 경로를 설정한다(빈 PATH면 해제)
+                    var doc = CubeApp.Instance.Document;
+                    int id = int.Parse(p[1]);
+                    var m = doc.FindMaterial(id);
+                    if (m == null) { GD.PrintErr($"[Drive] no material {id}"); break; }
+                    var after = m.Clone(); after.TexturePath = p.Length > 2 ? string.Join(" ", p.Skip(2)) : null;
+                    doc.Undo.Push(new Core.Commands.SetMaterialCommand(id, after));
+                    GD.Print($"[Drive] mattex {id} -> {after.TexturePath ?? "(none)"}");
+                    break;
+                }
+            case "matassign":
+                {
+                    // matassign ID : 선택 오브젝트에 머티리얼 할당(0 = lambert1)
+                    UI.Shell.Instance.AssignMaterialToSelection(int.Parse(p[1]));
+                    break;
+                }
             case "print":
                 {
                     var doc = CubeApp.Instance.Document;
@@ -306,7 +324,7 @@ public partial class DebugDriver : Node
                     {
                         var mn = new System.Numerics.Vector3(float.MaxValue); var mx = new System.Numerics.Vector3(float.MinValue);
                         foreach (var v in active.Mesh.Verts) if (v.Alive) { mn = System.Numerics.Vector3.Min(mn, v.Position); mx = System.Numerics.Vector3.Max(mx, v.Position); }
-                        GD.Print($"[Drive] active={active.Name} local={active.Local} meshMin=<{mn.X:F3},{mn.Y:F3},{mn.Z:F3}> meshMax=<{mx.X:F3},{mx.Y:F3},{mx.Z:F3}> comps={string.Join("|", doc.Selection.Components.Select(kv => $"{kv.Key}:v{kv.Value.Verts.Count}/e{kv.Value.Edges.Count}/f{kv.Value.Faces.Count}/u{kv.Value.Uvs.Count}"))}");
+                        GD.Print($"[Drive] active={active.Name} material={active.MaterialId} local={active.Local} meshMin=<{mn.X:F3},{mn.Y:F3},{mn.Z:F3}> meshMax=<{mx.X:F3},{mx.Y:F3},{mx.Z:F3}> comps={string.Join("|", doc.Selection.Components.Select(kv => $"{kv.Key}:v{kv.Value.Verts.Count}/e{kv.Value.Edges.Count}/f{kv.Value.Faces.Count}/u{kv.Value.Uvs.Count}"))}");
                     }
                     break;
                 }

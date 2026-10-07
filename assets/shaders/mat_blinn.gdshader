@@ -5,11 +5,13 @@ render_mode cull_disabled, diffuse_lambert, specular_schlick_ggx;
 uniform vec4 albedo : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 uniform vec4 specular_color : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 uniform float shininess : hint_range(1.0, 128.0) = 32.0;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic;
+uniform bool use_texture = false;
 
 void fragment() {
 	if (!FRONT_FACING) { ALBEDO = vec3(0.0); ROUGHNESS = 1.0; METALLIC = 0.0; SPECULAR = 0.0; }
 	else {
-		ALBEDO = albedo.rgb;
+		ALBEDO = use_texture ? texture(albedo_tex, UV).rgb : albedo.rgb;
 		float r = clamp(sqrt(2.0 / (shininess + 2.0)), 0.05, 1.0);
 		ROUGHNESS = r;
 		METALLIC = 0.0;

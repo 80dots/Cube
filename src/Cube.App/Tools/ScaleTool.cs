@@ -59,5 +59,9 @@ public sealed class ScaleTool : TransformToolBase
         ApplyScale(scale);
     }
 
-    private static float Snap(float v) => MathF.Max(MathF.Round(v * 4f) / 4f, 0.25f);
+    private static float Snap(float v)
+    {
+        float step = MathF.Max(CubeApp.Instance.Settings.ScaleSnapStep, 0.001f); // J: 증분 스케일(Preferences, 기본 0.25)
+        return MathF.Max(MathF.Round(v / step) * step, step);
+    }
 }

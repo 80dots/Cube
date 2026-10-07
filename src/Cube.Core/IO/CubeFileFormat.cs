@@ -40,6 +40,7 @@ public static class CubeFileFormat
         [JsonPropertyName("translation")] public float[] Translation { get; set; } = { 0, 0, 0 };
         [JsonPropertyName("rotation")] public float[] Rotation { get; set; } = { 0, 0, 0 };
         [JsonPropertyName("scale")] public float[] Scale { get; set; } = { 1, 1, 1 };
+        [JsonPropertyName("pivot")] public float[]? Pivot { get; set; }
         [JsonPropertyName("visible")] public bool Visible { get; set; } = true;
         [JsonPropertyName("mesh")] public MeshDto? Mesh { get; set; }
         [JsonPropertyName("jointRadius")] public float? JointRadius { get; set; }   // null이 아니면 조인트
@@ -68,6 +69,7 @@ public static class CubeFileFormat
         [JsonPropertyName("metallic")] public float Metallic { get; set; }
         [JsonPropertyName("roughness")] public float Roughness { get; set; } = 0.5f;
         [JsonPropertyName("matcap")] public string? Matcap { get; set; }
+        [JsonPropertyName("texture")] public string? Texture { get; set; }
     }
 
     private sealed class FileDto
@@ -90,7 +92,7 @@ public static class CubeFileFormat
             var nd = new NodeDto
             {
                 Name = n.Name, Parent = parent,
-                Translation = V(n.Local.Translation), Rotation = V(n.Local.RotationDegrees), Scale = V(n.Local.Scale),
+                Translation = V(n.Local.Translation), Rotation = V(n.Local.RotationDegrees), Scale = V(n.Local.Scale), Pivot = n.Local.Pivot == Vector3.Zero ? null : V(n.Local.Pivot),
                 Visible = n.Visible,
                 Mesh = n.Mesh != null ? ToDto(n.Mesh, out _) : null,
                 JointRadius = n.Joint?.Radius,
@@ -103,7 +105,7 @@ public static class CubeFileFormat
         }
         foreach (var c in doc.Root.Children) Walk(c, -1);
         foreach (var mt in doc.Materials)
-            dto.Materials.Add(new MaterialDto { Id = mt.Id, Name = mt.Name, Type = mt.Type.ToString().ToLowerInvariant(), Color = V(mt.Color), Specular = V(mt.Specular), Shininess = mt.Shininess, Metallic = mt.Metallic, Roughness = mt.Roughness, Matcap = mt.MatcapPath });
+            dto.Materials.Add(new MaterialDto { Id = mt.Id, Name = mt.Name, Type = mt.Type.ToString().ToLowerInvariant(), Color = V(mt.Color), Specular = V(mt.Specular), Shininess = mt.Shininess, Metallic = mt.Metallic, Roughness = mt.Roughness, Matcap = mt.MatcapPath, Texture = mt.TexturePath });
         // 스킨은 노드 인덱스가 모두 정해진 뒤에 기록한다(메시는 Compact 리맵 반영)
         for (int i = 0; i < order.Count; i++)
         {
@@ -138,14 +140,14 @@ public static class CubeFileFormat
         if (dto.Version > Version) throw new InvalidDataException($"document version {dto.Version} is newer than supported {Version}");
         doc.Clear();
         foreach (var md in dto.Materials)
-            doc.AddMaterialWithId(new MaterialDef { Id = md.Id, Name = md.Name, Type = Enum.TryParse<MaterialType>(md.Type, true, out var mt) ? mt : MaterialType.Lambert, Color = V3(md.Color, new Vector3(0.5f)), Specular = V3(md.Specular, new Vector3(0.5f)), Shininess = md.Shininess, Metallic = md.Metallic, Roughness = md.Roughness, MatcapPath = md.Matcap });
+            doc.AddMaterialWithId(new MaterialDef { Id = md.Id, Name = md.Name, Type = Enum.TryParse<MaterialType>(md.Type, true, out var mt) ? mt : MaterialType.Lambert, Color = V3(md.Color, new Vector3(0.5f)), Specular = V3(md.Specular, new Vector3(0.5f)), Shininess = md.Shininess, Metallic = md.Metallic, Roughness = md.Roughness, MatcapPath = md.Matcap, TexturePath = md.Texture });
         var nodes = new List<SceneNode>(dto.Nodes.Count);
         foreach (var nd in dto.Nodes)
         {
             var n = new SceneNode
             {
                 Name = nd.Name,
-                Local = new Transform3(V3(nd.Translation), V3(nd.Rotation), V3(nd.Scale, Vector3.One)),
+                Local = new Transform3(V3(nd.Translation), V3(nd.Rotation), V3(nd.Scale, Vector3.One), V3(nd.Pivot)),
                 Visible = nd.Visible,
                 Shape = nd.Mesh != null ? new MeshShape(FromDto(nd.Mesh)) : nd.JointRadius is { } jr ? new JointShape { Radius = jr }
                     : nd.Light is { } ld ? new LightShape { Type = Enum.TryParse<LightType>(ld.Type, true, out var lt) ? lt : LightType.Point, Color = V3(ld.Color, Vector3.One), Intensity = ld.Intensity, Range = ld.Range, SpotAngle = ld.SpotAngle } : null,

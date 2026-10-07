@@ -11,11 +11,11 @@ public class OrbitCameraTests
     public void MayaDefault_LooksAtOriginFrom28_21_28()
     {
         var c = OrbitCamera.MayaDefault();
-        Assert.True(Near(c.Eye, new Vector3(28, 21, 28), 1e-2f), $"eye {c.Eye}");
+        Assert.True(Near(c.Eye, new Vector3(2.8f, 2.1f, 2.8f), 1e-2f), $"eye {c.Eye}");
         Assert.True(Near(c.Pivot, Vector3.Zero));
         Assert.True(Vector3.Dot(c.Forward, Vector3.Normalize(-c.Eye)) > 0.9999f);
         Assert.True(c.Up.Y > 0.5f);
-        Assert.True(MathF.Abs(c.Distance - 44.9f) < 0.1f);
+        Assert.True(MathF.Abs(c.Distance - 4.49f) < 0.02f);
     }
 
     [Fact]

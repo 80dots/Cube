@@ -98,6 +98,8 @@ public static class DocumentToGodotScene
         var def = CubeApp.Instance.Document.FindMaterial(n.MaterialId);
         if (def == null) return DefaultMaterial;
         var m = new StandardMaterial3D { ResourceName = def.Name, AlbedoColor = new Color(def.Color.X, def.Color.Y, def.Color.Z) };
+        var tex = Viewport.MaterialCache.LoadTexture(def.TexturePath);
+        if (tex != null) { m.AlbedoTexture = tex; m.AlbedoColor = Colors.White; }
         switch (def.Type)
         {
             case MaterialType.Pbr: m.Metallic = def.Metallic; m.Roughness = def.Roughness; break;

@@ -43,6 +43,7 @@ public partial class Shell : Control
     private readonly Dictionary<string, Button> _toolButtons = new();
     private readonly Dictionary<AxisOrientation, Button> _axisButtons = new();
     private CheckBox _cameraBased = null!;
+    private Button _snapGrid = null!, _snapPoint = null!;
     private Button _undoBtn = null!, _redoBtn = null!;
     private HSplitContainer _mainSplit = null!, _rightSplit = null!;
     private bool _maximized;
@@ -124,7 +125,7 @@ public partial class Shell : Control
             var panel = p;
             panel.ToolInput = e => Layout.Active == panel && Tools.HandleInput(e);
             panel.PieItems = (shift, ctrl) => ctrl ? PieMenus.SelectMenu(this) : shift ? PieMenus.ContextMenu(this) : PieMenus.ModeMenu(this);
-            panel.PieExecute = item => Actions.Invoke(item.ActionId);
+            panel.PieExecute = item => { if (item.Run != null) item.Run(); else Actions.Invoke(item.ActionId); };
         }
         Layout.ActiveChanged += p => ToolContext.Viewport = p;
 
@@ -151,6 +152,7 @@ public partial class Shell : Control
             p.Display.ShowGrid = Settings.ShowGrid;
             p.Display.RefreshAll();
         }
+        ApplyGridSettings();
         if (Settings.QuadView) Layout.SetQuad(true);
         Tools.SetTool("select");
         RefreshModeButtons();
@@ -200,6 +202,20 @@ public partial class Shell : Control
         _cameraBased = new CheckBox { Text = "Camera-based", ButtonPressed = Settings.CameraBasedSelection, FocusMode = FocusModeEnum.None, TooltipText = "Camera-based selection (occluded components are not selected)" };
         _cameraBased.Toggled += on => Settings.CameraBasedSelection = on;
         StatusLine.AddChild(_cameraBased);
+        StatusLine.AddChild(new VSeparator());
+        _snapGrid = Icons.IconButton("snap_grid", "Snap to Grid (toggle; or hold X)", icon, toggle: true);
+        _snapGrid.Pressed += () => Actions.Invoke("snap.grid");
+        StatusLine.AddChild(_snapGrid);
+        _snapPoint = Icons.IconButton("snap_point", "Snap to Points (toggle; or hold V)", icon, toggle: true);
+        _snapPoint.Pressed += () => Actions.Invoke("snap.point");
+        StatusLine.AddChild(_snapPoint);
+    }
+
+    /// <summary>Preferences의 그리드 간격(cm)을 모든 패널 그리드에 적용한다.</summary>
+    public void ApplyGridSettings()
+    {
+        float spacing = MathF.Max(Settings.GridSpacingCm, 1f) / 100f;
+        foreach (var p in Layout.Panels) { p.Grid.Spacing = spacing; p.Grid.Build(); }
     }
 
     private void BuildToolBox(float s)

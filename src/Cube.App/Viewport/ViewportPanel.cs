@@ -252,24 +252,36 @@ public partial class ViewportPanel : SubViewportContainer
             case InputEventMouseButton { ButtonIndex: MouseButton.Right } mb:
                 if (mb.Pressed)
                 {
+                    if (Pie.IsOpen && Pie.Sticky) { Pie.Close(); return true; }
                     if (mb.AltPressed || PieItems == null || Pie.IsOpen) return Pie.IsOpen;
                     Pie.Open(PieItems(mb.ShiftPressed, mb.CtrlPressed), mb.Position);
                     return Pie.IsOpen;
                 }
                 if (Pie.IsOpen)
                 {
-                    var chosen = Pie.Release();
-                    if (chosen != null && chosen.Enabled) PieExecute?.Invoke(chosen);
+                    if (Pie.Sticky) return true; // 서브 파이는 LMB 클릭으로 고른다
+                    ExecutePie(Pie.Release());
                     return true;
                 }
                 return false;
             case InputEventMouseMotion mm when Pie.IsOpen:
                 Pie.UpdatePointer(mm.Position);
                 return true;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } when Pie.IsOpen && Pie.Sticky:
+                ExecutePie(Pie.Release());
+                return true;
             case InputEventMouseButton when Pie.IsOpen:
                 return true;
         }
         return false;
+    }
+
+    /// <summary>고른 항목 실행. 하위 목록이 있는 항목이면 같은 자리에 서브 파이를 연다(버튼을 뗀 뒤에도 열려 있고 LMB로 고른다).</summary>
+    private void ExecutePie(UI.PieItem? chosen)
+    {
+        if (chosen == null || !chosen.Enabled) return;
+        if (chosen.Sub != null) { Pie.Open(chosen.Sub(), Pie.Center, sticky: true, title: chosen.Label); return; }
+        PieExecute?.Invoke(chosen);
     }
 
     /// <summary>키보드(Space)로 여는 파이: 현재 마우스 위치에 연다.</summary>
@@ -291,10 +303,10 @@ public partial class ViewportPanel : SubViewportContainer
 
     /// <summary>Maya J 홀드: 회전/스케일 증분 스냅.</summary>
     public bool IsSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.J) ?? false;
-    /// <summary>Maya X 홀드: 그리드 스냅.</summary>
-    public bool IsGridSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.X) ?? false;
-    /// <summary>Maya V 홀드: 점(정점) 스냅.</summary>
-    public bool IsPointSnapHeld => UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.V) ?? false;
+    /// <summary>Maya X 홀드(또는 상태 라인 Snap to Grid 토글): 그리드 스냅.</summary>
+    public bool IsGridSnapHeld => (UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.X) ?? false) || CubeApp.Instance.Settings.SnapToGrid;
+    /// <summary>Maya V 홀드(또는 상태 라인 Snap to Points 토글): 점(정점) 스냅. 점 스냅이 그리드 스냅보다 우선한다.</summary>
+    public bool IsPointSnapHeld => (UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.V) ?? false) || CubeApp.Instance.Settings.SnapToPoints;
 
     public override bool _PropagateInputEvent(InputEvent @event) => false;
 }

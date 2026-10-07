@@ -9,7 +9,7 @@ public static class MaterialCache
     private static readonly Dictionary<int, (ShaderMaterial mat, MaterialType type)> _cache = new();
     private static readonly Dictionary<MaterialType, Shader> _shaders = new();
     private static Texture2D? _defaultMatcap;
-    private static readonly Dictionary<string, Texture2D?> _matcaps = new();
+    private static readonly Dictionary<string, Texture2D?> _images = new();
 
     private static Shader ShaderFor(MaterialType t)
     {
@@ -44,6 +44,9 @@ public static class MaterialCache
     private static void Apply(ShaderMaterial m, MaterialDef d)
     {
         m.SetShaderParameter("albedo", new Color(d.Color.X, d.Color.Y, d.Color.Z));
+        var tex = LoadTexture(d.TexturePath);
+        m.SetShaderParameter("use_texture", tex != null);
+        if (tex != null) m.SetShaderParameter("albedo_tex", tex);
         switch (d.Type)
         {
             case MaterialType.BlinnPhong:
@@ -60,25 +63,29 @@ public static class MaterialCache
         }
     }
 
-    public static Texture2D LoadMatcap(string? path)
+    public static Texture2D LoadMatcap(string? path) => LoadTexture(path) ?? DefaultMatcap;
+
+    /// <summary>이미지 파일 → 텍스처(경로별 캐시). 없거나 실패하면 null.</summary>
+    public static Texture2D? LoadTexture(string? path)
     {
-        if (!string.IsNullOrEmpty(path))
+        if (string.IsNullOrEmpty(path)) return null;
+        if (!_images.TryGetValue(path, out var tex))
         {
-            if (!_matcaps.TryGetValue(path, out var tex))
+            tex = null;
+            try
             {
-                tex = null;
-                try
-                {
-                    var img = new Image();
-                    if (img.Load(path) == Error.Ok) { img.GenerateMipmaps(); tex = ImageTexture.CreateFromImage(img); }
-                }
-                catch (Exception ex) { GD.PushWarning($"[Material] matcap load failed: {ex.Message}"); }
-                _matcaps[path] = tex;
+                var img = new Image();
+                if (img.Load(path) == Error.Ok) { img.GenerateMipmaps(); tex = ImageTexture.CreateFromImage(img); }
+                else GD.PushWarning($"[Material] image load failed: {path}");
             }
-            if (tex != null) return tex;
+            catch (Exception ex) { GD.PushWarning($"[Material] image load failed: {ex.Message}"); }
+            _images[path] = tex;
         }
-        return DefaultMatcap;
+        return tex;
     }
+
+    /// <summary>파일이 바뀌었을 때 다시 읽도록 캐시를 비운다.</summary>
+    public static void ForgetTexture(string path) => _images.Remove(path);
 
     /// <summary>내장 기본 matcap: 위-왼쪽 조명의 회색 구에 하이라이트.</summary>
     public static Texture2D DefaultMatcap

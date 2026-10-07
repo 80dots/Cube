@@ -19,8 +19,12 @@ public sealed class MaterialDef
     public float Roughness = 0.5f;
     /// <summary>Matcap 이미지 파일 경로(없으면 내장 기본 matcap).</summary>
     public string? MatcapPath;
+    /// <summary>알베도(컬러) 텍스처 파일 경로. 메시 UV로 입힌다(색과 곱함).</summary>
+    public string? TexturePath;
 
-    public MaterialDef Clone() => new() { Id = Id, Name = Name, Type = Type, Color = Color, Specular = Specular, Shininess = Shininess, Metallic = Metallic, Roughness = Roughness, MatcapPath = MatcapPath };
+    public MaterialDef Clone() => new() { Id = Id, Name = Name, Type = Type, Color = Color, Specular = Specular, Shininess = Shininess, Metallic = Metallic, Roughness = Roughness, MatcapPath = MatcapPath, TexturePath = TexturePath };
 
-    public void CopyFrom(MaterialDef o) { Name = o.Name; Type = o.Type; Color = o.Color; Specular = o.Specular; Shininess = o.Shininess; Metallic = o.Metallic; Roughness = o.Roughness; MatcapPath = o.MatcapPath; }
+    public void CopyFrom(MaterialDef o) { Name = o.Name; Type = o.Type; Color = o.Color; Specular = o.Specular; Shininess = o.Shininess; Metallic = o.Metallic; Roughness = o.Roughness; MatcapPath = o.MatcapPath; TexturePath = o.TexturePath; }
+
+    public bool ValuesEqual(MaterialDef o) => Name == o.Name && Type == o.Type && Color == o.Color && Specular == o.Specular && Shininess == o.Shininess && Metallic == o.Metallic && Roughness == o.Roughness && MatcapPath == o.MatcapPath && TexturePath == o.TexturePath;
 }

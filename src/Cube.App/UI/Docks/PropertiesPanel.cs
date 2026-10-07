@@ -16,7 +16,7 @@ public partial class PropertiesPanel : VBoxContainer
 {
     private Document _doc = null!;
     private Label _title = null!;
-    private readonly SpinBox[] _fields = new SpinBox[9];
+    private readonly SpinBox[] _fields = new SpinBox[12];
     private bool _updating;
     private NodeId _node;
 
@@ -26,7 +26,10 @@ public partial class PropertiesPanel : VBoxContainer
     private ColorPickerButton _lightColor = null!;
     private SpinBox _lightIntensity = null!, _lightRange = null!, _lightAngle = null!;
     private Control _lightRangeRow = null!, _lightAngleRow = null!;
-    private Label _materialLabel = null!;
+    private Control _materialGroup = null!;
+    private OptionButton _materialPick = null!;
+    private MaterialPropsEditor _materialProps = null!;
+    private Label _materialNote = null!;
     private VBoxContainer _paramBox = null!;
     private Label _historyEmpty = null!;
     private int _historyIndex = -1;          // 선택된 히스토리 항목(오래된 것부터 센 인덱스)
@@ -35,6 +38,8 @@ public partial class PropertiesPanel : VBoxContainer
     public void Bind(Document doc)
     {
         _doc = doc;
+        _materialProps.Setup(Shell.Instance);
+        _materialProps.ShowName = true;
         doc.Selection.Changed += Refresh;
         doc.Selection.ModeChanged += Refresh;
         doc.Changed += c =>
@@ -56,8 +61,8 @@ public partial class PropertiesPanel : VBoxContainer
         var grid = new GridContainer { Columns = 4, SizeFlagsHorizontal = SizeFlags.ExpandFill };
         grid.AddChild(new Label { Text = "" });
         foreach (var h in new[] { "X", "Y", "Z" }) grid.AddChild(new Label { Text = h, HorizontalAlignment = HorizontalAlignment.Center, SizeFlagsHorizontal = SizeFlags.ExpandFill });
-        string[] rows = { "Translate", "Rotate", "Scale" };
-        for (int r = 0; r < 3; r++)
+        string[] rows = { "Translate", "Rotate", "Scale", "Pivot" };
+        for (int r = 0; r < 4; r++)
         {
             grid.AddChild(new Label { Text = rows[r] });
             for (int c = 0; c < 3; c++)
@@ -71,8 +76,18 @@ public partial class PropertiesPanel : VBoxContainer
         }
         AddChild(grid);
 
-        _materialLabel = new Label { Text = "", Modulate = new Color(1, 1, 1, 0.7f) };
-        AddChild(_materialLabel);
+        // Material 그룹: 할당 선택 + 할당된 머티리얼의 속성 편집(Material Editor와 같은 편집기)
+        var matBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        matBox.AddChild(Header("Material", s));
+        _materialPick = new OptionButton { FocusMode = FocusModeEnum.None, SizeFlagsHorizontal = SizeFlags.ExpandFill, TooltipText = "Material assigned to this object" };
+        _materialPick.ItemSelected += i => { if (!_updating && !_node.IsNone) { int id = (int)_materialPick.GetItemId((int)i); if (_doc.Find(_node)?.MaterialId != id) _doc.Undo.Push(new AssignMaterialCommand(new[] { _node }, id)); } };
+        matBox.AddChild(LabeledRow("Assigned", _materialPick, s));
+        _materialNote = new Label { Text = "lambert1 is the built-in default material.", Modulate = new Color(1, 1, 1, 0.6f), AutowrapMode = TextServer.AutowrapMode.WordSmart };
+        matBox.AddChild(_materialNote);
+        _materialProps = new MaterialPropsEditor { Name = "MaterialProps" };
+        matBox.AddChild(_materialProps);
+        _materialGroup = matBox;
+        AddChild(matBox);
 
         // Light 그룹
         var lightBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
@@ -175,7 +190,7 @@ public partial class PropertiesPanel : VBoxContainer
             _node = NodeId.None;
             _title.Text = sel.IsComponentMode ? "(component mode)" : "";
             foreach (var f in _fields) { f.Editable = false; f.Value = 0; }
-            _materialLabel.Text = "";
+            RefreshMaterial(null);
             RefreshLight(null);
         }
         else
@@ -183,14 +198,30 @@ public partial class PropertiesPanel : VBoxContainer
             _node = node.Id;
             _title.Text = node.Name;
             var t = node.Local;
-            Set(0, t.Translation); Set(1, t.RotationDegrees); Set(2, t.Scale);
+            Set(0, t.Translation); Set(1, t.RotationDegrees); Set(2, t.Scale); Set(3, t.Pivot);
             bool editable = sel.Mode == SelectMode.Object;
             foreach (var f in _fields) f.Editable = editable;
-            _materialLabel.Text = node.Mesh != null ? "Material: " + (_doc.FindMaterial(node.MaterialId)?.Name ?? "lambert1") : "";
+            RefreshMaterial(node);
             RefreshLight(node);
         }
         _updating = false;
         RefreshHistory();
+    }
+
+    private void RefreshMaterial(SceneNode? node)
+    {
+        bool show = node?.Mesh != null;
+        _materialGroup.Visible = show;
+        if (!show) return;
+        _materialPick.Clear();
+        _materialPick.AddItem("lambert1", 0);
+        foreach (var m in _doc.Materials) _materialPick.AddItem($"{m.Name}  [{m.Type}]", m.Id);
+        int idx = _materialPick.GetItemIndex(node!.MaterialId);
+        _materialPick.Selected = idx >= 0 ? idx : 0;
+        var def = _doc.FindMaterial(node.MaterialId);
+        _materialProps.Visible = def != null;
+        _materialNote.Visible = def == null;
+        _materialProps.SetMaterial(def?.Id ?? 0);
     }
 
     private int HistoryCount => _doc.Find(_node)?.MeshShape?.History.Count ?? 0;
@@ -286,9 +317,10 @@ public partial class PropertiesPanel : VBoxContainer
         var node = _doc.Find(_node); if (node == null) return;
         var before = node.Local; var after = before;
         int row = idx / 3, col = idx % 3;
-        NVec3 v = row == 0 ? after.Translation : row == 1 ? after.RotationDegrees : after.Scale;
+        NVec3 v = row == 0 ? after.Translation : row == 1 ? after.RotationDegrees : row == 2 ? after.Scale : after.Pivot;
         if (col == 0) v.X = value; else if (col == 1) v.Y = value; else v.Z = value;
-        if (row == 0) after.Translation = v; else if (row == 1) after.RotationDegrees = v; else after.Scale = v;
+        if (row == 0) after.Translation = v; else if (row == 1) after.RotationDegrees = v; else if (row == 2) after.Scale = v;
+        else after = before.WithPivotKeepingMatrix(v); // 피벗 편집은 월드를 유지한다(Maya 피벗 이동과 같음)
         if (after == before) return;
         node.Local = after;
         _doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));

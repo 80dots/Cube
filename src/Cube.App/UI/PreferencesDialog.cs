@@ -2,7 +2,7 @@ using Godot;
 
 namespace Cube.App.UI;
 
-/// <summary>Edit → Preferences. 현재는 UI Scale(%)만 있으며, 적용하면 셸을 다시 만든다.</summary>
+/// <summary>Edit → Preferences: UI Scale(적용 시 셸 재구성), 표시/선택 옵션, 그리드 간격(cm), 스냅 증분(Maya 스냅 설정).</summary>
 public partial class PreferencesDialog : AcceptDialog
 {
     private SpinBox _uiScale = null!;
@@ -10,6 +10,8 @@ public partial class PreferencesDialog : AcceptDialog
     private CheckBox _cameraBased = null!;
     private SpinBox _mouse = null!;
     private CheckBox _selectThrough = null!;
+    private SpinBox _gridSpacing = null!, _rotateSnap = null!, _scaleSnap = null!;
+    private CheckBox _retainSpacing = null!;
 
     public override void _Ready()
     {
@@ -52,6 +54,27 @@ public partial class PreferencesDialog : AcceptDialog
         mrow.AddChild(mreset);
         grid.AddChild(mrow);
 
+        grid.AddChild(new Label { Text = "Grid Spacing (cm)" });
+        var grow = new HBoxContainer();
+        _gridSpacing = new SpinBox { MinValue = 1, MaxValue = 100000, Step = 1, Value = s.GridSpacingCm, Suffix = "cm", CustomMinimumSize = new Vector2(110 * k, 0), TooltipText = "Distance between grid lines; also the grid snap step (X)" };
+        grow.AddChild(_gridSpacing);
+        var greset = new Button { Text = "Default (100cm)", FocusMode = Control.FocusModeEnum.None };
+        greset.Pressed += () => _gridSpacing.Value = 100;
+        grow.AddChild(greset);
+        grid.AddChild(grow);
+
+        grid.AddChild(new Label { Text = "Rotate Snap (J)" });
+        _rotateSnap = new SpinBox { MinValue = 1, MaxValue = 180, Step = 1, Value = s.RotateSnapDegrees, Suffix = "°", CustomMinimumSize = new Vector2(110 * k, 0), TooltipText = "Discrete rotate increment while holding J" };
+        grid.AddChild(_rotateSnap);
+
+        grid.AddChild(new Label { Text = "Scale Snap (J)" });
+        _scaleSnap = new SpinBox { MinValue = 0.01, MaxValue = 10, Step = 0.01, Value = s.ScaleSnapStep, CustomMinimumSize = new Vector2(110 * k, 0), TooltipText = "Discrete scale increment while holding J" };
+        grid.AddChild(_scaleSnap);
+
+        grid.AddChild(new Label { Text = "Retain Component Spacing" });
+        _retainSpacing = new CheckBox { ButtonPressed = s.RetainComponentSpacing, TooltipText = "Point snap moves the selection as a whole (off: all selected points collapse onto the snap point)" };
+        grid.AddChild(_retainSpacing);
+
         var box = new VBoxContainer();
         box.AddChild(grid);
         box.AddChild(new Label { Text = "UI Scale is applied by rebuilding the interface; the scene is kept.", Modulate = new Color(1, 1, 1, 0.7f) });
@@ -72,6 +95,10 @@ public partial class PreferencesDialog : AcceptDialog
         s.CameraBasedSelection = _cameraBased.ButtonPressed;
         s.MarqueeSelectThrough = _selectThrough.ButtonPressed;
         s.MouseSensitivityPercent = (int)_mouse.Value;
+        s.GridSpacingCm = (float)_gridSpacing.Value;
+        s.RotateSnapDegrees = (float)_rotateSnap.Value;
+        s.ScaleSnapStep = (float)_scaleSnap.Value;
+        s.RetainComponentSpacing = _retainSpacing.ButtonPressed;
         s.Save();
         if (scaleChanged) app.CallDeferred(nameof(CubeApp.ReloadShell));
         else
@@ -80,6 +107,7 @@ public partial class PreferencesDialog : AcceptDialog
             shell.Viewport.Display.WireOnShaded = s.WireOnShaded;
             shell.Viewport.Display.RefreshAll();
             shell.SyncStatusLine();
+            shell.ApplyGridSettings();
             foreach (var p in shell.Layout.Panels) p.Hud.Refresh();
         }
     }

@@ -31,7 +31,11 @@ public sealed class RotateTool : TransformToolBase
     protected override void UpdateDrag(NVec2 px, CameraProjection proj)
     {
         float angle = DragMath.ScreenAngle(_centerPx, PressPx, px) * _sign;
-        if (Ctx.Viewport.IsSnapHeld) angle = MathF.Round(angle / (MathF.PI / 12f)) * (MathF.PI / 12f); // J: 15° 스냅
+        if (Ctx.Viewport.IsSnapHeld)
+        {
+            float step = MathF.Max(CubeApp.Instance.Settings.RotateSnapDegrees, 0.1f) * MathF.PI / 180f; // J: 증분 회전(Preferences, 기본 15°)
+            angle = MathF.Round(angle / step) * step;
+        }
         ApplyRotation(_axis, angle);
     }
 }

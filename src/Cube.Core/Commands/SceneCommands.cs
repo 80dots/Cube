@@ -128,7 +128,7 @@ public sealed class InsertJointCommand : ICommand
         doc.AddNode(_joint, parent, _childIndex);
         Matrix4x4.Invert(_joint.WorldMatrix, out var jinv);
         doc.Reparent(child, _joint);
-        child.Local = Transform3.FromMatrix(cw * jinv);
+        child.Local = Transform3.FromMatrix(cw * jinv, child.Local.Pivot);
         doc.Notify(new DocChange(ChangeKind.TransformChanged, child.Id));
         doc.Selection.Mode = SelectMode.Object;
         doc.Selection.SelectObjects(new[] { _joint.Id });
