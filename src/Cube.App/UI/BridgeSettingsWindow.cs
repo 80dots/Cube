@@ -56,7 +56,7 @@ public partial class BridgeSettingsWindow : FloatingPanel
         show.Toggled += v => _apiKey.Secret = !v;
         grid.AddChild(show);
         var site = new Button { Text = "Get key", FocusMode = Control.FocusModeEnum.None, TooltipText = "platform.tripo3d.ai" };
-        site.Pressed += () => OS.ShellOpen("https://platform.tripo3d.ai/");
+        site.Pressed += () => OS.ShellOpen("https://developers.tripo3d.ai/ko/keys");
         grid.AddChild(site);
 
         _auto = new CheckBox { Text = "Reload automatically when the bridge file changes (otherwise Bridge → Reload)", ButtonPressed = b.AutoReload, FocusMode = Control.FocusModeEnum.None };

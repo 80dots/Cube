@@ -328,7 +328,7 @@ public partial class Shell : Control
             new[] { ("uv.autoSeams", "Auto Seams", "uv_autoseam"), ("uv.autoWrap", "Auto Wrap", "uv_autowrap") },
             new[] { ("uv.automaticApply", "Automatic", "uv_automatic"), ("uv.optimize", "Optimize", "uv_optimize"), ("uv.straightenApply", "Straighten", "uv_straighten"), ("uv.pin", "Pin", "uv_pin"), ("uv.cutSewTool", "3D Cut/Sew", "uv_cutsew"), ("uv.setEditor", "UV Sets", "uv_sets") });
         Fill(BridgeShelf,
-            new[] { ("bridge.blenderAll", "All → Blender", "bridge_blender_all"), ("bridge.blenderSelected", "Sel → Blender", "bridge_blender_sel"), ("bridge.rizom", "RizomUV", "bridge_rizom"), ("bridge.marmoset", "Marmoset", "bridge_marmoset"), ("bridge.cascadeur", "Cascadeur", "bridge_cascadeur"), ("bridge.tripo", "Tripo3D", "bridge_tripo") },
+            new[] { ("bridge.blenderAll", "All → Blender", "bridge_blender_all"), ("bridge.blenderSelected", "Sel → Blender", "bridge_blender_sel"), ("bridge.rizom", "RizomUV", "bridge_rizom"), ("bridge.marmoset", "Marmoset", "bridge_marmoset"), ("bridge.cascadeur", "Cascadeur", "bridge_cascadeur"), ("bridge.tripo", "Tripo Editor", "bridge_tripo") },
             new[] { ("bridge.reload", "Reload", "bridge_reload"), ("bridge.autoReload", "Auto", "bridge_auto"), ("bridge.openFolder", "Folder", "bridge_folder") },
             new[] { ("bridge.installBlenderAddon", "Add-on", "bridge_addon"), ("bridge.settings", "Settings", "preferences") });
         Fill(RigShelf,

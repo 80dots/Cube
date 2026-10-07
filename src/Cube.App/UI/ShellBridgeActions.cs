@@ -42,7 +42,9 @@ public partial class Shell
         Actions.Register("bridge.rizom", "Send to RizomUV (OBJ, UVs round-trip)", () => SendToBridge(BridgeApp.RizomUv), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.marmoset", "Send to Marmoset Toolbag (FBX)", () => SendToBridge(BridgeApp.Marmoset), canExecute: HasBridgeNodes, repeatable: true);
         Actions.Register("bridge.cascadeur", "Send to Cascadeur (FBX)", () => SendToBridge(BridgeApp.Cascadeur), canExecute: HasBridgeNodes, repeatable: true);
-        Actions.Register("bridge.tripo", "Tripo3D: Generate Model...", ToggleTripo, isChecked: () => TripoWindow?.Visible ?? false);
+        Actions.Register("bridge.tripo", "Tripo Editor...", ToggleTripo, isChecked: () => TripoWindow?.Visible ?? false);
+        Actions.Register("bridge.tripoImport", "Import Tripo File...", () => Files.ShowImportDialog());
+        Actions.Register("bridge.tripoFolder", "Open Tripo Folder", () => OS.ShellOpen(System.IO.Path.Combine(BridgeDir(null), "tripo")));
         Actions.Register("bridge.reload", "Reload from Bridge File", () => ReloadBridge(), canExecute: () => Bridge is { CanReload: true } && System.IO.File.Exists(Bridge.ReturnPath), repeatable: true);
         Actions.Register("bridge.autoReload", "Auto Reload When File Changes", () => { Settings.Bridge.AutoReload = !Settings.Bridge.AutoReload; Settings.Save(); }, isChecked: () => Settings.Bridge.AutoReload);
         Actions.Register("bridge.openFolder", "Open Bridge Folder", () => { var d = BridgeDir(null); OS.ShellOpen(d); });
