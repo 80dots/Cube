@@ -127,7 +127,20 @@ public partial class Shell
             ToggleBridgeSettings(open: true);
             return;
         }
+        // Marmoset Toolbag은 명령줄 FBX를 가져오지 않는다(.tbscene/.py만). 가져오기 스크립트를 넘긴다:
+        // mset.importModel(FBX) → 자동 다시 읽기 외부 모델 + 머티리얼, 화면 맞춤. 이미 Toolbag이 떠 있으면 FBX만 갱신(자동 다시 읽기)
         var args = new[] { path };
+        if (app == BridgeApp.Marmoset)
+        {
+            if (Process.GetProcessesByName("toolbag").Length > 0 && Bridge?.App == BridgeApp.Marmoset && _marmosetLaunched)
+            {
+                HelpLine.Text = $"Sent to Marmoset Toolbag: {System.IO.Path.GetFileName(path)} updated — Toolbag reloads it automatically. (Closed the scene? File → Run Script… → {MarmosetScriptName} in the bridge folder.)";
+                return;
+            }
+            try { args = new[] { WriteMarmosetScript(dir, path) }; }
+            catch (Exception ex) { HelpLine.Text = $"Bridge: could not write the Toolbag import script — {ex.Message}"; return; }
+            _marmosetLaunched = true;
+        }
         try
         {
             var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = dir };
@@ -136,11 +149,37 @@ public partial class Shell
             HelpLine.Text = app switch
             {
                 BridgeApp.RizomUv => "Sent to RizomUV. Edit UVs and save (Ctrl+S) — Cube copies the UVs back onto the original meshes.",
-                BridgeApp.Marmoset => "Sent to Marmoset Toolbag (FBX with materials and textures).",
+                BridgeApp.Marmoset => "Sent to Marmoset Toolbag: it opens and imports cube_bridge.fbx with materials (linked; sending again reloads it).",
                 _ => "Sent to Cascadeur. Save/export back to the same FBX — Cube reloads it.",
             };
         }
         catch (Exception ex) { HelpLine.Text = $"Bridge: could not start {AppLabel(app)} — {ex.Message}"; OS.ShellOpen(dir); }
+    }
+
+    private bool _marmosetLaunched;
+    private const string MarmosetScriptName = "cube_bridge_toolbag.py";
+
+    /// <summary>
+    /// Toolbag 가져오기 스크립트를 브리지 폴더에 쓴다(배포 애드온 assets/addons/marmoset/cube_bridge_toolbag.py와 같은 내용에 FBX 경로를 박아 넣음).
+    /// Toolbag에 인자로 넘기면 실행되어 FBX를 mset.importModel로 가져온다(loadMaterials, autoReload).
+    /// </summary>
+    private static string WriteMarmosetScript(string dir, string fbx)
+    {
+        string src;
+        var res = "res://assets/addons/marmoset/cube_bridge_toolbag.py";
+        var bytes = Godot.FileAccess.FileExists(res) ? Godot.FileAccess.GetFileAsBytes(res) : null;
+        if (bytes is { Length: > 0 }) src = System.Text.Encoding.UTF8.GetString(bytes);
+        else
+        {
+            string shipped = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(OS.GetExecutablePath()) ?? "", "addons", "marmoset", MarmosetScriptName);
+            src = System.IO.File.ReadAllText(shipped);
+        }
+        // 기본 경로 대신 이번에 쓴 FBX를 가리키게(사용자 폴더 이름에 한글이 있어도 되도록 UTF-8 + raw 문자열)
+        string fbxLit = fbx.Replace('\\', '/');
+        src = src.Replace("FBX = os.environ.get(\"CUBE_BRIDGE_FBX\") or", $"FBX = r\"{fbxLit}\" or os.environ.get(\"CUBE_BRIDGE_FBX\") or");
+        string path = System.IO.Path.Combine(dir, MarmosetScriptName);
+        System.IO.File.WriteAllText(path, src, new System.Text.UTF8Encoding(false));
+        return path;
     }
 
     public static string AppLabel(BridgeApp app) => app switch { BridgeApp.Blender => "Blender", BridgeApp.RizomUv => "RizomUV", BridgeApp.Marmoset => "Marmoset Toolbag", _ => "Cascadeur" };
