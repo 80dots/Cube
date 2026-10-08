@@ -29,7 +29,7 @@
     { "action": "edit.duplicate", "chord": "Ctrl+D" },
     { "action": "edit.preferences", "chord": "Ctrl+Comma" },
     { "action": "edit.editPivot", "chord": "Insert" },
-    { "action": "mesh.extrude", "chord": "Ctrl+E" },
+    { "action": "mesh.extrudeApply", "chord": "Ctrl+E" },
 
     { "action": "file.new", "chord": "Ctrl+N" },
     { "action": "file.open", "chord": "Ctrl+O" },

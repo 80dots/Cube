@@ -99,7 +99,7 @@ public partial class Shell
         Actions.Register("create.torus", "Polygon Torus", () => doc.Undo.Push(CreatePrimitiveCommand.Torus(doc)), repeatable: true);
 
         // --- 메시 편집
-        Actions.Register("mesh.extrude", "Extrude", ExtrudeSelection, canExecute: () => sel.Mode is SelectMode.Face or SelectMode.Edge && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
         Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.combine", "Combine", CombineSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count(id => doc.Find(id)?.Mesh != null) >= 2);
         Actions.Register("mesh.separate", "Separate", SeparateSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count == 1);
@@ -372,42 +372,6 @@ public partial class Shell
         }
     }
 
-    private void ExtrudeSelection()
-    {
-        var doc = Document;
-        if (doc.Selection.Mode == SelectMode.Edge)
-        {
-            // Maya Extrude(엣지): 경계 엣지에서 쿼드를 뽑는다(내부 엣지는 비매니폴드가 되므로 제외)
-            // 새 엣지(바깥쪽)만 선택해 두면 조작기로 면 Extrude처럼 바로 밀어낼 수 있다(원래 엣지는 제자리)
-            ForEachComponentNode("Extrude Edges", SelectMode.Edge, (id, comps) => new MeshOpCommand("Extrude Edges", id, m => { var nf = MeshOps.ExtrudeEdges(m, comps.Edges, out var ne); return (nf.Count > 0, SelectMode.Edge, ne); }));
-            ToolContext.AxisOrientation = AxisOrientation.Normal;
-            Tools.SetTool("move");
-            HelpLine.Text = "Extrude: drag the manipulator to pull the new edge out (border edges only).";
-            return;
-        }
-        var newSel = new Dictionary<NodeId, List<int>>();
-        ForEachComponentNode("Extrude", SelectMode.Face, (id, comps) =>
-        {
-            var cmd = new ExtrudeFacesCommand(id, comps.Faces);
-            return cmd;
-        });
-        // 그룹 안의 각 명령이 자기 노드의 새 면을 선택했으므로, 마지막 명령만 남은 선택을 합친다
-        var merged = new Dictionary<NodeId, HashSet<int>>();
-        if (doc.Undo.LastCommand is CompoundCommand cc)
-            foreach (var c in cc.Items.OfType<ExtrudeFacesCommand>()) merged[c.NodeIdPublic] = new HashSet<int>(c.NewFaces);
-        else if (doc.Undo.LastCommand is ExtrudeFacesCommand single) merged[single.NodeIdPublic] = new HashSet<int>(single.NewFaces);
-        if (merged.Count > 0)
-        {
-            bool first = true;
-            foreach (var (id, faces) in merged) { doc.Selection.SelectComponents(id, SelectMode.Face, faces, replace: first); first = false; }
-        }
-        // Maya 압출 조작기: 법선 방향 Move 툴로 전환하고, 파란(Z) 화살표 드래그 = 두께(면마다 자기 법선 방향)
-        ToolContext.AxisOrientation = AxisOrientation.Normal;
-        Tools.SetTool("move");
-        (Tools.Current as MoveTool)?.BeginExtrudeManip();
-        HelpLine.Text = "Extrude: drag the blue (normal) arrow to pull the faces out (thickness); other handles move them.";
-    }
-
     private void DeleteComponents()
     {
         var mode = Document.Selection.Mode;
@@ -607,7 +571,7 @@ public partial class Shell
 
         Menus.Build(Add("Edit Mesh"))
             .Op("mesh.addDivisions").Op("mesh.bevel").Item("mesh.bevelTool").Item("mesh.bevelVerticesTool").Item("mesh.bridge").Op("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach")
-            .Item("mesh.extrude").Op("mesh.merge").Item("mesh.mergeToCenter").Op("mesh.flipComponents").Op("mesh.symmetrizeComponents").Separator()
+            .Op("mesh.extrude").Op("mesh.merge").Item("mesh.mergeToCenter").Op("mesh.flipComponents").Op("mesh.symmetrizeComponents").Separator()
             .Op("mesh.averageVertices").Op("mesh.chamferVertices").Separator()
             .Item("mesh.deleteComponents").Item("mesh.flipTriangleEdge").Item("mesh.spinEdgeBackward").Item("mesh.spinEdgeForward").Separator()
             .Item("mesh.duplicateFaces").Item("mesh.extractFaces").Op("mesh.poke").Op("mesh.wedge");

@@ -32,12 +32,12 @@ public static class PieMenus
             SelectMode.Object => new[] { "mesh.combine", "edit.duplicate", "mesh.separate", "mesh.harden", "edit.delete", "mesh.soften", "mesh.reverse", "view.frameSelected",
                                          "mesh.smoothApply", "skin.detach", "skin.paintTool", "edit.deleteHistory", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection",
                                          "mesh.mirrorApply", "mesh.triangulate", "mesh.quadrangulateApply", "mesh.cleanup", "normals.conform", "mesh.multiCut" },
-            SelectMode.Face => new[] { "mesh.extrude", "select.toEdges", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
+            SelectMode.Face => new[] { "mesh.extrudeApply", "select.toEdges", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
                                        "mesh.reverse", "mesh.mergeApply", "mesh.bevelApply", "mesh.bridge", "mesh.addDivisionsApply", "mesh.pokeApply", "mesh.duplicateFaces", "mesh.extractFaces", "mesh.detach", "mesh.collapse", "mesh.triangulate", "mesh.quadrangulateApply", "mesh.circularizeApply", "mesh.wedgeApply" },
             SelectMode.Edge => new[] { "mesh.harden", "select.toFaces", "mesh.bridge", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
-                                       "mesh.mergeApply", "mesh.bevelApply", "mesh.bevelTool", "mesh.insertLoop", "mesh.extrude", "mesh.connect", "mesh.collapse", "mesh.flipTriangleEdge", "mesh.spinEdgeForward", "mesh.offsetEdgeLoopApply", "mesh.slideEdgeApply", "mesh.fillHole", "mesh.creaseApply", "mesh.creaseTool", "mesh.multiCut" },
+                                       "mesh.mergeApply", "mesh.bevelApply", "mesh.bevelTool", "mesh.insertLoop", "mesh.extrudeApply", "mesh.connect", "mesh.collapse", "mesh.flipTriangleEdge", "mesh.spinEdgeForward", "mesh.offsetEdgeLoopApply", "mesh.slideEdgeApply", "mesh.fillHole", "mesh.creaseApply", "mesh.creaseTool", "mesh.multiCut" },
             SelectMode.Vertex => new[] { "mesh.mergeApply", "select.toFaces", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toEdges",
-                                         "mesh.connect", "mesh.chamferVerticesApply", "mesh.bevelVerticesTool", "mesh.mergeToCenter", "mesh.averageVerticesApply", "mesh.detach", "mesh.targetWeld", "mesh.multiCut" },
+                                         "mesh.connect", "mesh.extrudeApply", "mesh.chamferVerticesApply", "mesh.bevelVerticesTool", "mesh.mergeToCenter", "mesh.averageVerticesApply", "mesh.detach", "mesh.targetWeld", "mesh.multiCut" },
             _ => new[] { "mode.object", "mode.vertex", "mode.edge", "mode.face" },
         };
         var items = ids.Select(id => Item(shell, id)).ToList();
