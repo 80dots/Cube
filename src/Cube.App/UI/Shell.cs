@@ -430,6 +430,7 @@ public partial class Shell : Control
         "materialEditor" => EnsureMaterialEditor(),
         "animationData" => EnsureAnimationData(),
         "log" => EnsureLog(),
+        "componentEditor" => EnsureComponentEditor(),
         "renderSettings" => EnsureRenderSettings(),
         "tripo" => EnsureTripo(),
         "bridgeSettings" => EnsureBridgeSettings(),

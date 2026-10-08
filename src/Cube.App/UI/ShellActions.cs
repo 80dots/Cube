@@ -165,6 +165,7 @@ public partial class Shell
         RegisterSceneActions();
         RegisterAnimActions();
         RegisterLogActions();
+        RegisterComponentEditorActions();
         RegisterMeshActions();
         RegisterRenderActions();
         RegisterBridgeActions();
@@ -551,6 +552,7 @@ public partial class Shell
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
             .Item("edit.delete").Item("edit.duplicate").Separator().Item("edit.deleteHistory").Separator()
             .Item("edit.centerPivot").Item("edit.editPivot").Separator()
+            .Item("edit.componentEditor").Separator()
             .Item("select.all").Item("select.none").Item("select.hierarchy").Separator()
             .Item("snap.grid").Item("snap.point").Separator()
             .Item("edit.preferences");

@@ -52,7 +52,7 @@ public partial class ShellInput : Node
         if (e is InputEventMouseMotion mm && mm.ButtonMask == 0) { _cursorPos = mm.Position; if (!_cursorFixQueued) { _cursorFixQueued = true; CallDeferred(nameof(FixCursor)); } return; }
         if (e is not InputEventKey k) return;
         var focus = GetViewport().GuiGetFocusOwner();
-        bool textFocused = focus is LineEdit or TextEdit || (focus != null && focus.GetParent() is SpinBox);
+        bool textFocused = focus is LineEdit or TextEdit or UI.ComponentEditor.DataGrid || (focus != null && focus.GetParent() is SpinBox);
         if (!k.Pressed)
         {
             if (HeldKeys.Remove(k.Keycode) | HeldKeys.Remove(k.PhysicalKeycode)) HeldKeysChanged?.Invoke();

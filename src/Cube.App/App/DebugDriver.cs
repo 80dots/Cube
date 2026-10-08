@@ -319,6 +319,13 @@ public partial class DebugDriver : Node
                     scene.Free();
                     break;
                 }
+            case "comped":    // comped tab|sel|world|edit|select|rows ... (Component Editor; 열려 있지 않으면 연다)
+                {
+                    var sh = UI.Shell.Instance;
+                    if (sh.ComponentEditor?.IsOpen != true) sh.Actions.Invoke("edit.componentEditor");
+                    GD.Print($"[Drive] comped {string.Join(' ', p.Skip(1))}: {sh.ComponentEditor!.Drive(p.Skip(1).ToArray())}");
+                    break;
+                }
             case "logsave":   // logsave PATH: 로그 패널의 현재 필터로 파일 저장
                 GD.Print($"[Drive] logsave {UI.Shell.Instance.SaveLog(p[1])}");
                 break;
