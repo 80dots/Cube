@@ -11,10 +11,11 @@ config_version=5
 [application]
 
 config/name="Cube"
-config/version="0.0.40"
+config/version="0.0.41"
 run/main_scene="res://scenes/Shell.tscn"
 config/features=PackedStringArray("4.7", "C#", "Forward Plus")
-config/icon="res://icon.svg"
+config/icon="res://icon.png"
+config/windows_native_icon="res://icon.ico"
 
 [autoload]
 

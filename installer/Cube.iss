@@ -19,6 +19,7 @@ AppPublisherURL=https://github.com/80dots/Cube
 DefaultDirName={autopf}\Cube
 DefaultGroupName=Cube
 UninstallDisplayIcon={app}\Cube.exe
+SetupIconFile=..\icon.ico
 OutputDir={#OutputDir}
 OutputBaseFilename=Cube-{#AppVersion}-Setup
 Compression=lzma2/max
