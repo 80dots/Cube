@@ -167,7 +167,7 @@ public static partial class UvOps
     {
         var sel = new HashSet<int>(points);
         var edges = new List<(int a, int b)>();
-        var seen = new HashSet<long>();
+        var seen = new HashSet<long>(Cube.Core.Mesh.PairKeyComparer.Instance);
         for (int h = 0; h < m.HalfEdgeCount; h++)
         {
             if (!m.Hes[h].Alive) continue;

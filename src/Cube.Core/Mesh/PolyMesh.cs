@@ -154,7 +154,13 @@ public sealed class PolyMesh
     public int AddVertex(Vector3 position)
     {
         Verts.Add(new Vertex { Position = position, HalfEdge = -1, Alive = true });
+        // 새 정점은 엣지·하프에지를 바꾸지 않으므로 유효했던 캐시는 그대로 유효하다.
+        // (예전에는 여기서 엣지 맵이 무효가 되어, 정점과 면을 번갈아 추가하는 가져오기/연산에서 면마다 엣지 맵 전체를 다시 만들었다 → O(면²))
+        bool edgeMapValid = _edgeMap != null && _edgeMapVersion == TopologyVersion;
+        bool outgoingValid = _vertexOutgoing != null && _vertexOutgoingVersion == TopologyVersion;
         TopologyVersion++;
+        if (edgeMapValid) _edgeMapVersion = TopologyVersion;
+        if (outgoingValid) _vertexOutgoingVersion = TopologyVersion; // VertexOutgoing은 배열 밖 정점에 빈 목록을 돌려준다
         return Verts.Count - 1;
     }
 
@@ -301,7 +307,7 @@ public sealed class PolyMesh
     private void EnsureEdgeMap()
     {
         if (_edgeMap != null && _edgeMapVersion == TopologyVersion) return;
-        _edgeMap ??= new Dictionary<long, int>();
+        _edgeMap ??= new Dictionary<long, int>(PairKeyComparer.Instance);
         _edgeMap.Clear();
         for (int e = 0; e < Edges.Count; e++)
         {

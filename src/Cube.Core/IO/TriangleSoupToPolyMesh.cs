@@ -102,37 +102,83 @@ public static class TriangleSoupToPolyMesh
         mesh.Hes[he] = h;
     }
 
-    /// <summary>두 삼각형이 공면이고 합친 사각형이 볼록하면 공유 엣지를 지워 쿼드로 만든다(소프트 엣지만).</summary>
+    /// <summary>
+    /// 두 삼각형이 공면이고 합친 사각형이 볼록하면 공유 엣지를 지워 쿼드로 만든다(소프트 엣지, UV 연속만).
+    /// 짝을 먼저 모두 고른 뒤(탐욕적, 면마다 한 번) 메시를 한 번에 다시 만든다 — 엣지를 하나씩 지우면 매번 캐시를 다시 만들어 O(면²)이 된다.
+    /// 정점 ID는 그대로라 가져오기의 정점 맵이 유효하다.
+    /// </summary>
     public static int MergeCoplanarTrianglePairs(PolyMesh mesh, float coplanarCos = 0.9995f)
     {
-        int merged = 0;
-        var tmp = new List<int>();
+        var partner = new Dictionary<int, (int other, int edge)>();
         for (int e = 0; e < mesh.EdgeCount; e++)
         {
             var ed = mesh.Edges[e];
             if (!ed.Alive || ed.He1 < 0 || ed.Hard) continue;
             int f0 = mesh.Hes[ed.He0].Face, f1 = mesh.Hes[ed.He1].Face;
+            if (partner.ContainsKey(f0) || partner.ContainsKey(f1)) continue;
             if (mesh.FaceDegree(f0) != 3 || mesh.FaceDegree(f1) != 3) continue;
-            var n0 = Vector3.Normalize(MeshNormals.FaceNormalUnnormalized(mesh, f0));
-            var n1 = Vector3.Normalize(MeshNormals.FaceNormalUnnormalized(mesh, f1));
+            var n0 = MeshNormals.FaceNormalUnnormalized(mesh, f0); var n1 = MeshNormals.FaceNormalUnnormalized(mesh, f1);
+            if (n0.LengthSquared() < 1e-20f || n1.LengthSquared() < 1e-20f) continue;
+            n0 = Vector3.Normalize(n0); n1 = Vector3.Normalize(n1);
             if (Vector3.Dot(n0, n1) < coplanarCos) continue;
-            // 합친 사각형 루프: f0의 he0 다음부터, f1의 he1 다음부터
-            var loop = new List<int>();
-            int cur = mesh.Hes[ed.He0].Next; while (cur != ed.He0) { loop.Add(mesh.Hes[cur].Vertex); cur = mesh.Hes[cur].Next; }
-            cur = mesh.Hes[ed.He1].Next; while (cur != ed.He1) { loop.Add(mesh.Hes[cur].Vertex); cur = mesh.Hes[cur].Next; }
-            if (loop.Count != 4 || loop.Distinct().Count() != 4) continue;
-            // 볼록 판정(법선 평면에 투영)
+            var loop = QuadLoop(mesh, ed);
+            if (loop[0] == loop[2] || loop[1] == loop[3] || loop.Distinct().Count() != 4) continue;
             EarClipping.PlaneBasis(n0, out var u, out var v);
             var poly = new Vector2[4];
-            for (int i = 0; i < 4; i++) { var p = mesh.Verts[loop[i]].Position; poly[i] = new Vector2(Vector3.Dot(p, u), Vector3.Dot(p, v)); }
+            for (int i = 0; i < 4; i++) { var p = mesh.Verts[mesh.Hes[loop[i]].Vertex].Position; poly[i] = new Vector2(Vector3.Dot(p, u), Vector3.Dot(p, v)); }
             if (!EarClipping.IsConvex(poly)) continue;
             // UV 심이면 합치지 않는다(코너 UV가 엣지 양쪽에서 다름)
             var hA0 = mesh.Hes[ed.He0]; var hB1 = mesh.Hes[mesh.Hes[ed.He1].Next];
             var hB0 = mesh.Hes[mesh.Hes[ed.He0].Next]; var hA1 = mesh.Hes[ed.He1];
             if (Vector2.DistanceSquared(hA0.Uv0, hB1.Uv0) > 1e-8f || Vector2.DistanceSquared(hB0.Uv0, hA1.Uv0) > 1e-8f) continue;
-            MeshOps.DeleteEdges(mesh, new[] { e });
-            merged++;
+            partner[f0] = (f1, e); partner[f1] = (f0, e);
         }
+        if (partner.Count == 0) return 0;
+
+        // 같은 정점 ID로 다시 만든다: 짝이면 쿼드(앞 면에서 한 번), 아니면 그대로
+        var rebuilt = new PolyMesh();
+        foreach (var vt in mesh.Verts) { int id = rebuilt.AddVertex(vt.Position); if (!vt.Alive) { var d = rebuilt.Verts[id]; d.Alive = false; rebuilt.Verts[id] = d; } }
+        int merged = 0;
+        var tmp = new List<int>();
+        for (int f = 0; f < mesh.FaceCount; f++)
+        {
+            if (!mesh.Faces[f].Alive) continue;
+            List<int> corners;
+            if (partner.TryGetValue(f, out var pr))
+            {
+                if (pr.other < f) continue; // 짝의 앞 면에서 이미 만듦
+                corners = QuadLoop(mesh, mesh.Edges[pr.edge]);
+                merged++;
+            }
+            else { mesh.GetFaceHalfEdges(f, tmp); corners = new List<int>(tmp); }
+            var ids = corners.Select(h => mesh.Hes[h].Vertex).ToArray();
+            int nf = rebuilt.AddFace(ids, mesh.Faces[f].Material);
+            if (nf < 0) continue;
+            int he = rebuilt.Faces[nf].HalfEdge;
+            foreach (int src in corners)
+            {
+                var h = rebuilt.Hes[he]; h.Uv0 = mesh.Hes[src].Uv0; h.Normal = mesh.Hes[src].Normal; rebuilt.Hes[he] = h;
+                he = rebuilt.Hes[he].Next;
+            }
+        }
+        for (int e = 0; e < mesh.EdgeCount; e++)
+        {
+            var ed = mesh.Edges[e];
+            if (!ed.Alive || !ed.Hard) continue;
+            var (a, b) = mesh.EdgeVertices(e);
+            int ne = rebuilt.FindEdge(a, b);
+            if (ne >= 0) { var x = rebuilt.Edges[ne]; x.Hard = true; rebuilt.Edges[ne] = x; }
+        }
+        mesh.CopyFrom(rebuilt);
         return merged;
+    }
+
+    /// <summary>엣지 ed를 공유하는 두 삼각형을 합친 사각형의 하프에지 순서(코너 = 하프에지의 출발 정점).</summary>
+    private static List<int> QuadLoop(PolyMesh mesh, Edge ed)
+    {
+        var loop = new List<int>(4);
+        int cur = mesh.Hes[ed.He0].Next; while (cur != ed.He0) { loop.Add(cur); cur = mesh.Hes[cur].Next; }
+        cur = mesh.Hes[ed.He1].Next; while (cur != ed.He1) { loop.Add(cur); cur = mesh.Hes[cur].Next; }
+        return loop;
     }
 }

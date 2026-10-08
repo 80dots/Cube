@@ -34,7 +34,7 @@ public static partial class UvOps
         if (faces.Count < 2) return result.ToList();
         // 균일 격자: 셀 크기 = 평균 바운딩 박스 크기의 2배(최소 1e-4). 같은 셀에 든 면끼리만 검사하고, 쌍은 먼저 만나는 셀에서 한 번만 검사한다.
         float cell = MathF.Max(1e-4f, (float)(Math.Max(sumW, sumH) / faces.Count) * 2f);
-        var grid = new Dictionary<long, List<int>>();
+        var grid = new Dictionary<long, List<int>>(Cube.Core.Mesh.PairKeyComparer.Instance);
         static long Key(int x, int y) => ((long)x << 32) ^ (uint)y;
         for (int i = 0; i < faces.Count; i++)
         {
@@ -48,7 +48,7 @@ public static partial class UvOps
                     bucket.Add(i);
                 }
         }
-        var tested = new HashSet<long>();
+        var tested = new HashSet<long>(Cube.Core.Mesh.PairKeyComparer.Instance);
         foreach (var bucket in grid.Values)
         {
             if (bucket.Count < 2) continue;

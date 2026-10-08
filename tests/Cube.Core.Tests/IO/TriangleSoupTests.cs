@@ -65,4 +65,42 @@ public class TriangleSoupTests
         Assert.Equal(0, stats.MergedQuads);
         Assert.Equal(4, m.AliveVertexCount);
     }
+
+    /// <summary>
+    /// 회귀(v0.0.37): 큰 메시 가져오기가 수 분 멈췄다(AddVertex가 엣지 캐시를 무효화, 쌍 병합이 엣지마다 캐시 재구성,
+    /// long 키 기본 해시가 a^b라 충돌). 8만 삼각형 격자가 선형 시간 안에 변환되어야 한다.
+    /// </summary>
+    [Fact]
+    public void LargeGrid_ConvertsInLinearTime()
+    {
+        const int n = 200;
+        var pos = new List<Vector3>(); var nrm = new List<Vector3>(); var uv = new List<Vector2>(); var idx = new List<int>();
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++)
+            {
+                // 살짝 휜 면이라 일부만 쿼드로 합쳐진다(병합·비병합 경로 모두)
+                Vector3 P(int i, int j) => new(i * 0.01f, 0.02f * MathF.Sin(i * 0.3f) * MathF.Sin(j * 0.2f), j * 0.01f);
+                int b = pos.Count;
+                foreach (var (i, j) in new[] { (x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1) })
+                { pos.Add(P(i, j)); nrm.Add(Vector3.UnitY); uv.Add(new Vector2(i / (float)n, j / (float)n)); }
+                idx.AddRange(new[] { b, b + 2, b + 1, b, b + 3, b + 2 });
+            }
+        var soup = new TriangleSoupToPolyMesh.Surface { Positions = pos.ToArray(), Normals = nrm.ToArray(), Uvs = uv.ToArray(), Indices = idx.ToArray() };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var m = TriangleSoupToPolyMesh.Convert(new[] { soup }, ImportOptions.Default, out var stats);
+        sw.Stop();
+        Assert.Equal((n + 1) * (n + 1), m.AliveVertexCount);
+        Assert.True(stats.MergedQuads > 0);
+        Assert.Empty(MeshValidator.Check(m));
+        Assert.True(sw.ElapsedMilliseconds < 5000, $"80k tris took {sw.ElapsedMilliseconds} ms");
+    }
+
+    [Fact]
+    public void PairKeyComparer_SpreadsNeighbouringPairs()
+    {
+        // 기본 long 해시(a^b)는 (a, a+1) 쌍이 몇 개 값으로 몰린다. 섞은 해시는 거의 모두 달라야 한다.
+        var hashes = new HashSet<int>();
+        for (int a = 0; a < 10000; a++) hashes.Add(PairKeyComparer.Instance.GetHashCode(((long)a << 32) | (uint)(a + 1)));
+        Assert.True(hashes.Count > 9900);
+    }
 }

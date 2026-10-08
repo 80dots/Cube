@@ -120,6 +120,10 @@ public partial class TimeSlider : VBoxContainer
         private static float Margin => 12 * CubeApp.Instance.UiScale;
 
         private int _start;
+        private float[] _keys = Array.Empty<float>();
+        private object? _keysClip;
+        private string _keysSel = "";
+        private int _keysCount = -1;
         private float XOf(float frame, int end) => Margin + (Size.X - 2 * Margin) * (end > _start ? (frame - _start) / (end - _start) : 0f);
         private float FrameOf(float x, int end) => end <= _start ? _start : _start + Math.Clamp((x - Margin) / (Size.X - 2 * Margin), 0f, 1f) * (end - _start);
 
@@ -173,9 +177,19 @@ public partial class TimeSlider : VBoxContainer
             var sel = pb.SelectedNodes();
             bool any = sel.Count > 0 && clip.Tracks.Any(t => sel.Contains(t.Node));
             var keyCol = any ? new Color(0.95f, 0.2f, 0.2f) : new Color(0.65f, 0.25f, 0.25f);
-            foreach (var t in AnimationPlayback.KeyTimes(clip, any ? sel : new HashSet<NodeId>()))
+            string selKey = any ? string.Join(",", sel.Select(n => n.Value).OrderBy(v => v)) : "";
+            if (!ReferenceEquals(_keysClip, clip) || _keysSel != selKey || _keysCount != clip.KeyCount)
+            {
+                // 키가 수만 개인 클립(BrainStem 등)에서 매 프레임 중복 제거·정렬하지 않도록 클립·선택이 바뀔 때만 계산
+                _keys = AnimationPlayback.KeyTimes(clip, any ? sel : new HashSet<NodeId>()).ToArray();
+                _keysClip = clip; _keysSel = selKey; _keysCount = clip.KeyCount;
+            }
+            float lastX = float.NegativeInfinity;
+            foreach (var t in _keys)
             {
                 float x = XOf(t * clip.FrameRate, end);
+                if (x - lastX < 1f) continue; // 같은 픽셀 열은 한 번만
+                lastX = x;
                 DrawRect(new Rect2(x - 1 * s, 2 * s, 2 * s, Size.Y * 0.45f), keyCol);
             }
             // 현재 프레임 커서 + 번호

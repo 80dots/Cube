@@ -42,15 +42,19 @@ public sealed class FileActions
         string ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
         var importer = Importers.FirstOrDefault(i => i.Extensions.Contains(ext));
         if (importer == null) return ImportResult.Fail($"No importer for '{ext}'.");
+        var swTotal = System.Diagnostics.Stopwatch.StartNew();
         var result = importer.Import(path, _doc, options ?? ImportOptions.Default);
+        GD.Print($"[ImportPerf] importer total: {swTotal.ElapsedMilliseconds} ms");
         _status(result.Message);
         if (result.Ok && result.Nodes.Count > 0)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             using (_doc.Undo.BeginGroup("Import"))
             {
                 _doc.Undo.Push(new ImportNodesCommand(result.Nodes));
                 if (result.Animations.Count > 0) _doc.Undo.Push(new SetAnimationsCommand("Import Animations", result.Animations));
             }
+            GD.Print($"[ImportPerf] add to document (views, outliner, …): {sw.ElapsedMilliseconds} ms");
             _settings.LastExportDir = System.IO.Path.GetDirectoryName(path); _settings.Save();
         }
         return result;

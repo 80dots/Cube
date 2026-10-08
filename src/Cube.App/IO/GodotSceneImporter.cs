@@ -22,18 +22,24 @@ public abstract class GodotSceneImporterBase : IImporter
         Node? scene = null;
         try
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var (gltf, state) = CreateDocument();
             var err = gltf.AppendFromFile(path, state);
+            long tAppend = sw.ElapsedMilliseconds;
             if (err != Error.Ok) return ImportResult.Fail($"AppendFromFile failed: {err}");
             scene = gltf.GenerateScene(state);
             if (scene == null) return ImportResult.Fail("GenerateScene returned null.");
+            long tScene = sw.ElapsedMilliseconds;
             var nodes = new List<SceneNode>();
             var ictx = new ImportCtx(doc, options);
             // 루트 자체가 메시를 가지면 루트도 노드로, 아니면 루트의 자식들을 최상위로
             if (scene is Node3D rootN3 && HasMesh(rootN3)) nodes.Add(Convert(rootN3, ictx));
             else foreach (var child in scene.GetChildren()) if (child is Node3D c3) nodes.Add(Convert(c3, ictx));
+            long tConvert = sw.ElapsedMilliseconds;
             ictx.ResolveSkins(nodes);
+            long tSkins = sw.ElapsedMilliseconds;
             var clips = AnimationImport.Extract(scene, ictx.NodeMap, ictx.BoneNodes);
+            GD.Print($"[ImportPerf] {System.IO.Path.GetFileName(path)}: append {tAppend} ms, generateScene {tScene - tAppend} ms, convert {tConvert - tScene} ms (meshes {ictx.Meshes}), skins {tSkins - tConvert} ms, animations {sw.ElapsedMilliseconds - tSkins} ms ({clips.Count} clips, {clips.Sum(c => c.KeyCount)} keys)");
             string msg = $"Imported {ictx.Meshes} mesh(es)" + (ictx.Joints > 0 ? $", {ictx.Joints} joint(s), {ictx.Skins} skin(s)" : "")
                 + (clips.Count > 0 ? $", {clips.Count} animation(s)" : "") + $" from {System.IO.Path.GetFileName(path)}";
             return new ImportResult(true, msg, nodes) { Animations = clips };
@@ -114,12 +120,10 @@ public abstract class GodotSceneImporterBase : IImporter
         var surfaces = CollectSurfaces(g, out var skinData);
         if (surfaces.Count > 0)
         {
-            var mesh = TriangleSoupToPolyMesh.Convert(surfaces, ctx.Options, out _, out var vmap);
-            var shape = new MeshShape(mesh);
-            node.Shape = shape;
-            ctx.Meshes++;
-            if (skinData != null && TryFindSkeleton(g, out var skelNode) && ctx.BoneNodes.TryGetValue(skelNode, out var boneNodes))
+            Skeleton3D? skelNode = null;
+            if (skinData != null && TryFindSkeleton(g, out var sk) && ctx.BoneNodes.ContainsKey(sk))
             {
+                skelNode = sk;
                 // 메시 BONES 값은 스켈레톤 본 번호가 아니라 Skin 바인드 번호다(Skin이 있을 때). 바인드 → 본으로 바꾼다
                 if (skinData.Skin is { } gs && gs.GetBindCount() > 0)
                 {
@@ -127,11 +131,21 @@ public abstract class GodotSceneImporterBase : IImporter
                     for (int b = 0; b < map.Length; b++)
                     {
                         int bone = gs.GetBindBone(b);
-                        if (bone < 0) bone = skelNode.FindBone(gs.GetBindName(b));
+                        if (bone < 0) bone = sk.FindBone(gs.GetBindName(b));
                         map[b] = bone;
                     }
                     skinData.BindToBone = map;
+                    BakeBindToRest(g, sk, skinData, surfaces);
                 }
+            }
+            var swm = System.Diagnostics.Stopwatch.StartNew();
+            var mesh = TriangleSoupToPolyMesh.Convert(surfaces, ctx.Options, out var st, out var vmap);
+            if (swm.ElapsedMilliseconds > 200) GD.Print($"[ImportPerf]   mesh {g.Name}: {surfaces.Sum(x => x.Indices.Length) / 3} tris → {swm.ElapsedMilliseconds} ms (merged quads {st.MergedQuads})");
+            var shape = new MeshShape(mesh);
+            node.Shape = shape;
+            ctx.Meshes++;
+            if (skinData != null && skelNode != null && ctx.BoneNodes.TryGetValue(skelNode, out var boneNodes))
+            {
                 var skin = BuildSkin(skinData, boneNodes, vmap, mesh, out var jointNodes);
                 if (skin != null) { shape.Skin = skin; ctx.Pending.Add((node, skin, jointNodes)); ctx.Skins++; }
             }
@@ -143,6 +157,57 @@ public abstract class GodotSceneImporterBase : IImporter
                 node.AttachChild(cn);
             }
         return node;
+    }
+
+    /// <summary>
+    /// 코어 스킨은 바인드 = 가져온 시점의 조인트 rest 포즈다(ResolveSkins). glTF 역바인드 행렬이 rest 포즈와 다른 파일(BrainStem 등)은
+    /// 메시 정점이 바인드 공간에 있어 그대로 두면 rest에서 메시와 스켈레톤이 어긋난다 → Godot이 rest에서 그리는 것과 같게
+    /// 삼각형 수프 정점·노멀을 LBS로 rest 포즈에 굽는다(v' = Σ w · inv(메시)·스켈레톤·본 전역 rest·바인드 포즈 · v).
+    /// 용접 전에 구워야 바인드 공간에서 우연히 겹친 다른 부품의 정점이 합쳐지지 않는다.
+    /// </summary>
+    private static void BakeBindToRest(Node3D meshNode, Skeleton3D skel, SkinData sd, List<TriangleSoupToPolyMesh.Surface> surfaces)
+    {
+        if (sd.Skin is not { } gs || sd.BindToBone == null) return;
+        var rel = RootRelative(meshNode).AffineInverse() * RootRelative(skel);
+        var mats = new Transform3D[sd.BindToBone.Length];
+        bool differs = false;
+        for (int i = 0; i < mats.Length; i++)
+        {
+            int bone = sd.BindToBone[i];
+            mats[i] = bone >= 0 && bone < skel.GetBoneCount() ? rel * skel.GetBoneGlobalRest(bone) * gs.GetBindPose(i) : Transform3D.Identity;
+            if (!mats[i].IsEqualApprox(Transform3D.Identity)) differs = true;
+        }
+        if (!differs) return;
+        for (int s = 0; s < surfaces.Count && s < sd.PerSurface.Count; s++)
+        {
+            var (bones, weights, stride) = sd.PerSurface[s];
+            if (stride <= 0) continue;
+            var surf = surfaces[s];
+            int n = Math.Min(surf.Positions.Length, bones.Length / stride);
+            for (int v = 0; v < n; v++)
+            {
+                var p = surf.Positions[v].ToGodot();
+                var nr = surf.Normals != null && v < surf.Normals.Length ? surf.Normals[v].ToGodot() : Vector3.Zero;
+                Vector3 accP = Vector3.Zero, accN = Vector3.Zero; float sum = 0;
+                for (int k = 0; k < stride; k++)
+                {
+                    float w = weights[v * stride + k]; int b = bones[v * stride + k];
+                    if (w <= 0f || b < 0 || b >= mats.Length) continue;
+                    accP += mats[b] * p * w; accN += mats[b].Basis * nr * w; sum += w;
+                }
+                if (sum <= 1e-12f) continue;
+                surf.Positions[v] = (accP / sum).ToNumerics();
+                if (surf.Normals != null && v < surf.Normals.Length && accN.LengthSquared() > 1e-20f) surf.Normals[v] = accN.Normalized().ToNumerics();
+            }
+        }
+    }
+
+    /// <summary>트리에 들어가지 않은 가져오기 씬에서 노드의 루트 기준 트랜스폼(GlobalTransform 대용).</summary>
+    private static Transform3D RootRelative(Node3D n)
+    {
+        var t = n.Transform;
+        for (var p = n.GetParent() as Node3D; p != null; p = p.GetParent() as Node3D) t = p.Transform * t;
+        return t;
     }
 
     private static bool TryFindSkeleton(Node3D g, out Skeleton3D skel)

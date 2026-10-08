@@ -33,7 +33,7 @@ public static partial class MeshOps
     internal sealed class FaceRebuilder
     {
         private readonly PolyMesh _m;
-        private readonly Dictionary<long, EdgeFlags> _flags = new();
+        private readonly Dictionary<long, EdgeFlags> _flags = new(PairKeyComparer.Instance);
         private readonly Dictionary<int, (int a, int b)> _parent = new();
         public readonly List<(int face, List<Corner> corners, int material)> Captured = new();
 
@@ -182,7 +182,7 @@ public static partial class MeshOps
         }
         foreach (int f in neighbors) rb.Capture(f);
         // 엣지 중점(영역 면의 엣지만)
-        var mid = new Dictionary<long, int>();
+        var mid = new Dictionary<long, int>(PairKeyComparer.Instance);
         long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
         foreach (int f in faces)
         {
@@ -259,7 +259,7 @@ public static partial class MeshOps
         }
         foreach (int f in neighbors) rb.Capture(f);
         // 엣지별 분할 정점(방향: 정점 쌍 키, 작은 ID → 큰 ID 순서로 저장)
-        var edgePts = new Dictionary<long, int[]>();
+        var edgePts = new Dictionary<long, int[]>(PairKeyComparer.Instance);
         long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
         int[] PtsFromTo(int a, int b, int divisions)
         {

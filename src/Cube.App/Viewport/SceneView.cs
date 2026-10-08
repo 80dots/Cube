@@ -148,10 +148,19 @@ public partial class SceneView : Node3D
     public void UpdateSkins()
     {
         if (_doc == null) return;
+        if (IsShown != null && !IsShown()) { _skinsDirty = true; return; }
+        _skinsDirty = false;
         foreach (var n in _doc.SkinnedNodes()) UpdateSkin(n.Id);
     }
 
     private readonly Dictionary<NodeId, System.Numerics.Vector3[]> _deformBuf = new();
+
+    /// <summary>이 뷰를 담은 패널이 보이는지. 안 보이면 스킨 갱신을 미룬다(<see cref="FlushSkins"/>).</summary>
+    public Func<bool>? IsShown;
+    private bool _skinsDirty;
+
+    /// <summary>숨어 있는 동안 미룬 스킨 변형을 반영한다.</summary>
+    public void FlushSkins() { if (_skinsDirty) UpdateSkins(); }
 
     public void UpdateSkin(NodeId id)
     {

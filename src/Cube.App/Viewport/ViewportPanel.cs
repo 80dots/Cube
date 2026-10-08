@@ -95,6 +95,9 @@ public partial class ViewportPanel : SubViewportContainer
         Grid = new GridView { Name = "Grid" };
         Viewport.AddChild(Grid);
         Scene = new SceneView { Name = "Scene" };
+        // 숨겨진 패널(단일 뷰의 나머지 3개)은 재생 중 스킨 변형·업로드를 건너뛰고 다시 보일 때 한 번 갱신한다
+        Scene.IsShown = IsVisibleInTree;
+        VisibilityChanged += () => { if (IsVisibleInTree()) Scene.FlushSkins(); };
         Viewport.AddChild(Scene);
         GizmoRoot = new Node3D { Name = "Gizmos" };
         Viewport.AddChild(GizmoRoot);
