@@ -39,7 +39,11 @@ public partial class JointView : Node3D
         Refresh();
     }
 
-    public float Radius => Node.Joint?.Radius ?? 0.08f;
+    /// <summary>표시 반지름 = 조인트 반지름 × Display → Joint Size 배율.</summary>
+    public float Radius => (Node.Joint?.Radius ?? 0.08f) * Math.Clamp(CubeApp.Instance.Settings.JointDisplayScale, 0.01f, 100f);
+
+    /// <summary>뷰포트에서 집을 수 있는지(노드가 보이고 Display → Joints가 켜져 있음).</summary>
+    public bool Pickable => Visible && CubeApp.Instance.Settings.ShowJoints;
 
     /// <summary>자식 조인트 위치가 바뀌었을 때 본을 다시 만든다. 구 크기도 갱신.</summary>
     public void Refresh()
@@ -47,8 +51,11 @@ public partial class JointView : Node3D
         if (_sphere == null) return;
         float r = Radius;
         _sphere.Scale = new Vector3(r * 2, r * 2, r * 2);
+        // Display → Joints: 노드 표시(Visible)와 별개로 구·본·축만 숨긴다(자식 뷰·스킨 메시는 그대로)
+        bool shown = CubeApp.Instance.Settings.ShowJoints;
+        _sphere.Visible = shown; _bones.Visible = shown;
         // 로컬 회전 축(Display → Joint Local Rotation Axes)
-        bool showAxes = CubeApp.Instance.Settings.ShowJointAxes;
+        bool showAxes = shown && CubeApp.Instance.Settings.ShowJointAxes;
         _axes.Visible = showAxes;
         if (showAxes)
         {

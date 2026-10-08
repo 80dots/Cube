@@ -92,6 +92,10 @@ public sealed class Settings
     [JsonPropertyName("quadView")] public bool QuadView { get; set; }
     /// <summary>Display → Joint Local Rotation Axes.</summary>
     [JsonPropertyName("showJointAxes")] public bool ShowJointAxes { get; set; }
+    /// <summary>Display → Joints: 조인트(구·본·축) 표시. 끄면 뷰포트에서 조인트를 집지 않는다(Outliner에서는 선택 가능).</summary>
+    [JsonPropertyName("showJoints")] public bool ShowJoints { get; set; } = true;
+    /// <summary>Display → Joint Size: 모든 조인트 표시 크기 배율(Maya Joint Size; 조인트별 반지름에 곱함, 표시 전용).</summary>
+    [JsonPropertyName("jointDisplayScale")] public float JointDisplayScale { get; set; } = 1f;
     /// <summary>그리드 간격(cm). 기본 100. 그리드 스냅 단위도 이 값이다.</summary>
     [JsonPropertyName("gridSpacingCm")] public float GridSpacingCm { get; set; } = 100f;
     /// <summary>상태 라인 Snap to Grid 토글(Maya 자석 버튼). X 홀드와 같다.</summary>

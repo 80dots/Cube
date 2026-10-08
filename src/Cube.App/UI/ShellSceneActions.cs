@@ -33,6 +33,55 @@ public partial class Shell
             Settings.ShowJointAxes = !Settings.ShowJointAxes; Settings.Save();
             foreach (var p in Layout.Panels) p.Scene.RefreshJoints();
         }, isChecked: () => Settings.ShowJointAxes);
+        Actions.Register("display.joints", "Joints", () =>
+        {
+            Settings.ShowJoints = !Settings.ShowJoints; Settings.Save();
+            RefreshJointDisplay();
+            HelpLine.Text = Settings.ShowJoints ? "Joints shown." : "Joints hidden (select them in the Outliner; Display → Joints to show).";
+        }, isChecked: () => Settings.ShowJoints);
+        Actions.Register("display.jointSize", "Joint Size...", ShowJointSizeDialog);
+    }
+
+    /// <summary>조인트 표시 설정이 바뀐 뒤 모든 패널의 조인트 뷰와 HUD를 갱신한다.</summary>
+    private void RefreshJointDisplay()
+    {
+        foreach (var p in Layout.Panels) { p.Scene.RefreshJoints(); p.Hud.Refresh(); }
+    }
+
+    private Window? _jointSizeDialog;
+
+    /// <summary>Display → Joint Size(Maya): 슬라이더/숫자로 모든 조인트 표시 크기 배율을 바꾸면 바로 반영되고 설정에 저장된다.</summary>
+    private void ShowJointSizeDialog()
+    {
+        if (_jointSizeDialog != null && IsInstanceValid(_jointSizeDialog)) { _jointSizeDialog.Show(); _jointSizeDialog.GrabFocus(); return; }
+        float s = CubeApp.Instance.UiScale;
+        var dlg = new AcceptDialog { Title = "Joint Size", OkButtonText = "Close", Exclusive = false, Unresizable = false, MinSize = new Vector2I((int)(380 * s), (int)(120 * s)) };
+        var box = new VBoxContainer();
+        box.AddChild(new Label { Text = "Display size of all joints (multiplies each joint's radius; display only)." });
+        var row = new HBoxContainer();
+        var slider = new HSlider { MinValue = 0.05, MaxValue = 5, Step = 0.01, Value = Settings.JointDisplayScale, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ShrinkCenter, CustomMinimumSize = new Vector2(200 * s, 0) };
+        var spin = new SpinBox { MinValue = 0.01, MaxValue = 100, Step = 0.01, Value = Settings.JointDisplayScale, AllowGreater = true, CustomMinimumSize = new Vector2(90 * s, 0) };
+        var reset = new Button { Text = "Reset", TooltipText = "Back to 1.0" };
+        bool sync = false;
+        void Apply(double v)
+        {
+            if (sync) return;
+            sync = true;
+            Settings.JointDisplayScale = (float)Math.Clamp(v, 0.01, 100);
+            slider.SetValueNoSignal(Math.Min(v, slider.MaxValue)); spin.SetValueNoSignal(v);
+            RefreshJointDisplay();
+            sync = false;
+        }
+        slider.ValueChanged += Apply; spin.ValueChanged += Apply;
+        reset.Pressed += () => Apply(1);
+        row.AddChild(slider); row.AddChild(spin); row.AddChild(reset);
+        box.AddChild(row);
+        dlg.AddChild(box);
+        dlg.Confirmed += () => Settings.Save();
+        dlg.CloseRequested += () => { Settings.Save(); dlg.Hide(); };
+        AddChild(dlg);
+        _jointSizeDialog = dlg;
+        dlg.PopupCentered();
     }
 
     private void CreateLight(LightType type)

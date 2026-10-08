@@ -52,7 +52,7 @@ public sealed class Picker
         float rJoint = 10f * Scale, rBone = 6f * Scale;
         foreach (var (id, jv) in _panel.Scene.JointViews)
         {
-            if (!jv.Visible) continue;
+            if (!jv.Pickable) continue;
             var w = jv.GlobalPosition.ToNumerics();
             var sp = proj.Project(w, out float depth);
             if (sp == null) continue;
@@ -93,7 +93,7 @@ public sealed class Picker
         float best = 8f * Scale;
         foreach (var (id, jv) in _panel.Scene.JointViews)
         {
-            if (!jv.Visible) continue;
+            if (!jv.Pickable) continue;
             var sp = proj.Project(jv.GlobalPosition.ToNumerics(), out _);
             if (sp == null) continue;
             foreach (var c in jv.Node.Children)
@@ -151,7 +151,7 @@ public sealed class Picker
             var proj = Projection();
             foreach (var (id, jv) in _panel.Scene.JointViews)
             {
-                if (!jv.Visible) continue;
+                if (!jv.Pickable) continue;
                 var sp = proj.Project(jv.GlobalPosition.ToNumerics(), out _);
                 if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
             }

@@ -596,7 +596,7 @@ public partial class Shell
         Menus.Build(Add("Display"))
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
-            .Item("display.jointAxes").Item("display.timeSlider").Separator()
+            .Item("display.joints").Item("display.jointSize").Item("display.jointAxes").Item("display.timeSlider").Separator()
             .Item("display.grid").Item("display.polyCount").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 
