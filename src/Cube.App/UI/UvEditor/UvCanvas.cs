@@ -96,9 +96,17 @@ public partial class UvCanvas : Control
         shell.Document.Selection.Changed += OnSelectionChanged;
         shell.Document.Selection.ModeChanged += () => { _hover = null; _selPts.Clear(); MarkGeomDirty(); };
         shell.Tools.ToolChanged += _ => QueueRedraw();
-        Resized += () => { if (_origin == GVec2.Zero) FrameAll(); };
+        Resized += () => { if (_origin == GVec2.Zero || Time.GetTicksMsec() < _frameUntilMs) CallDeferred(nameof(FrameAll)); };
         CallDeferred(nameof(FrameAll));
     }
+
+    private ulong _frameUntilMs;
+
+    /// <summary>
+    /// 도크에 붙거나 떨어진 직후: 앞으로 ms 동안 크기가 바뀔 때마다(레이아웃이 자리 잡는 몇 프레임) 전체를 다시 프레임한다.
+    /// 타이머로 0.2초 뒤에 한 번 프레임하던 것(v0.0.46 전)보다 바로 맞고, 도크 폭이 뒤늦게 적용돼도 따라간다.
+    /// </summary>
+    public void FrameOnResize(int ms = 400) => _frameUntilMs = Time.GetTicksMsec() + (ulong)ms;
 
     /// <summary>도킹/떼어 내기로 트리를 옮겨도 구독을 유지하고, 실제로 지워질 때만 해제한다.</summary>
     private void Unsubscribe()
@@ -288,8 +296,10 @@ public partial class UvCanvas : Control
 
     private void Timed(Action a)
     {
-        if (!PerfMode) { a(); return; }
+        if (!PerfMode && !UiPerf.Enabled) { a(); return; }
+        long t0 = UiPerf.Begin();
         var sw = System.Diagnostics.Stopwatch.StartNew(); a(); _perfDraw += sw.Elapsed.TotalMilliseconds;
+        UiPerf.End("uvPaint", t0);
     }
 
     // ---------------------------------------------------------------- 레이어
@@ -626,7 +636,7 @@ public partial class UvCanvas : Control
         {
             var topo = Topo(node);
             if (!_geom.TryGetValue(node.Id, out var g)) { g = new NodeGeom(); _geom[node.Id] = g; }
-            if (g.Stamp != _geomStamp || g.Scale != s || !ReferenceEquals(g.Topo, topo)) BuildGeom(g, node, topo, sel, s);
+            if (g.Stamp != _geomStamp || g.Scale != s || !ReferenceEquals(g.Topo, topo)) { long t0 = UiPerf.Begin(); BuildGeom(g, node, topo, sel, s); UiPerf.End("uvBuildGeom", t0); }
             int want = -1;
             if (sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id && hf.Component >= 0 && hf.Component < g.FaceStart.Length
                 && g.FaceStart[hf.Component] >= 0 && g.FaceBase[hf.Component] != FaceSelCol) want = hf.Component;

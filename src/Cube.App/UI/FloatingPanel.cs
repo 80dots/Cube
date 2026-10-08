@@ -48,7 +48,7 @@ public partial class FloatingPanel : PanelContainer
         _grip.SetAnchorsPreset(LayoutPreset.BottomRight);
         _grip.OffsetLeft = -18 * s; _grip.OffsetTop = -18 * s; _grip.OffsetRight = 0; _grip.OffsetBottom = 0;
         _grip.Began += MoveToFront;
-        _grip.Dragged += d => Size = new Vector2(Mathf.Max(MinPanelSize.X, Size.X + d.X), Mathf.Max(MinPanelSize.Y, Size.Y + d.Y));
+        _grip.Dragged += d => { long t0 = UiPerf.Begin(); Size = new Vector2(Mathf.Max(MinPanelSize.X, Size.X + d.X), Mathf.Max(MinPanelSize.Y, Size.Y + d.Y)); UiPerf.End("panelResize", t0); };
         var bar = _bar = new PanelContainer { CustomMinimumSize = new Vector2(0, 26 * s), MouseFilter = MouseFilterEnum.Stop };
         bar.AddThemeStyleboxOverride("panel", new StyleBoxFlat { BgColor = MayaTheme.PanelDark, ContentMarginLeft = 8 * s });
         var barBox = new HBoxContainer();

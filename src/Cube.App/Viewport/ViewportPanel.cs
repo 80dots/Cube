@@ -346,6 +346,7 @@ public partial class ViewportPanel : SubViewportContainer
 
     public override void _Notification(int what)
     {
+        if (what == NotificationResized) UiPerf.Count("vpResize");
         if (what == NotificationApplicationFocusOut) { Navigation.Cancel(); Pie?.Close(); }
         if (what == NotificationMouseEnter) { IsMouseOver = true; Activated?.Invoke(); }
         if (what == NotificationMouseExit) IsMouseOver = false;

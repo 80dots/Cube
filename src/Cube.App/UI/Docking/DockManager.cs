@@ -28,8 +28,10 @@ public partial class DockSide : VSplitContainer
 /// 도크 안에서 탭 그룹 여러 개를 나란히(가로로) 놓는 행.
 /// 도크 폭이 바뀌면(도크와 뷰포트 사이 경계를 끌거나 창 크기 변경) 뷰포트에 붙은 그룹만 폭이 바뀌고 나머지 그룹은 폭을 유지한다
 /// (오른쪽 도크 = 맨 왼쪽 그룹, 왼쪽 도크 = 맨 오른쪽 그룹). SplitContainer는 모든 자식이 늘어나면 바뀐 폭을 나눠 주므로,
-/// 정렬이 끝날 때마다(SortChildren) 행 폭이 그대로면 나머지 그룹 폭을 기억하고, 행 폭이 바뀌었으면 기억한 폭이 되도록 경계 오프셋을 실측 보정한다.
-/// 행 안 경계를 끌면 행 폭은 그대로라 새 폭이 기억된다.
+/// 행 폭이 바뀌는 순간(NotificationResized, 정렬 전)에 기억한 폭이 되도록 경계 오프셋을 미리 계산해 둔다(기본 경계 = 남는 폭의 균등 분배, 최소 폭은 클램프에만).
+/// 그래서 같은 프레임에 맞고 한 프레임 늦게 튀지 않는다(v0.0.46 전에는 정렬 뒤 실측 보정을 지연 적용해 안쪽 경계가 한 프레임 늦게 따라왔다).
+/// 정렬 뒤(SortChildren)에는 실측해 어긋났으면(최소 폭 클램프 등) 지연 보정하고, 맞았으면 지금 폭을 기억한다. 행 안 경계를 끌면 행 폭은 그대로라 새 폭이 기억된다.
+/// <see cref="PinWidth"/>는 옆에 붙일 때 원래 그룹 폭을 고정한다(두 그룹짜리 행; 행 안 경계를 끌면 풀림).
 /// </summary>
 public partial class DockRow : HSplitContainer
 {
@@ -37,70 +39,113 @@ public partial class DockRow : HSplitContainer
 
     private float _lastTotal = -1;
     private readonly Dictionary<DockGroup, float> _keep = new();
+    private (DockGroup g, float w)? _pin;
     private int _fixes;
+    /// <summary>정렬에서 실측한 그룹 사이 간격(드래거 두께).</summary>
+    private float _sepReal;
 
     /// <summary>뷰포트에 붙은(폭이 바뀌는) 그룹 번호.</summary>
     private int AdjacentIndex(int count) => GetParent() is DockSide { Kind: DockSideKind.Left } ? count - 1 : 0;
 
-    public override void _Ready() { SortChildren += OnSorted; ClipContents = true; Resized += QueueRedraw; }
+    public override void _Ready()
+    {
+        SortChildren += OnSorted;
+        ClipContents = true;
+        Resized += QueueRedraw;
+        // 행 안 경계를 끌면 그 폭이 새 기준: 핀을 풀고 다음 정렬에서 기억한다
+        Dragged += _ => { _pin = null; _lastTotal = -1; };
+    }
     public override void _Draw() => DrawRect(new Rect2(Vector2.Zero, Size), MayaTheme.PanelDark);
 
     /// <summary>현재 폭을 기억한다(그룹 추가·제거·레이아웃 복원 직후 등).</summary>
-    public void RememberWidths() { _lastTotal = -1; }
+    public void RememberWidths() { _lastTotal = -1; _pin = null; }
 
-    private void OnSorted()
+    /// <summary>그룹 하나의 폭을 고정한다(옆에 붙일 때 원래 그룹 폭 유지; 나머지 그룹이 남는 폭을 쓴다). 두 그룹짜리 행에서만 쓰며 행 안 경계를 끌면 풀린다.</summary>
+    public void PinWidth(DockGroup g, float w) { _pin = (g, w); _lastTotal = -1; _keep.Clear(); }
+
+    /// <summary>행 폭 avail(경계 제외)에서 원하는 그룹 폭. 규칙이 없으면(기억한 폭 없음) null.</summary>
+    private float[]? WantedWidths(List<DockGroup> gs, float avail)
     {
-        var gs = Groups;
-        if (gs.Count < 2) { _lastTotal = Size.X; return; }
-        float total = Size.X;
-        int adj = AdjacentIndex(gs.Count);
-        bool known = gs.Where((g, i) => i != adj).All(g => _keep.ContainsKey(g));
-        // 레이아웃 복원 직후(폭이 아직 적용되는 중)에는 보정하지 않고 기억만 한다
-        if (!DockManager.Settled || _lastTotal < 0 || !known || Math.Abs(total - _lastTotal) < 0.5f || _dragging)
+        int n = gs.Count, adj = AdjacentIndex(n);
+        var want = new float[n];
+        if (_pin is { } pin)
         {
-            // 행 폭이 그대로(행 안 경계 드래그·그룹 변경): 지금 폭을 기억
-            _keep.Clear();
-            for (int i = 0; i < gs.Count; i++) if (i != adj) _keep[gs[i]] = gs[i].Size.X;
-            _lastTotal = total; _fixes = 0;
-            return;
+            int pi = gs.IndexOf(pin.g);
+            if (pi < 0 || n != 2) return null;
+            float minPin = gs[pi].GetCombinedMinimumSize().X, minOther = gs[1 - pi].GetCombinedMinimumSize().X;
+            want[pi] = Math.Clamp(pin.w, minPin, Math.Max(minPin, avail - minOther));
+            want[1 - pi] = avail - want[pi];
+            return want;
         }
-        // 행 폭이 바뀜: 뷰포트 쪽이 아닌 그룹은 기억한 폭으로 되돌린다(오프셋에 대해 위치가 선형이라 한 번에 맞음)
-        float sep = gs.Count > 1 ? gs[1].Position.X - (gs[0].Position.X + gs[0].Size.X) : 0;
-        float avail = total - sep * (gs.Count - 1);
-        var want = new float[gs.Count];
+        for (int i = 0; i < n; i++) if (i != adj && !_keep.ContainsKey(gs[i])) return null;
         float fixedSum = 0;
-        for (int i = 0; i < gs.Count; i++) if (i != adj) { want[i] = _keep[gs[i]]; fixedSum += want[i]; }
+        for (int i = 0; i < n; i++) if (i != adj) { want[i] = _keep[gs[i]]; fixedSum += want[i]; }
         float adjMin = gs[adj].GetCombinedMinimumSize().X;
         if (avail - fixedSum < adjMin)
         {
             // 공간이 모자라면 나머지 그룹을 비율대로 줄인다
             float scale = Math.Max(0, avail - adjMin) / Math.Max(1, fixedSum);
             fixedSum = 0;
-            for (int i = 0; i < gs.Count; i++) if (i != adj) { want[i] = Math.Max(gs[i].GetCombinedMinimumSize().X, want[i] * scale); fixedSum += want[i]; }
+            for (int i = 0; i < n; i++) if (i != adj) { want[i] = Math.Max(gs[i].GetCombinedMinimumSize().X, want[i] * scale); fixedSum += want[i]; }
         }
         want[adj] = Math.Max(adjMin, avail - fixedSum);
-        var offs = SplitOffsets.Length == gs.Count - 1 ? (int[])SplitOffsets.Clone() : new int[gs.Count - 1];
-        bool changed = false;
-        float end = 0;
-        for (int i = 0; i < gs.Count - 1; i++)
+        return want;
+    }
+
+    /// <summary>행 폭이 바뀌었을 때 보정이 필요한가(복원 중·기억 없음·폭 그대로면 아니오).</summary>
+    private bool NeedsFix(float total) => _pin != null || (DockManager.Settled && _lastTotal >= 0 && Math.Abs(total - _lastTotal) >= 0.5f);
+
+    /// <summary>행 폭이 바뀌는 순간(정렬 전): 원하는 그룹 폭이 되도록 경계 오프셋을 예측해 둔다. 정렬 시그널 안에서는 재정렬 요청이 버려지지만 여기서는 정렬이 아직 대기 중이라 그대로 반영된다.</summary>
+    public override void _Notification(int what)
+    {
+        if (what != NotificationResized || !IsInsideTree()) return;
+        var gs = Groups; int n = gs.Count;
+        float total = Size.X;
+        if (n < 2 || total < 10 || !NeedsFix(total)) return;
+        // 그룹 사이 간격 = 드래거 두께(정렬에서 실측; 테마 separation보다 두껍다)
+        float sep = _sepReal > 0 ? _sepReal : Math.Max(GetThemeConstant("separation"), GetThemeConstant("minimum_grab_thickness"));
+        float avail = total - sep * (n - 1);
+        var want = WantedWidths(gs, avail);
+        if (want == null) return;
+        // SplitContainer 기본 경계(모든 그룹이 확장): 남는 폭을 균등 분배(최소 폭은 클램프에만 쓰임). 오프셋 = 원하는 경계 − 기본 경계
+        var offs = new int[n - 1]; float cumWant = 0;
+        for (int i = 0; i < n - 1; i++) { cumWant += want[i]; offs[i] = (int)MathF.Round(cumWant - MathF.Floor((i + 1) * avail / n)); }
+        SplitOffsets = offs;
+        UiPerf.Count("rowPredict");
+    }
+
+    private void OnSorted()
+    {
+        UiPerf.Count("rowSorted");
+        var gs = Groups; int n = gs.Count;
+        float total = Size.X;
+        if (n < 2) { _lastTotal = total; _pin = null; return; }
+        float sep = _sepReal = gs[1].Position.X - (gs[0].Position.X + gs[0].Size.X);
+        var want = NeedsFix(total) ? WantedWidths(gs, total - sep * (n - 1)) : null;
+        if (want == null) { Learn(gs, total); return; }
+        // 실측 확인: 예측이 빗나간 경우(최소 폭 클램프 등)만 지연 보정한다(정렬 시그널 안에서 오프셋을 바꾸면 Godot이 재정렬 요청을 버림). 최대 몇 번
+        var offs = SplitOffsets.Length == n - 1 ? (int[])SplitOffsets.Clone() : new int[n - 1];
+        bool changed = false; float end = 0;
+        for (int i = 0; i < n - 1; i++)
         {
             end += want[i];
-            float actualEnd = gs[i].Position.X + gs[i].Size.X;
-            int d = (int)MathF.Round(end - actualEnd);
+            int d = (int)MathF.Round(end - (gs[i].Position.X + gs[i].Size.X));
             if (d != 0) { offs[i] += d; changed = true; }
             end += sep;
         }
-        // 정렬 시그널 안에서 오프셋을 바꾸면 Godot이 재정렬 요청을 버리므로(정렬이 끝날 때 대기 플래그를 지움) 지연 적용한다.
-        // 적용 뒤 정렬에서 다시 확인한다(최대 몇 번)
-        if (changed && _fixes++ < 4) Callable.From(() => { if (IsInstanceValid(this)) SplitOffsets = offs; }).CallDeferred();
-        else { _lastTotal = total; _fixes = 0; }
+        // 지연 보정은 그 사이 행 폭이 또 바뀌지 않았을 때만(바뀌었으면 크기 변경 예측이 이미 새 오프셋을 넣었다)
+        if (changed && _fixes++ < 4) { UiPerf.Count("rowFix"); Callable.From(() => { if (IsInstanceValid(this) && Math.Abs(Size.X - total) < 0.5f) SplitOffsets = offs; }).CallDeferred(); }
+        else Learn(gs, total, keepPin: _pin != null);
     }
 
-    private bool _dragging;
-    public override void _GuiInput(InputEvent e)
+    /// <summary>지금 폭을 기억한다(행 폭이 그대로이거나 보정이 끝났을 때). 핀은 붙이기 뒤 도크 폭 적용이 끝날 때까지 유지한다(행 안 경계 드래그가 푼다).</summary>
+    private void Learn(List<DockGroup> gs, float total, bool keepPin = false)
     {
-        // 행 안 경계를 끄는 동안은 폭 보정을 하지 않는다(드래그가 곧 새 폭)
-        if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left } mb) _dragging = mb.Pressed;
+        int adj = AdjacentIndex(gs.Count);
+        _keep.Clear();
+        for (int i = 0; i < gs.Count; i++) if (i != adj) _keep[gs[i]] = gs[i].Size.X;
+        _lastTotal = total; _fixes = 0;
+        if (!keepPin) _pin = null;
     }
 }
 
@@ -230,6 +275,7 @@ public partial class DockManager : Node
                 row.AddChild(g);
                 row.MoveChild(g, row.Groups.IndexOf(target) + (t.Mode == DropMode.RightOf ? 1 : 0));
                 row.SplitOffsets = new int[Math.Max(0, row.Groups.Count - 1)];
+                row.RememberWidths();
             }
             else
             {
@@ -244,7 +290,8 @@ public partial class DockManager : Node
             }
             Attach(p, g);
             if (widen) WidenBy(side, p);
-            if (g.GetParent() is DockRow r3 && r3.Groups.Count == 2) KeepWidthDeferred(r3, target, keepW, 3);
+            // 원래 그룹은 지금 폭을 유지: 행이 처음 정렬되는 순간(같은 프레임)과 도크가 넓어질 때 DockRow가 경계를 미리 맞춘다
+            if (g.GetParent() is DockRow r3 && r3.Groups.Count == 2) r3.PinWidth(target, keepW);
             return;
         }
         else
@@ -409,25 +456,9 @@ public partial class DockManager : Node
                 side.RemoveChild(row);
                 row.QueueFree();
             }
-            else row.SplitOffsets = new int[rest.Count - 1];
+            else { row.SplitOffsets = new int[rest.Count - 1]; row.RememberWidths(); }
         }
         ResetGroupHeights(side);
-    }
-
-    /// <summary>두 그룹짜리 행에서 keep 그룹의 폭이 w가 되도록 경계 오프셋을 맞춘다(폭 적용이 끝난 뒤 몇 프레임에 걸쳐).</summary>
-    private void KeepWidthDeferred(DockRow row, DockGroup keep, float w, int frames)
-    {
-        GetTree().CreateTimer(0.05).Timeout += () =>
-        {
-            if (!IsInstanceValid(row) || !IsInstanceValid(keep) || keep.GetParent() != row) return;
-            float total = row.Size.X; if (total < 10) return;
-            float sep = row.GetThemeConstant("separation");
-            float half = (total - sep) / 2f;
-            bool keepFirst = row.Groups.IndexOf(keep) == 0;
-            float target = Math.Clamp(w, SideMin, total - SideMin);
-            row.SplitOffsets = new[] { (int)(keepFirst ? target - half : half - target) };
-            if (frames > 1) KeepWidthDeferred(row, keep, w, frames - 1);
-        };
     }
 
     /// <summary>옆에 나란히 붙이면 도크를 새 패널 폭만큼 넓힌다(창의 60% 이내).</summary>
@@ -466,9 +497,12 @@ public partial class DockManager : Node
         if (_drag == null) return;
         if (e is InputEventMouseMotion mm)
         {
+            long t0 = UiPerf.Begin();
             _drag.MoveTo(mm.GlobalPosition - _dragOffset);
+            UiPerf.End("dockMove", t0); t0 = UiPerf.Begin();
             _target = FindTarget(mm.GlobalPosition);
             _overlay.ShowRect(_target?.Highlight);
+            UiPerf.End("dockTarget", t0);
         }
         else if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false })
         {

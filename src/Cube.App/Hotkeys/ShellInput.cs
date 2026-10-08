@@ -33,6 +33,7 @@ public partial class ShellInput : Node
     private void FixCursor()
     {
         _cursorFixQueued = false;
+        UiPerf.Count("fixCursor");
         var hovered = GetViewport().GuiGetHoveredControl();
         if (hovered == null || !hovered.IsVisibleInTree()) return;
         var local = hovered.GetGlobalTransformWithCanvas().AffineInverse() * _cursorPos;
