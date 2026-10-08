@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Cube.App.Bridge;
 using Cube.App.Viewport;
 using Cube.Core.Commands;
@@ -39,9 +40,9 @@ public partial class UvCanvas : Control
 
     // 표시 옵션
     private bool _shaded, _distortion, _texBorders = true, _showStats, _gridLines = true, _tiles, _dim = true, _unfiltered, _pixelSnap;
-    public bool Shaded { get => _shaded; set { _shaded = value; QueueRedraw(); } }
-    public bool Distortion { get => _distortion; set { _distortion = value; QueueRedraw(); } }
-    public bool TextureBorders { get => _texBorders; set { _texBorders = value; QueueRedraw(); } }
+    public bool Shaded { get => _shaded; set { _shaded = value; MarkGeomDirty(); } }
+    public bool Distortion { get => _distortion; set { _distortion = value; MarkGeomDirty(); } }
+    public bool TextureBorders { get => _texBorders; set { _texBorders = value; MarkGeomDirty(); } }
     public bool ShowStats { get => _showStats; set { _showStats = value; QueueRedraw(); } }
     public bool ShowGridLines { get => _gridLines; set { _gridLines = value; QueueRedraw(); } }
     public bool ShowTiles { get => _tiles; set { _tiles = value; QueueRedraw(); } }
@@ -88,11 +89,12 @@ public partial class UvCanvas : Control
         SizeFlagsVertical = SizeFlags.ExpandFill;
         ClipContents = true;
         _gridTex = Icons.LoadPng("res://assets/textures/uv_grid.bin");
+        SetupLayers();
         _pie = new PieMenu { Name = "UvPie" };
         AddChild(_pie);
         shell.Document.Changed += OnDocChanged;
-        shell.Document.Selection.Changed += QueueRedraw;
-        shell.Document.Selection.ModeChanged += () => { _hover = null; QueueRedraw(); };
+        shell.Document.Selection.Changed += OnSelectionChanged;
+        shell.Document.Selection.ModeChanged += () => { _hover = null; _selPts.Clear(); MarkGeomDirty(); };
         shell.Tools.ToolChanged += _ => QueueRedraw();
         Resized += () => { if (_origin == GVec2.Zero) FrameAll(); };
         CallDeferred(nameof(FrameAll));
@@ -101,18 +103,22 @@ public partial class UvCanvas : Control
     /// <summary>도킹/떼어 내기로 트리를 옮겨도 구독을 유지하고, 실제로 지워질 때만 해제한다.</summary>
     private void Unsubscribe()
     {
-        if (_shell != null) { _shell.Document.Changed -= OnDocChanged; _shell.Document.Selection.Changed -= QueueRedraw; }
+        if (_shell != null) { _shell.Document.Changed -= OnDocChanged; _shell.Document.Selection.Changed -= OnSelectionChanged; }
     }
+
+    private void OnSelectionChanged() { _selPts.Clear(); MarkGeomDirty(); }
 
     private void OnDocChanged(DocChange c)
     {
-        if (_dragging) return;
+        _geomStamp++;   // UV 드래그 중에도 그리기 캐시는 갱신(위상 캐시는 아래에서 드래그가 끝난 뒤에만)
+        if (_dragging) { QueueRedraw(); return; }
+        _selPts.Clear();
         if (c.Kind is ChangeKind.MeshTopology or ChangeKind.MeshAttributes or ChangeKind.NodeRemoved or ChangeKind.Reset) { _topos.Remove(c.Node); _statsCache.Remove(c.Node); _distortionCache.Remove(c.Node); }
         if (c.Kind == ChangeKind.Reset) { _topos.Clear(); _isolate = null; }
         QueueRedraw();
     }
 
-    public void Invalidate() { _topos.Clear(); _statsCache.Clear(); _distortionCache.Clear(); QueueRedraw(); }
+    public void Invalidate() { _topos.Clear(); _selPts.Clear(); _geomStamp++; _statsCache.Clear(); _distortionCache.Clear(); QueueRedraw(); }
 
     public void SetIslandMode(bool on)
     {
@@ -156,7 +162,7 @@ public partial class UvCanvas : Control
     /// <summary>Isolate Select: 현재 선택(면/UV 점이 속한 면)만 표시 ↔ 해제.</summary>
     public void ToggleIsolate()
     {
-        if (_isolate != null) { _isolate = null; QueueRedraw(); return; }
+        if (_isolate != null) { _isolate = null; MarkGeomDirty(); return; }
         var map = new Dictionary<NodeId, HashSet<int>>();
         foreach (var node in TargetNodes())
         {
@@ -165,7 +171,7 @@ public partial class UvCanvas : Control
             map[node.Id] = new HashSet<int>(UvOps.FacesOfPoints(node.Mesh!, topo, pts, all: false));
         }
         _isolate = map.Count > 0 ? map : null;
-        QueueRedraw();
+        MarkGeomDirty();
     }
 
     // ---------------------------------------------------------------- 좌표
@@ -204,7 +210,19 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 선택 도우미
 
-    public HashSet<int> SelectedPoints(SceneNode node) => _shell.UvPointSelection(node, Topo(node));
+    /// <summary>
+    /// 현재 선택을 UV 점 집합으로(읽기 전용으로 쓸 것). 그리기·피벗 계산이 매번 수만 개짜리 집합을 새로 만들지 않도록
+    /// 선택 변경/문서 변경/UV 위상 재생성 때까지 캐시한다.
+    /// </summary>
+    public HashSet<int> SelectedPoints(SceneNode node)
+    {
+        var topo = Topo(node);
+        if (_selPts.TryGetValue(node.Id, out var c) && ReferenceEquals(c.topo, topo)) return c.set;
+        var set = _shell.UvPointSelection(node, topo);
+        _selPts[node.Id] = (topo, set);
+        return set;
+    }
+    private readonly Dictionary<NodeId, (UvTopology topo, HashSet<int> set)> _selPts = new();
 
     private bool IsEdgeSelected(SceneNode node, int e) => _shell.Document.Selection.IsComponentSelected(node.Id, SelectMode.Edge, e);
     private bool IsFaceSelected(SceneNode node, int f) => _shell.Document.Selection.IsComponentSelected(node.Id, SelectMode.Face, f);
@@ -242,27 +260,95 @@ public partial class UvCanvas : Control
         return _checkerTex;
     }
 
-    private readonly List<GVec2> _polyBuf = new();
-    private readonly GVec2[] _triBuf = new GVec2[3];
+    // ---------------------------------------------------------------- 성능 측정(--uvperf)
 
-    /// <summary>모든 연속 변의 외적 부호가 같으면 볼록(삼각분할 없이 바로 그린다).</summary>
-    private static bool IsConvex(GVec2[] p)
+    /// <summary>
+    /// `-- --uvperf`: UV 편집기가 열려 있는 동안 매 프레임 다시 그리고(레이어 포함) 합성 호버를 돌려,
+    /// 60프레임마다 그리기(_Draw + 레이어 Paint 합)/호버 평균 시간과 FPS를 `[UvPerf]` 줄로 출력한다(vsync 끔).
+    /// </summary>
+    private static readonly bool PerfMode = OS.GetCmdlineUserArgs().Contains("--uvperf");
+    private double _perfDraw, _perfHover; private int _perfFrames, _perfHoverN;
+
+    public override void _Process(double delta)
     {
-        int n = p.Length; bool pos = false, neg = false;
-        for (int i = 0; i < n; i++)
+        if (!PerfMode || !IsVisibleInTree()) return;
+        if (_perfFrames == 0 && _perfHoverN == 0) DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        float t = (float)(Time.GetTicksMsec() % 4000) / 4000f;
+        UpdateHover(new GVec2(Size.X * t, Size.Y * (0.3f + 0.4f * t)));
+        _perfHover += sw.Elapsed.TotalMilliseconds; _perfHoverN++;
+        QueueRedraw();
+        if (_perfFrames >= 60)
         {
-            var a = p[i]; var b = p[(i + 1) % n]; var c = p[(i + 2) % n];
-            float cr = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
-            if (cr > 1e-6f) pos = true; else if (cr < -1e-6f) neg = true;
-            if (pos && neg) return false;
+            int faces = 0, pts = 0; foreach (var n in TargetNodes()) { faces += n.Mesh!.FaceCount; pts += Topo(n).Points.Count; }
+            GD.Print($"[UvPerf] faces={faces} uvpoints={pts} mode={_shell.Document.Selection.Mode} draw={_perfDraw / _perfFrames:F2}ms hover={_perfHover / Math.Max(_perfHoverN, 1):F2}ms fps={Engine.GetFramesPerSecond():F0}");
+            _perfDraw = 0; _perfFrames = 0; _perfHover = 0; _perfHoverN = 1;
         }
-        return true;
     }
+
+    private void Timed(Action a)
+    {
+        if (!PerfMode) { a(); return; }
+        var sw = System.Diagnostics.Stopwatch.StartNew(); a(); _perfDraw += sw.Elapsed.TotalMilliseconds;
+    }
+
+    // ---------------------------------------------------------------- 레이어
+    //
+    // 그리기 순서(뒤 → 앞): 배경 레이어 → 면 틴트·와이어 레이어 → 텍스처 경계·선택 엣지 레이어 → UV 점 레이어 → 이 컨트롤(_Draw: 호버, 마키,
+    // 조작기, 브러시, 상태 글자) → 파이 메뉴. 메시는 노드별 RenderingServer 메시(UV 공간)로 캐시해 레이어마다 명령 한두 개로 그린다.
+    // 와이어 굵기와 점 크기는 정점의 UV 속성(픽셀 단위 오프셋)과 셰이더 유니폼(1/줌)으로 정하므로 팬/줌/호버에는 다시 만들 필요가 없다.
+    // 예전에는 요소마다 DrawLine/DrawColoredPolygon/DrawRect를 불러 12k 면에서 _Draw 한 번에 130ms(4fps)가 걸렸다.
+
+    private UvCanvasLayer _bgLayer = null!, _meshLayer = null!, _lineLayer = null!, _pointLayer = null!;
+    private ShaderMaterial _meshMat = null!, _pointMat = null!;
+    private static Shader? _offsetShader;
+
+    /// <summary>VERTEX(UV 공간) += UV(픽셀 오프셋) × 1/줌: 줌과 무관하게 일정한 픽셀 굵기/크기.</summary>
+    private static Shader OffsetShader => _offsetShader ??= new Shader
+    {
+        Code = "shader_type canvas_item;\nuniform float px_to_local = 1.0;\nvoid vertex() { VERTEX += UV * px_to_local; }\n",
+    };
+
+    private void SetupLayers()
+    {
+        _meshMat = new ShaderMaterial { Shader = OffsetShader };
+        _pointMat = new ShaderMaterial { Shader = OffsetShader };
+        _bgLayer = AddLayer("UvBackground", l => Timed(() => PaintBackground(l)), null);
+        _meshLayer = AddLayer("UvMeshes", l => Timed(() => PaintMeshes(l)), _meshMat);
+        _lineLayer = AddLayer("UvThickLines", l => Timed(() => PaintThickLines(l)), null);
+        _pointLayer = AddLayer("UvPoints", l => Timed(() => PaintPoints(l)), _pointMat);
+    }
+
+    private UvCanvasLayer AddLayer(string name, Action<UvCanvasLayer> paint, Material? mat)
+    {
+        var l = new UvCanvasLayer { Name = name, Paint = paint, Material = mat };
+        AddChild(l);
+        l.SetAnchorsPreset(LayoutPreset.FullRect);
+        return l;
+    }
+
+    /// <summary>캔버스 전체(레이어 포함)를 다시 그린다.</summary>
+    public new void QueueRedraw()
+    {
+        base.QueueRedraw();
+        _bgLayer?.QueueRedraw(); _meshLayer?.QueueRedraw(); _lineLayer?.QueueRedraw(); _pointLayer?.QueueRedraw();
+    }
+
+    /// <summary>호버/마키/브러시 커서처럼 맨 위 덧그림만 바뀔 때(메시 레이어는 그대로).</summary>
+    private void QueueOverlayRedraw() => base.QueueRedraw();
+
+    private Transform2D UvTransform => new(new GVec2(_zoom, 0), new GVec2(0, -_zoom), _origin);
 
     public override void _Draw()
     {
+        if (PerfMode) { Timed(DrawOverlay); _perfFrames++; }
+        else DrawOverlay();
+    }
+
+    private void PaintBackground(UvCanvasLayer L)
+    {
         float s = CubeApp.Instance.UiScale;
-        DrawRect(new Rect2(GVec2.Zero, Size), MathConvert.Rgb(0x2b2b2b));
+        L.DrawRect(new Rect2(GVec2.Zero, Size), MathConvert.Rgb(0x2b2b2b));
         var p0 = UvToPx(new NVec2(0, 1)); var p1 = UvToPx(new NVec2(1, 0));
         var unit = new Rect2(p0, p1 - p0);
         float imgAlpha = _dim ? 0.28f : 1f;
@@ -274,93 +360,64 @@ public partial class UvCanvas : Control
                 bool home = tx == 0 && ty == 0;
                 switch (_background)
                 {
-                    case UvBackground.UvTexture: if (_gridTex != null) DrawTextureRect(_gridTex, r, false, new Color(1, 1, 1, home ? imgAlpha : imgAlpha * 0.5f)); else DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break;
-                    case UvBackground.Checker: { var ct = CheckerTexture(); if (ct != null) DrawTextureRect(ct, r, false, new Color(1, 1, 1, home ? imgAlpha + 0.2f : imgAlpha * 0.5f)); break; }
-                    case UvBackground.Mapped: { var tex = MappedTexture(); if (tex != null) DrawTextureRect(tex, r, false, new Color(1, 1, 1, home ? (_dim ? 0.7f : 1f) : 0.35f)); else DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break; }
-                    case UvBackground.Grid: DrawRect(r, MathConvert.Rgb(0x333333)); break;
+                    case UvBackground.UvTexture: if (_gridTex != null) L.DrawTextureRect(_gridTex, r, false, new Color(1, 1, 1, home ? imgAlpha : imgAlpha * 0.5f)); else L.DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break;
+                    case UvBackground.Checker: { var ct = CheckerTexture(); if (ct != null) L.DrawTextureRect(ct, r, false, new Color(1, 1, 1, home ? imgAlpha + 0.2f : imgAlpha * 0.5f)); break; }
+                    case UvBackground.Mapped: { var tex = MappedTexture(); if (tex != null) L.DrawTextureRect(tex, r, false, new Color(1, 1, 1, home ? (_dim ? 0.7f : 1f) : 0.35f)); else L.DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break; }
+                    case UvBackground.Grid: L.DrawRect(r, MathConvert.Rgb(0x333333)); break;
                 }
                 if (_gridLines && (_background == UvBackground.Grid || _background == UvBackground.None))
                     for (int i = 0; i <= 10; i++)
                     {
                         float t = i / 10f; var col = i % 5 == 0 ? MathConvert.Rgb(0x6a6a6a) : MathConvert.Rgb(0x4a4a4a);
-                        DrawLine(UvToPx(new NVec2(tx + t, ty)), UvToPx(new NVec2(tx + t, ty + 1)), col, 1 * s);
-                        DrawLine(UvToPx(new NVec2(tx, ty + t)), UvToPx(new NVec2(tx + 1, ty + t)), col, 1 * s);
+                        L.DrawLine(UvToPx(new NVec2(tx + t, ty)), UvToPx(new NVec2(tx + t, ty + 1)), col, 1 * s);
+                        L.DrawLine(UvToPx(new NVec2(tx, ty + t)), UvToPx(new NVec2(tx + 1, ty + t)), col, 1 * s);
                     }
-                DrawRect(r, home ? MathConvert.Rgb(0x9a9a9a) : MathConvert.Rgb(0x555555), false, 1 * s);
-                if (_tiles && tx >= 0 && ty >= 0) DrawString(GetThemeDefaultFont(), r.Position + new GVec2(4 * s, 14 * s), (1001 + tx + ty * 10).ToString(), HorizontalAlignment.Left, -1, (int)(11 * s), MayaTheme.TextDim);
+                L.DrawRect(r, home ? MathConvert.Rgb(0x9a9a9a) : MathConvert.Rgb(0x555555), false, 1 * s);
+                if (_tiles && tx >= 0 && ty >= 0) L.DrawString(GetThemeDefaultFont(), r.Position + new GVec2(4 * s, 14 * s), (1001 + tx + ty * 10).ToString(), HorizontalAlignment.Left, -1, (int)(11 * s), MayaTheme.TextDim);
             }
+    }
 
+    /// <summary>면 틴트 + 일반 와이어(1px×배율, AA 없음: 수만 개 선에 AA 페더를 붙이면 CPU·렌더 비용 대부분을 차지했다).</summary>
+    private void PaintMeshes(UvCanvasLayer L)
+    {
+        var geoms = EnsureGeometry();
+        _meshMat.SetShaderParameter("px_to_local", 1f / _zoom);
+        var item = L.GetCanvasItem(); var xf = UvTransform;
+        foreach (var g in geoms) if (g.FaceVerts > 0) RenderingServer.CanvasItemAddMesh(item, g.FaceMesh, xf);
+        foreach (var g in geoms) if (g.WireVerts > 0) RenderingServer.CanvasItemAddMesh(item, g.WireMesh, xf);
+    }
+
+    /// <summary>텍스처 경계 → 선택 엣지(굵게, AA; 페더가 픽셀 단위여야 하므로 화면 공간에서).</summary>
+    private void PaintThickLines(UvCanvasLayer L)
+    {
+        var geoms = EnsureGeometry();
+        float w = 2.5f * CubeApp.Instance.UiScale;
+        DrawPxLines(L, geoms, g => g.Border, w);
+        DrawPxLines(L, geoms, g => g.Selected, w);
+    }
+
+    private void PaintPoints(UvCanvasLayer L)
+    {
+        var geoms = EnsureGeometry();
+        _pointMat.SetShaderParameter("px_to_local", 1f / _zoom);
+        var item = L.GetCanvasItem(); var xf = UvTransform;
+        foreach (var g in geoms) if (g.PointVerts > 0) RenderingServer.CanvasItemAddMesh(item, g.PointMesh, xf);
+    }
+
+    /// <summary>맨 위 덧그림: 호버 엣지/점, 마키, 조작기, 브러시, 상태 글자, 통계.</summary>
+    private void DrawOverlay()
+    {
+        float s = CubeApp.Instance.UiScale;
         var sel = _shell.Document.Selection;
         var font = GetThemeDefaultFont(); int fs = (int)(11 * s);
-        var targets = TargetNodes().ToList();
+        EnsureGeometry();
+        var targets = _geomTargets;
         if (targets.Count == 0)
         {
             DrawString(font, new GVec2(12 * s, 20 * s), "Select an object or components to edit its UVs.", HorizontalAlignment.Left, -1, fs, MayaTheme.TextDim);
             return;
         }
-        foreach (var node in targets)
-        {
-            var m = node.Mesh!; var topo = Topo(node);
-            var selPts = SelectedPoints(node);
-            float[]? ratio = null;
-            if (_distortion)
-            {
-                if (!_distortionCache.TryGetValue(node.Id, out var dc) || dc.version != m.GeometryVersion) { dc = (m.GeometryVersion, UvOps.DistortionPerFace(m)); _distortionCache[node.Id] = dc; }
-                ratio = dc.ratio;
-            }
-            // 면 틴트
-            for (int f = 0; f < m.FaceCount; f++)
-            {
-                if (!m.Faces[f].Alive || !FaceVisible(node.Id, f)) continue;
-                bool fsel = sel.Mode == SelectMode.Face && IsFaceSelected(node, f);
-                bool fhov = sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id && hf.Component == f;
-                _polyBuf.Clear();
-                int start = m.Faces[f].HalfEdge, he = start;
-                do { _polyBuf.Add(UvToPx(m.Hes[he].Uv0)); he = m.Hes[he].Next; } while (he != start);
-                if (_polyBuf.Count < 3) continue;
-                var arr = _polyBuf.ToArray();
-                if (MathF.Abs(PolygonArea(arr)) < 0.5f) continue;
-                Color col;
-                if (fsel) col = new Color(1f, 0.55f, 0f, 0.35f);
-                else if (fhov) col = new Color(1f, 1f, 1f, 0.18f);
-                else if (ratio != null) { float rr = ratio[f]; col = rr < 1 ? new Color(1f, 0.3f, 0.3f, Math.Clamp((1 - rr) * 1.5f, 0.05f, 0.6f)) : new Color(0.3f, 0.5f, 1f, Math.Clamp((rr - 1) * 1.5f, 0.05f, 0.6f)); }
-                else if (_shaded) col = UvOps.FaceUvSignedArea(m, f) >= 0 ? new Color(0.35f, 0.55f, 1f, 0.25f) : new Color(1f, 0.35f, 0.35f, 0.25f);
-                else col = new Color(0.6f, 0.75f, 1f, 0.08f);
-                if (IsConvex(arr)) { DrawColoredPolygon(arr, col); continue; }
-                var tris = Geometry2D.TriangulatePolygon(arr);
-                for (int t = 0; t + 2 < tris.Length; t += 3) { _triBuf[0] = arr[tris[t]]; _triBuf[1] = arr[tris[t + 1]]; _triBuf[2] = arr[tris[t + 2]]; DrawColoredPolygon(_triBuf, col); }
-            }
-            // 엣지
-            for (int e = 0; e < m.EdgeCount; e++)
-            {
-                var ed = m.Edges[e];
-                if (!ed.Alive) continue;
-                for (int k = 0; k < 2; k++)
-                {
-                    int he = k == 0 ? ed.He0 : ed.He1;
-                    if (he < 0 || !FaceVisible(node.Id, m.Hes[he].Face)) continue;
-                    var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
-                    bool esel = sel.Mode == SelectMode.Edge && IsEdgeSelected(node, e);
-                    bool ehov = sel.Mode == SelectMode.Edge && _hover is { } hv && hv.Node == node.Id && hv.Component == e;
-                    bool border = ed.Seam || ed.He1 < 0;
-                    var col = ehov ? MeshView.Hover : esel ? MeshView.EdgeSelected : border && _texBorders ? MathConvert.Rgb(0xffe034) : MathConvert.Rgb(0xdddddd);
-                    DrawLine(a, b, col, (esel || ehov ? 2.5f : border && _texBorders ? 2.5f : 1f) * s, true);
-                }
-            }
-            // UV 점(파랑, 선택 빨강, 호버 흰색, 핀 = 진파랑 테두리)
-            for (int i = 0; i < topo.Points.Count; i++)
-            {
-                var pt = topo.Points[i];
-                if (_isolate != null && !pt.HalfEdges.Any(h => FaceVisible(node.Id, m.Hes[h].Face))) continue;
-                var p = UvToPx(pt.Uv);
-                bool ps = selPts.Contains(i);
-                bool ph = sel.Mode == SelectMode.Uv && _hover is { } hp && hp.Node == node.Id && hp.Component >= 0 && hp.Component < topo.Points.Count
-                          && (IslandMode ? topo.Points[hp.Component].Shell == pt.Shell : hp.Component == i);
-                float r = (ps || ph ? 3.5f : 2.5f) * s;
-                if (pt.Pinned) DrawRect(new Rect2(p - new GVec2(r + 2 * s, r + 2 * s), new GVec2(2 * r + 4 * s, 2 * r + 4 * s)), MathConvert.Rgb(0x2255ff));
-                DrawRect(new Rect2(p - new GVec2(r, r), new GVec2(2 * r, 2 * r)), ph ? MeshView.Hover : ps ? MeshView.UvSelected : MeshView.UvNormal);
-            }
-        }
+        DrawHover(targets, sel, s);
         if (_marquee && _marqueeEnd is { } me)
         {
             var r = RectFrom(_pressPos, me);
@@ -389,6 +446,372 @@ public partial class UvCanvas : Control
             }
             DrawString(font, new GVec2(12 * s, 20 * s), $"UV shells: {shells}   overlapping faces: {overlap}   reversed faces: {reversed}   0-1 usage: {usage:P0}", HorizontalAlignment.Left, -1, fs, MayaTheme.Text);
         }
+    }
+
+    /// <summary>호버 엣지(흰색 굵게)와 호버 UV 점(흰색 크게; Island 모드는 셸 전체)을 캐시 위에 덧그린다. 면 호버는 EnsureGeometry가 면 색을 바꾼다.</summary>
+    private void DrawHover(List<SceneNode> targets, SelectionState sel, float s)
+    {
+        if (_hover is not { } h || h.Component < 0) return;
+        var hn = targets.Find(n => n.Id == h.Node);
+        if (hn == null || !_geom.TryGetValue(hn.Id, out var g)) return;
+        var m = hn.Mesh!;
+        if (sel.Mode == SelectMode.Edge && h.Component < m.EdgeCount && m.Edges[h.Component].Alive)
+        {
+            var ed = m.Edges[h.Component];
+            for (int k = 0; k < 2; k++)
+            {
+                int he = k == 0 ? ed.He0 : ed.He1;
+                if (he < 0 || !FaceVisible(hn.Id, m.Hes[he].Face)) continue;
+                DrawLine(UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0), MeshView.Hover, 2.5f * s, true);
+            }
+        }
+        else if (sel.Mode == SelectMode.Uv)
+        {
+            var topo = Topo(hn);
+            if (h.Component >= topo.Points.Count || g.PtFlags.Length != topo.Points.Count) return;
+            _pxPoints.Clear();
+            float r = 3.5f * s;
+            void Add(int i)
+            {
+                if ((g.PtFlags[i] & PtVisible) == 0) return;
+                var p = UvToPx(topo.Points[i].Uv);
+                if ((g.PtFlags[i] & PtPinned) != 0) _pxPoints.Rect(p, r + 2 * s, PinCol);
+                _pxPoints.Rect(p, r, MeshView.Hover);
+            }
+            if (IslandMode) { int shell = topo.Points[h.Component].Shell; for (int i = 0; i < topo.Points.Count; i++) if (topo.Points[i].Shell == shell) Add(i); }
+            else Add(h.Component);
+            _pxPoints.DrawImmediate(GetCanvasItem());
+        }
+    }
+
+    private void DrawPxLines(CanvasItem target, List<NodeGeom> geoms, Func<NodeGeom, LineBatch> pick, float width)
+    {
+        _pxLines.Clear();
+        foreach (var g in geoms)
+        {
+            var b = pick(g);
+            for (int i = 0; i < b.Count; i++) _pxLines.Add(UvPtToPx(b.Pts[2 * i]), UvPtToPx(b.Pts[2 * i + 1]), b.ColorAt(i));
+        }
+        if (_pxLines.Count > 0) target.DrawMultilineColors(_pxLines.Points, _pxLines.Colors, width, true);
+    }
+
+    private GVec2 UvPtToPx(GVec2 uv) => _origin + new GVec2(uv.X, -uv.Y) * _zoom;
+
+    // ---------------------------------------------------------------- 배치 버퍼(재사용)
+
+    /// <summary>색·오프셋이 있는 삼각형 묶음. 메시로 올리거나(Upload) 바로 그린다(DrawImmediate).</summary>
+    private sealed class TriBatch
+    {
+        private GVec2[] _pts = new GVec2[256], _offs = new GVec2[256]; private Color[] _cols = new Color[256]; private int[] _idx = new int[512];
+        private int _np, _ni;
+        public int VertexCount => _np;
+        public void Clear() { _np = 0; _ni = 0; }
+        public int Begin(int vertexCount)
+        {
+            if (_np + vertexCount > _pts.Length)
+            {
+                int n = Math.Max(_pts.Length * 2, _np + vertexCount);
+                Array.Resize(ref _pts, n); Array.Resize(ref _cols, n); Array.Resize(ref _offs, n);
+            }
+            int b = _np; _np += vertexCount; return b;
+        }
+        public void Set(int i, GVec2 p, Color c, GVec2 off = default) { _pts[i] = p; _cols[i] = c; _offs[i] = off; }
+        public void Tri(int a, int b, int c)
+        {
+            if (_ni + 3 > _idx.Length) Array.Resize(ref _idx, Math.Max(_idx.Length * 2, _ni + 3));
+            _idx[_ni++] = a; _idx[_ni++] = b; _idx[_ni++] = c;
+        }
+        public void SetColorRange(int start, int count, Color c) { for (int i = 0; i < count; i++) _cols[start + i] = c; }
+        public void Quad(int b) { Tri(b, b + 1, b + 2); Tri(b, b + 2, b + 3); }
+        /// <summary>화면 공간 사각형(즉시 그리기용).</summary>
+        public void Rect(GVec2 center, float r, Color c)
+        {
+            int b = Begin(4);
+            Set(b, center + new GVec2(-r, -r), c); Set(b + 1, center + new GVec2(r, -r), c); Set(b + 2, center + new GVec2(r, r), c); Set(b + 3, center + new GVec2(-r, r), c);
+            Quad(b);
+        }
+        /// <summary>UV 공간 중심 + 픽셀 반지름 오프셋 사각형(셰이더가 1/줌을 곱한다).</summary>
+        public void OffsetRect(GVec2 center, float r, Color c)
+        {
+            int b = Begin(4);
+            Set(b, center, c, new GVec2(-r, -r)); Set(b + 1, center, c, new GVec2(r, -r)); Set(b + 2, center, c, new GVec2(r, r)); Set(b + 3, center, c, new GVec2(-r, r));
+            Quad(b);
+        }
+        /// <summary>UV 공간 선분 a→b를 픽셀 굵기 w의 사각형으로(오프셋 = 수직 방향 × w/2 픽셀).</summary>
+        public void OffsetLine(GVec2 a, GVec2 b, float w, Color c)
+        {
+            var d = b - a; float len = d.Length();
+            var n = len > 0 ? new GVec2(-d.Y, d.X) / len * (w * 0.5f) : GVec2.Zero;
+            int i = Begin(4);
+            Set(i, a, c, n); Set(i + 1, b, c, n); Set(i + 2, b, c, -n); Set(i + 3, a, c, -n);
+            Quad(i);
+        }
+        public void DrawImmediate(Rid item)
+        {
+            if (_ni == 0) return;
+            RenderingServer.CanvasItemAddTriangleArray(item, new ReadOnlySpan<int>(_idx, 0, _ni), new ReadOnlySpan<GVec2>(_pts, 0, _np), new ReadOnlySpan<Color>(_cols, 0, _np),
+                ReadOnlySpan<GVec2>.Empty, ReadOnlySpan<int>.Empty, ReadOnlySpan<float>.Empty, default, -1);
+        }
+        /// <summary>메시 RID의 내용을 이 묶음으로 바꾼다(정점 0이면 비움).</summary>
+        public void Upload(Rid mesh)
+        {
+            RenderingServer.MeshClear(mesh);
+            if (_ni == 0) return;
+            var arr = new Godot.Collections.Array(); arr.Resize((int)RenderingServer.ArrayType.Max);
+            arr[(int)RenderingServer.ArrayType.Vertex] = _pts.AsSpan(0, _np).ToArray();
+            arr[(int)RenderingServer.ArrayType.Color] = _cols.AsSpan(0, _np).ToArray();
+            arr[(int)RenderingServer.ArrayType.TexUV] = _offs.AsSpan(0, _np).ToArray();
+            arr[(int)RenderingServer.ArrayType.Index] = _idx.AsSpan(0, _ni).ToArray();
+            RenderingServer.MeshAddSurfaceFromArrays(mesh, RenderingServer.PrimitiveType.Triangles, arr);
+        }
+    }
+
+    /// <summary>선분 묶음(선분마다 색).</summary>
+    private sealed class LineBatch
+    {
+        public GVec2[] Pts = new GVec2[256]; private Color[] _cols = new Color[128];
+        public int Count;
+        public void Clear() => Count = 0;
+        public void Add(GVec2 a, GVec2 b, Color c)
+        {
+            if (Count >= _cols.Length) { Array.Resize(ref _cols, _cols.Length * 2); Array.Resize(ref Pts, _cols.Length * 2); }
+            Pts[2 * Count] = a; Pts[2 * Count + 1] = b; _cols[Count++] = c;
+        }
+        public Color ColorAt(int i) => _cols[i];
+        public ReadOnlySpan<GVec2> Points => new(Pts, 0, Count * 2);
+        public ReadOnlySpan<Color> Colors => new(_cols, 0, Count);
+    }
+
+    /// <summary>노드 하나의 그리기 캐시: UV 공간 메시(면 틴트/와이어/점) + 굵은 선 목록 + 점 플래그. 문서·선택·표시 옵션이 바뀔 때만 다시 만든다.</summary>
+    private sealed class NodeGeom
+    {
+        public UvTopology? Topo; public int Stamp = -1; public float Scale = -1;
+        public readonly Rid FaceMesh = RenderingServer.MeshCreate(), WireMesh = RenderingServer.MeshCreate(), PointMesh = RenderingServer.MeshCreate();
+        public int FaceVerts, WireVerts, PointVerts;
+        public int[] FaceStart = Array.Empty<int>(), FaceCount = Array.Empty<int>();
+        public Color[] FaceBase = Array.Empty<Color>();
+        // 면 호버: 메시 속성 버퍼에서 그 면 정점의 색 바이트만 바꾼다(전체 재업로드 없이)
+        public byte[]? Attr; public int AttrStride, ColorOffset, ColorSize; public byte[]? HoverColorBytes;
+        public int PatchedFace = -1;
+        public readonly LineBatch Border = new(), Selected = new();
+        public byte[] PtFlags = Array.Empty<byte>();
+        public void Free() { RenderingServer.FreeRid(FaceMesh); RenderingServer.FreeRid(WireMesh); RenderingServer.FreeRid(PointMesh); }
+    }
+
+    private const byte PtVisible = 1, PtSelected = 2, PtPinned = 4;
+    private readonly Dictionary<NodeId, NodeGeom> _geom = new();
+    private readonly List<NodeGeom> _geomList = new();
+    private readonly List<SceneNode> _geomTargets = new();
+    /// <summary>캐시 무효화 번호: 문서/선택/모드/표시 옵션/Isolate가 바뀌면 증가.</summary>
+    private int _geomStamp;
+    private void MarkGeomDirty() { _geomStamp++; QueueRedraw(); }
+
+    private readonly TriBatch _build = new(), _pxPoints = new();
+    private readonly LineBatch _pxLines = new();
+    private NVec2[] _faceUv = new NVec2[16];
+    private static readonly Color EdgeNormalCol = MathConvert.Rgb(0xdddddd), EdgeBorderCol = MathConvert.Rgb(0xffe034), PinCol = MathConvert.Rgb(0x2255ff);
+    private static readonly Color FaceSelCol = new(1f, 0.55f, 0f, 0.35f), FaceHoverCol = new(1f, 1f, 1f, 0.18f);
+
+    private void FreeGeometry() { foreach (var g in _geom.Values) g.Free(); _geom.Clear(); _geomList.Clear(); }
+
+    /// <summary>현재 대상 노드의 캐시를 최신으로 만들고(필요한 것만 다시 빌드) 면 호버 색을 반영한다. 레이어/덧그림 어디서 먼저 불려도 된다.</summary>
+    private List<NodeGeom> EnsureGeometry()
+    {
+        var sel = _shell.Document.Selection; float s = CubeApp.Instance.UiScale;
+        _geomTargets.Clear(); _geomTargets.AddRange(TargetNodes());
+        if (_geom.Count > _geomTargets.Count || _geom.Keys.Any(id => !_geomTargets.Exists(n => n.Id == id)))
+            foreach (var id in _geom.Keys.ToList()) if (!_geomTargets.Exists(n => n.Id == id)) { _geom[id].Free(); _geom.Remove(id); }
+        _geomList.Clear();
+        foreach (var node in _geomTargets)
+        {
+            var topo = Topo(node);
+            if (!_geom.TryGetValue(node.Id, out var g)) { g = new NodeGeom(); _geom[node.Id] = g; }
+            if (g.Stamp != _geomStamp || g.Scale != s || !ReferenceEquals(g.Topo, topo)) BuildGeom(g, node, topo, sel, s);
+            int want = -1;
+            if (sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id && hf.Component >= 0 && hf.Component < g.FaceStart.Length
+                && g.FaceStart[hf.Component] >= 0 && g.FaceBase[hf.Component] != FaceSelCol) want = hf.Component;
+            if (want != g.PatchedFace)
+            {
+                if (g.HoverColorBytes != null)
+                {
+                    if (g.PatchedFace >= 0) PatchFaceColor(g, g.PatchedFace, hover: false);
+                    if (want >= 0) PatchFaceColor(g, want, hover: true);
+                    g.PatchedFace = want;
+                }
+                else BuildGeom(g, node, topo, sel, s);   // 속성 버퍼를 직접 고칠 수 없으면 다시 빌드(호버 색을 구워 넣음)
+            }
+            _geomList.Add(g);
+        }
+        return _geomList;
+    }
+
+    private static void PatchFaceColor(NodeGeom g, int f, bool hover)
+    {
+        int start = g.FaceStart[f], n = g.FaceCount[f], stride = g.AttrStride;
+        var region = new byte[n * stride];
+        Buffer.BlockCopy(g.Attr!, start * stride, region, 0, region.Length);
+        if (hover) for (int i = 0; i < n; i++) Buffer.BlockCopy(g.HoverColorBytes!, 0, region, i * stride + g.ColorOffset, g.ColorSize);
+        RenderingServer.MeshSurfaceUpdateAttributeRegion(g.FaceMesh, 0, start * stride, region);
+    }
+
+    /// <summary>면 틴트/와이어/점 메시와 경계·선택 선 목록을 다시 만든다(예전 요소별 그리기와 같은 색·굵기·조건).</summary>
+    private void BuildGeom(NodeGeom g, SceneNode node, UvTopology topo, SelectionState sel, float s)
+    {
+        g.Topo = topo; g.Stamp = _geomStamp; g.Scale = s; g.PatchedFace = -1;
+        var m = node.Mesh!;
+        var selPts = SelectedPoints(node);
+        float[]? ratio = null;
+        if (_distortion)
+        {
+            if (!_distortionCache.TryGetValue(node.Id, out var dc) || dc.version != m.GeometryVersion) { dc = (m.GeometryVersion, UvOps.DistortionPerFace(m)); _distortionCache[node.Id] = dc; }
+            ratio = dc.ratio;
+        }
+        sel.Components.TryGetValue(node.Id, out var comps);
+        var selFaces = sel.Mode == SelectMode.Face ? comps?.Faces : null;
+        var selEdges = sel.Mode == SelectMode.Edge ? comps?.Edges : null;
+        // List<struct> 인덱서는 구조체(하프에지 48바이트)를 매번 복사하므로 스팬으로 읽는다
+        var hes = CollectionsMarshal.AsSpan(m.Hes); var faces = CollectionsMarshal.AsSpan(m.Faces); var edges = CollectionsMarshal.AsSpan(m.Edges);
+        bool iso = _isolate != null;
+        int hoverFace = sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id ? hf.Component : -1;
+
+        // 면 틴트
+        _build.Clear();
+        if (g.FaceStart.Length != faces.Length) { g.FaceStart = new int[faces.Length]; g.FaceCount = new int[faces.Length]; g.FaceBase = new Color[faces.Length]; }
+        for (int f = 0; f < faces.Length; f++)
+        {
+            g.FaceStart[f] = -1;
+            if (!faces[f].Alive || (iso && !FaceVisible(node.Id, f))) continue;
+            int n = 0, start = faces[f].HalfEdge, he = start;
+            do
+            {
+                if (n == _faceUv.Length) Array.Resize(ref _faceUv, n * 2);
+                _faceUv[n++] = hes[he].Uv0; he = hes[he].Next;
+            } while (he != start);
+            if (n < 3) continue;
+            var poly = new ReadOnlySpan<NVec2>(_faceUv, 0, n);
+            float area = 0;
+            for (int i = 0; i < n; i++) { var a = poly[i]; var b = poly[(i + 1) % n]; area += a.X * b.Y - b.X * a.Y; }
+            area *= 0.5f;
+            if (MathF.Abs(area) < 1e-12f) continue;   // 면적 0(퇴화) 면은 그리지 않음
+            Color col;
+            if (selFaces != null && selFaces.Contains(f)) col = FaceSelCol;
+            else if (ratio != null) { float rr = ratio[f]; col = rr < 1 ? new Color(1f, 0.3f, 0.3f, Math.Clamp((1 - rr) * 1.5f, 0.05f, 0.6f)) : new Color(0.3f, 0.5f, 1f, Math.Clamp((rr - 1) * 1.5f, 0.05f, 0.6f)); }
+            else if (_shaded) col = area >= 0 ? new Color(0.35f, 0.55f, 1f, 0.25f) : new Color(1f, 0.35f, 0.35f, 0.25f);
+            else col = new Color(0.6f, 0.75f, 1f, 0.08f);
+            g.FaceBase[f] = col;
+            int b0 = _build.Begin(n);
+            for (int i = 0; i < n; i++) _build.Set(b0 + i, new GVec2(poly[i].X, poly[i].Y), col);
+            g.FaceStart[f] = b0; g.FaceCount[f] = n;
+            if (n == 3 || IsConvex(poly)) { for (int i = 1; i + 1 < n; i++) _build.Tri(b0, b0 + i, b0 + i + 1); continue; }
+            // 오목 면: 큰 배율로 키워 삼각분할(작은 UV 값에서 엔진 epsilon에 걸리지 않게)
+            var tmp = new GVec2[n];
+            for (int i = 0; i < n; i++) tmp[i] = new GVec2(poly[i].X, poly[i].Y) * 1000f;
+            var tris = Geometry2D.TriangulatePolygon(tmp);
+            for (int t = 0; t + 2 < tris.Length; t += 3) _build.Tri(b0 + tris[t], b0 + tris[t + 1], b0 + tris[t + 2]);
+        }
+        int faceVerts = _build.VertexCount;
+        if (faceVerts > 0) { int sv = _build.Begin(1); _build.Set(sv, GVec2.Zero, FaceHoverCol); }   // 호버 색 바이트를 얻기 위한 표본 정점(인덱스 없음)
+        _build.Upload(g.FaceMesh);
+        g.FaceVerts = faceVerts;
+        CaptureFaceAttributes(g, faceVerts);
+        if (hoverFace >= 0 && hoverFace < faces.Length && g.FaceStart[hoverFace] >= 0 && g.FaceBase[hoverFace] != FaceSelCol)
+        {
+            if (g.HoverColorBytes != null) PatchFaceColor(g, hoverFace, hover: true);
+            else
+            {
+                // 패치 불가: 호버 색을 구워 다시 올린다
+                _build.SetColorRange(g.FaceStart[hoverFace], g.FaceCount[hoverFace], FaceHoverCol);
+                _build.Upload(g.FaceMesh);
+            }
+            g.PatchedFace = hoverFace;
+        }
+
+        // 엣지: 일반 와이어(메시) / 텍스처 경계·선택(굵은 선 목록, 선택이 경계보다 위). 양쪽 하프에지의 UV가 같으면(이음매 없음) 한 번만.
+        _build.Clear(); g.Border.Clear(); g.Selected.Clear();
+        float wire = 1f * s;
+        for (int e = 0; e < edges.Length; e++)
+        {
+            ref readonly var ed = ref edges[e];
+            if (!ed.Alive) continue;
+            bool esel = selEdges != null && selEdges.Contains(e);
+            bool border = (ed.Seam || ed.He1 < 0) && _texBorders;
+            bool same = ed.He0 >= 0 && ed.He1 >= 0 && hes[ed.He0].Uv0 == hes[hes[ed.He1].Next].Uv0 && hes[hes[ed.He0].Next].Uv0 == hes[ed.He1].Uv0;
+            bool drew = false;
+            for (int k = 0; k < 2; k++)
+            {
+                int he = k == 0 ? ed.He0 : ed.He1;
+                if (he < 0 || (iso && !FaceVisible(node.Id, hes[he].Face))) continue;
+                if (same && drew) continue;
+                drew = true;
+                var ua = hes[he].Uv0; var ub = hes[hes[he].Next].Uv0;
+                var a = new GVec2(ua.X, ua.Y); var b = new GVec2(ub.X, ub.Y);
+                if (esel) g.Selected.Add(a, b, MeshView.EdgeSelected);
+                else if (border) g.Border.Add(a, b, EdgeBorderCol);
+                else _build.OffsetLine(a, b, wire, EdgeNormalCol);
+            }
+        }
+        g.WireVerts = _build.VertexCount;
+        _build.Upload(g.WireMesh);
+
+        // UV 점(파랑, 선택 빨강·크게, 핀 = 진파랑 테두리)
+        _build.Clear();
+        var points = CollectionsMarshal.AsSpan(topo.Points);
+        if (g.PtFlags.Length != points.Length) g.PtFlags = new byte[points.Length];
+        bool allSel = selPts.Count == points.Length;
+        for (int i = 0; i < points.Length; i++)
+        {
+            var pt = points[i];
+            bool vis = true;
+            if (iso) { vis = false; foreach (int h in pt.HalfEdges) if (FaceVisible(node.Id, hes[h].Face)) { vis = true; break; } }
+            bool ps = allSel || (selPts.Count > 0 && selPts.Contains(i));
+            g.PtFlags[i] = (byte)((vis ? PtVisible : 0) | (ps ? PtSelected : 0) | (pt.Pinned ? PtPinned : 0));
+            if (!vis) continue;
+            float r = (ps ? 3.5f : 2.5f) * s;
+            var p = new GVec2(pt.Uv.X, pt.Uv.Y);
+            if (pt.Pinned) _build.OffsetRect(p, r + 2 * s, PinCol);
+            _build.OffsetRect(p, r, ps ? MeshView.UvSelected : MeshView.UvNormal);
+        }
+        g.PointVerts = _build.VertexCount;
+        _build.Upload(g.PointMesh);
+    }
+
+    /// <summary>면 메시의 속성 버퍼(색)를 복사해 두고 마지막 표본 정점에서 호버 색 바이트를 얻는다. 형식을 알 수 없으면 패치를 끈다.</summary>
+    private static void CaptureFaceAttributes(NodeGeom g, int faceVerts)
+    {
+        g.Attr = null; g.HoverColorBytes = null;
+        if (faceVerts == 0) return;
+        try
+        {
+            var surf = RenderingServer.MeshGetSurface(g.FaceMesh, 0);
+            var fmt = (RenderingServer.ArrayFormat)surf["format"].AsInt64();
+            int vc = surf["vertex_count"].AsInt32();
+            var attr = surf["attribute_data"].AsByteArray();
+            int stride = (int)RenderingServer.MeshSurfaceGetFormatAttributeStride(fmt, vc);
+            int colOff = (int)RenderingServer.MeshSurfaceGetFormatOffset(fmt, vc, (int)RenderingServer.ArrayType.Color);
+            int uvOff = (int)RenderingServer.MeshSurfaceGetFormatOffset(fmt, vc, (int)RenderingServer.ArrayType.TexUV);
+            int colSize = uvOff > colOff ? uvOff - colOff : stride - colOff;
+            if (vc != faceVerts + 1 || stride <= 0 || colOff < 0 || colSize <= 0 || colOff + colSize > stride || attr.Length < vc * stride) return;
+            var hover = new byte[colSize];
+            Buffer.BlockCopy(attr, (vc - 1) * stride + colOff, hover, 0, colSize);
+            g.Attr = attr; g.AttrStride = stride; g.ColorOffset = colOff; g.ColorSize = colSize; g.HoverColorBytes = hover;
+        }
+        catch (Exception) { g.Attr = null; g.HoverColorBytes = null; }
+    }
+
+    /// <summary>UV 공간 볼록 판정(외적 부호가 모두 같으면 볼록; 문턱값은 면 크기에 비례).</summary>
+    private static bool IsConvex(ReadOnlySpan<NVec2> p)
+    {
+        int n = p.Length; bool pos = false, neg = false;
+        float ext = 0; for (int i = 0; i < n; i++) ext = MathF.Max(ext, NVec2.DistanceSquared(p[i], p[(i + 1) % n]));
+        float eps = ext * 1e-6f;
+        for (int i = 0; i < n; i++)
+        {
+            var a = p[i]; var b = p[(i + 1) % n]; var c = p[(i + 2) % n];
+            float cr = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
+            if (cr > eps) pos = true; else if (cr < -eps) neg = true;
+            if (pos && neg) return false;
+        }
+        return true;
     }
 
     private static readonly Color AxisX = MathConvert.Rgb(0xff2a2a), AxisY = MathConvert.Rgb(0x5aff2a), AxisC = MathConvert.Rgb(0x6ad0ff), Active = MathConvert.Rgb(0xffff00);
@@ -430,16 +853,9 @@ public partial class UvCanvas : Control
         string tool = _shell.Tools.Current!.Id;
         if (tool == "rotate") return MathF.Abs(px.DistanceTo(c) - len) <= th ? Part.Ring : Part.None;
         if (px.DistanceTo(c) <= 9 * s) return Part.Center;
-        if (Geometry2D.GetClosestPointToSegment(px, c, c + new GVec2(len + 6 * s, 0)).DistanceTo(px) <= th) return Part.X;
-        if (Geometry2D.GetClosestPointToSegment(px, c, c - new GVec2(0, len + 6 * s)).DistanceTo(px) <= th) return Part.Y;
+        if (SegDist(px, c, c + new GVec2(len + 6 * s, 0)) <= th) return Part.X;
+        if (SegDist(px, c, c - new GVec2(0, len + 6 * s)) <= th) return Part.Y;
         return Part.None;
-    }
-
-    private static float PolygonArea(GVec2[] p)
-    {
-        float a = 0;
-        for (int i = 0; i < p.Length; i++) { var q = p[(i + 1) % p.Length]; a += p[i].X * q.Y - q.X * p[i].Y; }
-        return a * 0.5f;
     }
 
     private Texture2D? MappedTexture()
@@ -451,13 +867,21 @@ public partial class UvCanvas : Control
     /// <summary>Pixel Snap 기준 해상도(매핑 텍스처 크기, 없으면 체커 512).</summary>
     private int ImagePixels() { var t = MappedTexture(); return t != null ? Math.Max(t.GetWidth(), 1) : 512; }
 
+    /// <summary>선분이 사각형과 겹치는지(Liang–Barsky 클리핑).</summary>
     private static bool RectIntersectsSegment(Rect2 r, GVec2 a, GVec2 b)
     {
         if (r.HasPoint(a) || r.HasPoint(b)) return true;
-        var p0 = r.Position; var p1 = r.End;
-        var corners = new[] { p0, new GVec2(p1.X, p0.Y), p1, new GVec2(p0.X, p1.Y) };
-        for (int i = 0; i < 4; i++) if (Geometry2D.SegmentIntersectsSegment(a, b, corners[i], corners[(i + 1) % 4]).VariantType != Variant.Type.Nil) return true;
-        return false;
+        var d = b - a; float t0 = 0, t1 = 1;
+        bool Clip(float p, float q, ref float lo, ref float hi)
+        {
+            if (p == 0) return q >= 0;
+            float t = q / p;
+            if (p < 0) { if (t > hi) return false; if (t > lo) lo = t; }
+            else { if (t < lo) return false; if (t < hi) hi = t; }
+            return true;
+        }
+        return Clip(-d.X, a.X - r.Position.X, ref t0, ref t1) && Clip(d.X, r.End.X - a.X, ref t0, ref t1)
+            && Clip(-d.Y, a.Y - r.Position.Y, ref t0, ref t1) && Clip(d.Y, r.End.Y - a.Y, ref t0, ref t1);
     }
 
     private static Rect2 RectFrom(GVec2 a, GVec2 b)
@@ -521,14 +945,14 @@ public partial class UvCanvas : Control
                     else if (_navButton == MouseButton.Right) ZoomAt(_pressPos == GVec2.Zero ? Size / 2 : _pressPos, MathF.Exp((d.X - d.Y) * 0.004f));
                     QueueRedraw(); AcceptEvent(); return;
                 }
-                if (IsBrushTool) { _brushPos = mm.Position; QueueRedraw(); }
+                if (IsBrushTool) { _brushPos = mm.Position; QueueOverlayRedraw(); }
                 if (_cutSewPainting) { CutSewAt(mm.Position); AcceptEvent(); return; }
                 if (_brushing) { ApplyBrush(mm.Position); AcceptEvent(); return; }
                 if (_dragging) { UpdateTransform(mm.Position); AcceptEvent(); return; }
                 if (_pressed)
                 {
                     if (!_marquee && (mm.Position - _pressPos).Length() >= 4 * s) _marquee = true;
-                    if (_marquee) { _marqueeEnd = mm.Position; QueueRedraw(); }
+                    if (_marquee) { _marqueeEnd = mm.Position; QueueOverlayRedraw(); }
                     AcceptEvent(); return;
                 }
                 UpdateHover(mm.Position);
@@ -544,15 +968,15 @@ public partial class UvCanvas : Control
 
     public override void _Notification(int what)
     {
-        if (what == (int)NotificationPredelete) { Unsubscribe(); return; }
-        if (what == NotificationMouseExit) { if (_hover != null || _hoverPart != Part.None || _brushPos != null) { _hover = null; _hoverPart = Part.None; _brushPos = null; QueueRedraw(); } }
+        if (what == (int)NotificationPredelete) { Unsubscribe(); FreeGeometry(); return; }
+        if (what == NotificationMouseExit) { if (_hover != null || _hoverPart != Part.None || _brushPos != null) { _hover = null; _hoverPart = Part.None; _brushPos = null; QueueOverlayRedraw(); } }
     }
 
     private void UpdateHover(GVec2 px)
     {
         var part = HitGizmo(px);
         var hit = part == Part.None ? Pick(px) : null;
-        if (part != _hoverPart || !Nullable.Equals(hit, _hover)) { _hoverPart = part; _hover = hit; QueueRedraw(); }
+        if (part != _hoverPart || !Nullable.Equals(hit, _hover)) { _hoverPart = part; _hover = hit; QueueOverlayRedraw(); }
     }
 
     public override void _UnhandledKeyInput(InputEvent e)
@@ -608,39 +1032,96 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 선택
 
-    private static List<GVec2> FacePoly(PolyMesh m, int f, Func<NVec2, GVec2> toPx)
+    // 피킹 도우미는 모두 관리 코드(엔진 Geometry2D 호출·면마다 배열 할당은 마우스 이동마다 수만 번 불려 느렸다)
+
+    private static float SegDist(GVec2 p, GVec2 a, GVec2 b)
     {
-        var poly = new List<GVec2>();
+        var ab = b - a; float l2 = ab.LengthSquared();
+        float t = l2 > 0 ? Math.Clamp((p - a).Dot(ab) / l2, 0f, 1f) : 0f;
+        return (a + ab * t).DistanceTo(p);
+    }
+
+    /// <summary>UV 좌표가 면의 UV 다각형 안에 있는지(짝홀 규칙).</summary>
+    private static bool FaceContains(PolyMesh m, int f, NVec2 uv)
+    {
+        var hes = CollectionsMarshal.AsSpan(m.Hes);
+        bool inside = false;
         int start = m.Faces[f].HalfEdge, he = start;
-        do { poly.Add(toPx(m.Hes[he].Uv0)); he = m.Hes[he].Next; } while (he != start);
-        return poly;
+        do
+        {
+            int nx = hes[he].Next;
+            var a = hes[he].Uv0; var b = hes[nx].Uv0;
+            if ((a.Y > uv.Y) != (b.Y > uv.Y) && uv.X < (b.X - a.X) * (uv.Y - a.Y) / (b.Y - a.Y) + a.X) inside = !inside;
+            he = nx;
+        } while (he != start);
+        return inside;
+    }
+
+    /// <summary>best보다 가깝고 maxPx 이내인 가장 가까운 UV 점(없으면 -1). UV 공간 상자 검사로 먼 점은 바로 건너뛴다.</summary>
+    private int NearestPoint(UvTopology topo, GVec2 px, float maxPx, ref float best)
+    {
+        var uv = PxToUv(px); float r = maxPx / _zoom; int hit = -1;
+        var pts = CollectionsMarshal.AsSpan(topo.Points);
+        for (int i = 0; i < pts.Length; i++)
+        {
+            var dv = pts[i].Uv - uv;
+            if (MathF.Abs(dv.X) > r || MathF.Abs(dv.Y) > r) continue;
+            float d = dv.Length() * _zoom;
+            if (d <= maxPx && d < best) { best = d; hit = i; }
+        }
+        return hit;
+    }
+
+    /// <summary>best보다 가깝고 maxPx 이내인 가장 가까운 엣지와 그 하프에지(없으면 -1, -1).</summary>
+    private (int edge, int he) NearestEdge(PolyMesh m, GVec2 px, float maxPx, ref float best)
+    {
+        var uv = PxToUv(px); float r = maxPx / _zoom; int hitE = -1, hitH = -1;
+        var hes = CollectionsMarshal.AsSpan(m.Hes); var edges = CollectionsMarshal.AsSpan(m.Edges);
+        for (int e = 0; e < edges.Length; e++)
+        {
+            ref readonly var ed = ref edges[e]; if (!ed.Alive) continue;
+            for (int k = 0; k < 2; k++)
+            {
+                int he = k == 0 ? ed.He0 : ed.He1;
+                if (he < 0) continue;
+                var a = hes[he].Uv0; var b = hes[hes[he].Next].Uv0;
+                if (MathF.Min(a.X, b.X) - r > uv.X || MathF.Max(a.X, b.X) + r < uv.X || MathF.Min(a.Y, b.Y) - r > uv.Y || MathF.Max(a.Y, b.Y) + r < uv.Y) continue;
+                var ab = b - a; float l2 = ab.LengthSquared();
+                float t = l2 > 0 ? Math.Clamp(NVec2.Dot(uv - a, ab) / l2, 0f, 1f) : 0f;
+                float d = NVec2.Distance(a + ab * t, uv) * _zoom;
+                if (d <= maxPx && d < best) { best = d; hitE = e; hitH = he; }
+            }
+        }
+        return (hitE, hitH);
+    }
+
+    /// <summary>커서 아래 면(첫 번째, 없으면 -1).</summary>
+    private int FaceAt(PolyMesh m, GVec2 px)
+    {
+        var uv = PxToUv(px);
+        var faces = CollectionsMarshal.AsSpan(m.Faces);
+        for (int f = 0; f < faces.Length; f++) if (faces[f].Alive && FaceContains(m, f, uv)) return f;
+        return -1;
+    }
+
+    private GVec2 FaceCenterPx(PolyMesh m, int f)
+    {
+        var c = NVec2.Zero; int n = 0;
+        int start = m.Faces[f].HalfEdge, he = start;
+        do { c += m.Hes[he].Uv0; n++; he = m.Hes[he].Next; } while (he != start);
+        return UvToPx(c / n);
     }
 
     private SelItem? PickIsland(GVec2 px, SceneNode node, ref float best)
     {
         float s = CubeApp.Instance.UiScale;
         var m = node.Mesh!; var topo = Topo(node);
-        SelItem? hit = null;
-        for (int i = 0; i < topo.Points.Count; i++) { float d = UvToPx(topo.Points[i].Uv).DistanceTo(px); if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); } }
-        if (hit != null) return hit;
-        for (int e = 0; e < m.EdgeCount; e++)
-        {
-            var ed = m.Edges[e]; if (!ed.Alive) continue;
-            for (int k = 0; k < 2; k++)
-            {
-                int he = k == 0 ? ed.He0 : ed.He1;
-                if (he < 0) continue;
-                var a = UvToPx(m.Hes[he].Uv0); var b = UvToPx(m.Hes[m.Hes[he].Next].Uv0);
-                float d = Geometry2D.GetClosestPointToSegment(px, a, b).DistanceTo(px);
-                if (d <= 6 * s && d < best) { best = d; hit = new SelItem(node.Id, topo.HeToPoint[he]); }
-            }
-        }
-        if (hit != null) return hit;
-        for (int f = 0; f < m.FaceCount; f++)
-        {
-            if (!m.Faces[f].Alive) continue;
-            if (Geometry2D.IsPointInPolygon(px, FacePoly(m, f, UvToPx).ToArray())) { best = 0; return new SelItem(node.Id, topo.HeToPoint[m.Faces[f].HalfEdge]); }
-        }
+        int pi = NearestPoint(topo, px, 8 * s, ref best);
+        if (pi >= 0) return new SelItem(node.Id, pi);
+        var (_, ehe) = NearestEdge(m, px, 6 * s, ref best);
+        if (ehe >= 0) return new SelItem(node.Id, topo.HeToPoint[ehe]);
+        int f = FaceAt(m, px);
+        if (f >= 0) { best = 0; return new SelItem(node.Id, topo.HeToPoint[m.Faces[f].HalfEdge]); }
         return null;
     }
 
@@ -650,8 +1131,8 @@ public partial class UvCanvas : Control
         float s = CubeApp.Instance.UiScale; float best = 8 * s; (SceneNode, int)? hit = null;
         foreach (var node in TargetNodes())
         {
-            var topo = Topo(node);
-            for (int i = 0; i < topo.Points.Count; i++) { float d = UvToPx(topo.Points[i].Uv).DistanceTo(px); if (d < best) { best = d; hit = (node, i); } }
+            int i = NearestPoint(Topo(node), px, 8 * s, ref best);
+            if (i >= 0) hit = (node, i);
         }
         return hit;
     }
@@ -661,18 +1142,8 @@ public partial class UvCanvas : Control
         float s = CubeApp.Instance.UiScale; float best = 6 * s; (SceneNode, int)? hit = null;
         foreach (var node in TargetNodes())
         {
-            var m = node.Mesh!;
-            for (int e = 0; e < m.EdgeCount; e++)
-            {
-                var ed = m.Edges[e]; if (!ed.Alive) continue;
-                for (int k = 0; k < 2; k++)
-                {
-                    int he = k == 0 ? ed.He0 : ed.He1;
-                    if (he < 0) continue;
-                    float d = Geometry2D.GetClosestPointToSegment(px, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0)).DistanceTo(px);
-                    if (d < best) { best = d; hit = (node, e); }
-                }
-            }
+            var (e, _) = NearestEdge(node.Mesh!, px, 6 * s, ref best);
+            if (e >= 0) hit = (node, e);
         }
         return hit;
     }
@@ -689,28 +1160,14 @@ public partial class UvCanvas : Control
             switch (sel.Mode)
             {
                 case SelectMode.Uv:
-                    for (int i = 0; i < topo.Points.Count; i++) { float d = UvToPx(topo.Points[i].Uv).DistanceTo(px); if (d <= 8 * s && d < best) { best = d; hit = new SelItem(node.Id, i); } }
+                    { int i = NearestPoint(topo, px, 8 * s, ref best); if (i >= 0) hit = new SelItem(node.Id, i); }
                     break;
                 case SelectMode.Edge:
-                    for (int e = 0; e < m.EdgeCount; e++)
-                    {
-                        var ed = m.Edges[e]; if (!ed.Alive) continue;
-                        for (int k = 0; k < 2; k++)
-                        {
-                            int he = k == 0 ? ed.He0 : ed.He1;
-                            if (he < 0) continue;
-                            float d = Geometry2D.GetClosestPointToSegment(px, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0)).DistanceTo(px);
-                            if (d <= 6 * s && d < best) { best = d; hit = new SelItem(node.Id, e); }
-                        }
-                    }
+                    { var (e, _) = NearestEdge(m, px, 6 * s, ref best); if (e >= 0) hit = new SelItem(node.Id, e); }
                     break;
                 case SelectMode.Face:
                 case SelectMode.Object:
-                    for (int f = 0; f < m.FaceCount; f++)
-                    {
-                        if (!m.Faces[f].Alive) continue;
-                        if (Geometry2D.IsPointInPolygon(px, FacePoly(m, f, UvToPx).ToArray())) { hit = new SelItem(node.Id, sel.Mode == SelectMode.Face ? f : -1); best = 0; break; }
-                    }
+                    { int f = FaceAt(m, px); if (f >= 0) { hit = new SelItem(node.Id, sel.Mode == SelectMode.Face ? f : -1); best = 0; } }
                     break;
             }
         }
@@ -756,10 +1213,12 @@ public partial class UvCanvas : Control
                             for (int f = 0; f < m.FaceCount; f++)
                             {
                                 if (!m.Faces[f].Alive) continue;
-                                var poly = FacePoly(m, f, UvToPx);
-                                var c = GVec2.Zero; foreach (var p in poly) c += p; c /= poly.Count;
-                                bool inside = r.HasPoint(c);
-                                for (int i = 0; i < poly.Count && !inside; i++) if (RectIntersectsSegment(r, poly[i], poly[(i + 1) % poly.Count])) inside = true;
+                                bool inside = r.HasPoint(FaceCenterPx(m, f));
+                                if (!inside)
+                                {
+                                    int start = m.Faces[f].HalfEdge, he = start;
+                                    do { int nx = m.Hes[he].Next; if (RectIntersectsSegment(r, UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[nx].Uv0))) { inside = true; break; } he = nx; } while (he != start);
+                                }
                                 if (inside) shells.Add(topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell);
                             }
                         foreach (int sh in shells) foreach (int p in topo.PointsInShell(sh)) items.Add(new SelItem(node.Id, p));
@@ -778,9 +1237,7 @@ public partial class UvCanvas : Control
                     for (int f = 0; f < m.FaceCount; f++)
                     {
                         if (!m.Faces[f].Alive) continue;
-                        var poly = FacePoly(m, f, UvToPx);
-                        var c = GVec2.Zero; foreach (var p in poly) c += p;
-                        if (r.HasPoint(c / poly.Count)) items.Add(new SelItem(node.Id, f));
+                        if (r.HasPoint(FaceCenterPx(m, f))) items.Add(new SelItem(node.Id, f));
                     }
                     break;
             }
@@ -942,11 +1399,12 @@ public partial class UvCanvas : Control
 
     private (SceneNode node, int point)? PickFacePoint(GVec2 px)
     {
+        var uv = PxToUv(px);
         foreach (var node in TargetNodes())
         {
             var m = node.Mesh!; var topo = Topo(node);
             for (int f = 0; f < m.FaceCount; f++)
-                if (m.Faces[f].Alive && Geometry2D.IsPointInPolygon(px, FacePoly(m, f, UvToPx).ToArray())) return (node, topo.HeToPoint[m.Faces[f].HalfEdge]);
+                if (m.Faces[f].Alive && FaceContains(m, f, uv)) return (node, topo.HeToPoint[m.Faces[f].HalfEdge]);
         }
         return null;
     }

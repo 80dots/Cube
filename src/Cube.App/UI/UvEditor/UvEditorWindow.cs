@@ -22,7 +22,7 @@ public partial class UvEditorWindow : FloatingPanel
         float s = CubeApp.Instance.UiScale;
         Title = "UV Editor";
         // 도크에 붙거나 떨어지면 캔버스 크기가 바뀌므로 레이아웃이 끝난 뒤 다시 맞춘다
-        DockChanged += () => GetTree().CreateTimer(0.05).Timeout += () => { if (IsInstanceValid(Canvas)) Canvas.FrameAll(); };
+        DockChanged += () => GetTree().CreateTimer(0.2).Timeout += () => { if (IsInstanceValid(Canvas)) Canvas.FrameAll(); }; // 도크 폭·행 경계 적용(타이머)이 끝난 뒤
         var host = shell.GetViewport().GetVisibleRect().Size;
         Size = new Vector2(MathF.Min(860 * s, host.X * 0.8f), MathF.Min(720 * s, host.Y * 0.85f));
         MinPanelSize = new Vector2(520 * s, 390 * s);

@@ -15,6 +15,9 @@ namespace Cube.App.UI;
 /// ③ 구성 이력 파라미터가 있는 명령(조작기 이동/회전/스케일, Insert Edge Loop, Crease Tool, Extrude Thickness 드래그 등): EditHistoryCommand로 다시 계산.
 /// ④ 오브젝트 이동/회전/스케일(TransformNodesCommand): Move / Rotate / Scale 델타.
 /// 그 밖의 명령은 이름만 보여 준다. 선택을 바꾸거나 Undo/Redo로 그 명령이 마지막이 아니게 되면 사라진다.
+/// ①의 기능 바로 뒤에 조작기 드래그(Extrude 두께, 컴포넌트 이동/회전/스케일)가 이어지면 그 드래그를 "후속 단계"로 묶어
+/// 원래 옵션 필드를 그대로 두고 아래에 드래그 값 필드를 더한다. 옵션을 바꾸면 후속 단계와 기능을 되돌린 뒤 기능을 새 옵션으로 다시 실행하고,
+/// 후속 단계를 새 선택(예: 새 캡 면)에 같은 값으로 다시 적용한다. 드래그 값을 바꾸면 그 단계부터 다시 적용한다.
 /// </summary>
 public partial class ActionPopup : PanelContainer
 {
@@ -36,6 +39,17 @@ public partial class ActionPopup : PanelContainer
     private HistoryParams? _historyParams;
     private TransformNodesCommand? _transform; // ④
     private NVec3 _tMove, _tRotate, _tScale = NVec3.One;
+
+    /// <summary>① 기능 뒤에 이어진 조작기 드래그(후속 단계).</summary>
+    private sealed class FollowUp
+    {
+        public string Name = "";
+        public HistoryParams Params = new();
+        public bool Thickness;                                   // Extrude Thickness(면별 법선 오프셋)
+        public readonly List<(NodeId node, ComponentTransformOp? op)> Targets = new();
+        public ICommand? Command;                                // 이 단계가 넣은 명령(Undo 대상)
+    }
+    private readonly List<FollowUp> _follow = new();
 
     private bool _busy;                  // 팝업이 스스로 명령을 넣는 중
     private (string id, ICommand? last)? _invoking;
@@ -100,6 +114,7 @@ public partial class ActionPopup : PanelContainer
         if (ReferenceEquals(last, _command)) return;
         // 새 명령이 들어왔는지(Undo/Redo가 아니라): 컨텍스트 명령이 더 이상 마지막이 아니면 우선 숨기고, 새 명령이면 그 명령으로
         if (last == null || last is SelectionCommand || _shell.Document.Undo.RedoCount > 0) { Hide(); SnapshotHistoryCounts(); return; }
+        if (Visible && _kind == Kind.Option && TryAppendFollowUp(last)) { SnapshotHistoryCounts(); Rebuild(); return; }
         ShowFor(last, null);
     }
 
@@ -130,7 +145,7 @@ public partial class ActionPopup : PanelContainer
     private void ShowFor(ICommand cmd, string? actionId)
     {
         _command = cmd;
-        _kind = Kind.None; _optionId = null; _extrude.Clear(); _historyEntries.Clear(); _historyParams = null; _transform = null;
+        _kind = Kind.None; _optionId = null; _extrude.Clear(); _historyEntries.Clear(); _historyParams = null; _transform = null; _follow.Clear();
         _title = cmd.Name;
         var newEntries = NewHistoryEntries();
         SnapshotHistoryCounts();
@@ -235,6 +250,19 @@ public partial class ActionPopup : PanelContainer
                             () => field.Kind == OptionField.FieldKind.Vector3 ? Conv(values.Vec(field.Key)) : new NVec3(values.Float(field.Key), 0, 0),
                             v => { if (field.Kind == OptionField.FieldKind.Vector3) values.Set(field.Key, new Vector3(v.X, v.Y, v.Z)); else values.Set(field.Key, v.X); ReapplyOption(); }, s);
                         }
+                    // 후속 단계(조작기 드래그) 값
+                    for (int i = 0; i < _follow.Count; i++)
+                    {
+                        var fu = _follow[i]; int index = i;
+                        foreach (var p in fu.Params.Items)
+                        {
+                            var prm = p;
+                            var type = prm.Kind switch { HistoryParamKind.Int => FieldType.Int, HistoryParamKind.Bool => FieldType.Bool, HistoryParamKind.Vector3 => FieldType.Vec3, _ => FieldType.Float };
+                            string label = fu.Params.Items.Count == 1 && prm.Name == fu.Name.Split(' ').Last() ? fu.Name : $"{fu.Name}: {prm.Name}";
+                            AddField(label, type, prm.Min, prm.Max, prm.Step, null, () => prm.Value, v => { prm.Value = v; ReapplyFollowUps(index); }, s);
+                        }
+                    }
+                    if (_follow.Count > 0) _note.Text = "Then: " + string.Join(", ", _follow.Select(f => f.Name));
                     break;
                 }
             case Kind.Extrude:
@@ -336,12 +364,14 @@ public partial class ActionPopup : PanelContainer
         _busy = true;
         try
         {
+            if (!UndoFollowUps(0)) return;
             if (!UndoOwn()) return;
             var before = _shell.Document.Undo.LastCommand;
             SnapshotHistoryCounts();
             _shell.Actions.Invoke(_applyId ?? _optionId + "Apply");
             var last = _shell.Document.Undo.LastCommand;
             _command = ReferenceEquals(last, before) ? null : last;
+            if (_command != null && _follow.Count > 0) { _baseCommand = _command; RedoFollowUps(0); }
             SnapshotHistoryCounts();
             if (_command == null) Hide();
         }
@@ -421,4 +451,85 @@ public partial class ActionPopup : PanelContainer
         }
         finally { _busy = false; }
     }
+
+    // ---------------------------------------------------------------- 후속 단계(기능 뒤 조작기 드래그)
+
+    private ICommand? _baseCommand; // ① 기능이 넣은 명령(후속 단계 아래)
+
+    /// <summary>새 명령이 조작기 드래그(두께/이동/회전/스케일)면 현재 ① 기능의 후속 단계로 붙인다.</summary>
+    private bool TryAppendFollowUp(ICommand last)
+    {
+        var moves = Flatten(last).ToList();
+        if (moves.Count == 0 || !moves.All(c => c is MoveVerticesCommand mv && mv.Params != null && (mv.Op != null || mv.Name == "Extrude Thickness"))) return false;
+        if (_follow.Count == 0) _baseCommand = _command;
+        var first = (MoveVerticesCommand)moves[0];
+        var fu = new FollowUp { Name = first.Name, Params = first.Params!.Clone(), Thickness = first.Name == "Extrude Thickness", Command = last };
+        foreach (MoveVerticesCommand mv in moves) fu.Targets.Add((mv.Node, mv.Op));
+        _follow.Add(fu);
+        _command = last;
+        return true;
+    }
+
+    /// <summary>후속 단계를 from부터 끝까지 되돌린다(각 단계 명령이 차례로 마지막이어야 한다).</summary>
+    private bool UndoFollowUps(int from)
+    {
+        var undo = _shell.Document.Undo;
+        for (int i = _follow.Count - 1; i >= from; i--)
+        {
+            var c = _follow[i].Command;
+            if (c == null) continue;
+            if (!ReferenceEquals(undo.LastCommand, c)) { _shell.HelpLine.Text = "Action Popup: the operation is no longer the last one."; Hide(); return false; }
+            undo.Undo();
+            _follow[i].Command = null;
+        }
+        _command = from == 0 ? _baseCommand : _follow[from - 1].Command;
+        return true;
+    }
+
+    /// <summary>후속 단계를 from부터 현재 선택(다시 실행한 기능의 결과)에 같은 값으로 다시 적용한다.</summary>
+    private void RedoFollowUps(int from)
+    {
+        var doc = _shell.Document; var sel = doc.Selection;
+        for (int i = from; i < _follow.Count; i++)
+        {
+            var fu = _follow[i];
+            var before = doc.Undo.LastCommand;
+            using (doc.Undo.BeginGroup(fu.Name))
+                foreach (var (node, op) in fu.Targets)
+                {
+                    var mesh = doc.Find(node)?.Mesh; if (mesh == null) continue;
+                    var comps = sel.GetComponents(node);
+                    if (fu.Thickness)
+                    {
+                        var faces = sel.Mode == SelectMode.Face ? comps.Faces.ToArray() : SelectionOps.Convert(mesh, comps, sel.Mode, SelectMode.Face).ToArray();
+                        if (Tools.ExtrudeThickness.Make(doc, node, faces, fu.Params.Float("Thickness")) is { } tc) doc.Undo.Push(tc);
+                        continue;
+                    }
+                    if (op == null) continue;
+                    var verts = (sel.Mode == SelectMode.Vertex ? comps.Verts : SelectionOps.Convert(mesh, comps, sel.Mode, SelectMode.Vertex)).Where(v => v >= 0 && v < mesh.VertexCount && mesh.Verts[v].Alive).Distinct().ToArray();
+                    if (verts.Length == 0) continue;
+                    var mat = op.LocalMatrix(fu.Params);
+                    var b = verts.Select(v => mesh.Verts[v].Position).ToArray();
+                    var a = b.Select(pp => NVec3.Transform(pp, mat)).ToArray();
+                    doc.Undo.Push(new MoveVerticesCommand(fu.Name, node, verts, b, a, op, fu.Params.Clone()));
+                }
+            var last = doc.Undo.LastCommand;
+            fu.Command = ReferenceEquals(last, before) ? null : last;
+            if (fu.Command != null) _command = fu.Command;
+        }
+    }
+
+    /// <summary>후속 단계 i의 값을 바꿨을 때: i부터 되돌리고 다시 적용한다.</summary>
+    private void ReapplyFollowUps(int index)
+    {
+        _busy = true;
+        try
+        {
+            if (!UndoFollowUps(index)) return;
+            RedoFollowUps(index);
+            SnapshotHistoryCounts();
+        }
+        finally { _busy = false; }
+    }
 }
+

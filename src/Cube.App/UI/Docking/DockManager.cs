@@ -7,10 +7,22 @@ public enum DockSideKind { Left, Right }
 /// <summary>도크 자리: 좌/우 도크와 그 안의 그룹 번호(위에서부터).</summary>
 public sealed record DockSlot(DockSideKind Side, int Group);
 
-/// <summary>좌/우 도크 영역: 위아래로 쌓인 탭 그룹(DockGroup)들. 그룹 사이 경계를 끌어 높이를, 도크와 뷰포트 사이 경계를 끌어 폭을 조절한다.</summary>
+/// <summary>
+/// 좌/우 도크 영역: 위아래로 쌓인 항목들. 항목은 탭 그룹(DockGroup) 하나이거나, 그룹 여러 개를 나란히 둔 행(DockRow)이다.
+/// 항목 사이 경계를 끌어 높이를, 행 안 경계를 끌어 나란한 그룹의 폭을, 도크와 뷰포트 사이 경계를 끌어 도크 폭을 조절한다.
+/// </summary>
 public partial class DockSide : VSplitContainer
 {
     public DockSideKind Kind;
+    /// <summary>위에서 아래 순서의 항목(DockGroup 또는 DockRow).</summary>
+    public List<Control> Items => GetChildren().OfType<Control>().Where(c => c is DockGroup or DockRow).ToList();
+    /// <summary>모든 그룹(행 안의 그룹 포함, 위→아래, 왼→오).</summary>
+    public List<DockGroup> Groups => Items.SelectMany(i => i is DockRow r ? r.Groups : new List<DockGroup> { (DockGroup)i }).ToList();
+}
+
+/// <summary>도크 안에서 탭 그룹 여러 개를 나란히(가로로) 놓는 행.</summary>
+public partial class DockRow : HSplitContainer
+{
     public List<DockGroup> Groups => GetChildren().OfType<DockGroup>().ToList();
 }
 
@@ -65,7 +77,8 @@ public partial class DockGroup : TabContainer
 
 /// <summary>
 /// Maya식 도킹: 떠 있는 패널(UV Editor, Material Editor, Outliner, Properties …)의 제목 바를 끌어 좌/우 도크에 놓으면 탭으로 붙는다.
-/// 그룹 위/아래 가장자리에 놓으면 그 위/아래에 새 그룹을 만들고, 뷰포트 왼쪽/오른쪽 가장자리에 놓으면 그 쪽 도크 맨 아래에 새 그룹을 만든다.
+/// 그룹을 세로로 3등분해 위쪽에 놓으면 위로 분할(새 창이 위), 가운데면 탭으로 추가, 아래쪽이면 아래로 분할(새 창이 아래)하고,
+/// 그룹의 왼쪽/오른쪽 가장자리에 놓으면 그 그룹은 그대로 두고 옆에 나란히 붙인다(DockRow). 도크가 비어 있을 때만 뷰포트 가장자리가 그 도크의 자리다.
 /// 레이아웃(그룹·탭 순서, 도크 폭, 떠 있는 패널 위치)은 Settings.Dock에 저장되어 다음 실행과 셸 재생성(UI 배율 변경) 때 복원된다.
 /// </summary>
 public partial class DockManager : Node
@@ -88,8 +101,8 @@ public partial class DockManager : Node
     private static float S => CubeApp.Instance.UiScale;
     private float SideMin => 120 * S;
 
-    public enum DropMode { Tab, Before, After, NewGroup }
-    public sealed record DropTarget(DockSideKind Side, int Group, DropMode Mode, Rect2 Highlight);
+    public enum DropMode { Tab, Before, After, LeftOf, RightOf, NewGroup }
+    public sealed record DropTarget(DockSideKind Side, DockGroup? Group, DropMode Mode, Rect2 Highlight);
 
     public void Setup(Shell shell, DockSide left, DockSide right, HSplitContainer mainSplit, HSplitContainer rightSplit)
     {
@@ -106,6 +119,8 @@ public partial class DockManager : Node
         _rightSplit.Dragged += _ => { _splitDirty = true; Callable.From(CaptureWidths).CallDeferred(); };
         left.Dragged += _ => _splitDirty = true;
         right.Dragged += _ => _splitDirty = true;
+        // 행(나란한 그룹) 경계 드래그도 저장: 행은 나중에 생기므로 트리에 들어올 때 연결
+        shell.GetTree().NodeAdded += n => { if (n is DockRow row && !row.HasMeta("dockHooked")) { row.SetMeta("dockHooked", true); row.Dragged += _ => _splitDirty = true; } };
     }
 
     public override void _ExitTree() { if (Instance == this) Instance = null; }
@@ -121,13 +136,42 @@ public partial class DockManager : Node
     {
         if (p.Docked) Undock(p, show: false);
         var side = SideOf(t.Side);
-        var groups = side.Groups;
+        var target = t.Group != null && IsInstanceValid(t.Group) && t.Group.IsInsideTree() ? t.Group : null;
         DockGroup g;
-        if (t.Mode == DropMode.Tab && t.Group >= 0 && t.Group < groups.Count) g = groups[t.Group];
+        if (t.Mode == DropMode.Tab && target != null) g = target;
+        else if (target != null && t.Mode is DropMode.LeftOf or DropMode.RightOf)
+        {
+            // 옆에 나란히: 대상 그룹이 행 안이면 그 행에 끼우고, 아니면 대상을 행으로 감싼다
+            g = NewGroup();
+            float keepW = target.Size.X; // 원래 그룹은 지금 폭을 유지하고 새 그룹이 늘어난 폭을 쓴다
+            if (target.GetParent() is DockRow row)
+            {
+                row.AddChild(g);
+                row.MoveChild(g, row.Groups.IndexOf(target) + (t.Mode == DropMode.RightOf ? 1 : 0));
+                row.SplitOffsets = new int[Math.Max(0, row.Groups.Count - 1)];
+            }
+            else
+            {
+                int idx = side.Items.IndexOf(target);
+                var newRow = new DockRow { Name = "DockRow", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
+                side.AddChild(newRow);
+                side.MoveChild(newRow, Math.Max(0, idx));
+                target.Reparent(newRow, keepGlobalTransform: false);
+                newRow.AddChild(g);
+                if (t.Mode == DropMode.LeftOf) newRow.MoveChild(g, 0);
+                newRow.SplitOffsets = new int[1];
+            }
+            Attach(p, g);
+            if (widen) WidenBy(side, p);
+            if (g.GetParent() is DockRow r3 && r3.Groups.Count == 2) KeepWidthDeferred(r3, target, keepW, 3);
+            return;
+        }
         else
         {
             g = NewGroup();
-            int idx = t.Mode switch { DropMode.Before => t.Group, DropMode.After => t.Group + 1, _ => groups.Count };
+            // 위/아래 분할: 대상이 행 안이면 그 행 전체의 위/아래에 넣는다
+            Control anchor = target?.GetParent() is DockRow r2 ? r2 : target!;
+            int idx = target == null ? side.Items.Count : side.Items.IndexOf(anchor) + (t.Mode == DropMode.After ? 1 : 0);
             side.AddChild(g);
             side.MoveChild(g, Math.Clamp(idx, 0, side.GetChildCount() - 1));
             ResetGroupHeights(side);
@@ -152,8 +196,7 @@ public partial class DockManager : Node
         g.SetTabTitle(idx, p.Title);
         g.CurrentTab = idx;
         p.Visible = true;
-        var side = (DockSide)g.GetParent();
-        p.LastDock = new DockSlot(side.Kind, side.Groups.IndexOf(g));
+        if (SideOfGroup(g) is { } side) p.LastDock = new DockSlot(side.Kind, side.Groups.IndexOf(g));
         UpdateSides();
     }
 
@@ -162,15 +205,10 @@ public partial class DockManager : Node
     {
         if (!p.Docked) return;
         var g = p.GetParent() as DockGroup;
-        var side = g?.GetParent() as DockSide;
+        var side = g == null ? null : SideOfGroup(g);
         if (g != null && side != null) p.LastDock = new DockSlot(side.Kind, side.Groups.IndexOf(g));
         g?.RemoveChild(p);
-        if (g != null && side != null && !g.Panels.Any())
-        {
-            side.RemoveChild(g);
-            g.QueueFree();
-            ResetGroupHeights(side);
-        }
+        if (g != null && side != null && !g.Panels.Any()) RemoveGroup(side, g);
         if (side != null && _widened.TryGetValue(side.Kind, out var w) && w.panel == p)
         {
             _widened.Remove(side.Kind);
@@ -212,8 +250,9 @@ public partial class DockManager : Node
     public bool Redock(FloatingPanel p)
     {
         if (p.LastDock is not { } slot) return false;
-        int n = SideOf(slot.Side).Groups.Count;
-        Dock(p, new DropTarget(slot.Side, slot.Group, slot.Group < n ? DropMode.Tab : DropMode.NewGroup, default), widen: false); // 다시 열 때는 사용자가 정한 폭 유지
+        var groups = SideOf(slot.Side).Groups;
+        var g = slot.Group >= 0 && slot.Group < groups.Count ? groups[slot.Group] : null;
+        Dock(p, new DropTarget(slot.Side, g, g != null ? DropMode.Tab : DropMode.NewGroup, default), widen: false); // 다시 열 때는 사용자가 정한 폭 유지
         SaveLayout();
         return true;
     }
@@ -269,7 +308,55 @@ public partial class DockManager : Node
         }
     }
 
-    private static void ResetGroupHeights(DockSide side) => side.SplitOffsets = new int[Math.Max(0, side.Groups.Count - 1)];
+    private static void ResetGroupHeights(DockSide side) => side.SplitOffsets = new int[Math.Max(0, side.Items.Count - 1)];
+
+    private static DockSide? SideOfGroup(DockGroup g) => g.GetParent() switch { DockSide s => s, DockRow r => r.GetParent() as DockSide, _ => null };
+
+    /// <summary>빈 그룹을 지운다. 행에 그룹이 하나만 남으면 행을 풀어 그 그룹을 도크 항목으로 되돌린다.</summary>
+    private static void RemoveGroup(DockSide side, DockGroup g)
+    {
+        var parent = g.GetParent();
+        parent.RemoveChild(g);
+        g.QueueFree();
+        if (parent is DockRow row)
+        {
+            var rest = row.Groups;
+            if (rest.Count <= 1)
+            {
+                int idx = side.Items.IndexOf(row);
+                foreach (var left in rest) { left.Reparent(side, keepGlobalTransform: false); side.MoveChild(left, Math.Max(0, idx)); }
+                side.RemoveChild(row);
+                row.QueueFree();
+            }
+            else row.SplitOffsets = new int[rest.Count - 1];
+        }
+        ResetGroupHeights(side);
+    }
+
+    /// <summary>두 그룹짜리 행에서 keep 그룹의 폭이 w가 되도록 경계 오프셋을 맞춘다(폭 적용이 끝난 뒤 몇 프레임에 걸쳐).</summary>
+    private void KeepWidthDeferred(DockRow row, DockGroup keep, float w, int frames)
+    {
+        GetTree().CreateTimer(0.05).Timeout += () =>
+        {
+            if (!IsInstanceValid(row) || !IsInstanceValid(keep) || keep.GetParent() != row) return;
+            float total = row.Size.X; if (total < 10) return;
+            float sep = row.GetThemeConstant("separation");
+            float half = (total - sep) / 2f;
+            bool keepFirst = row.Groups.IndexOf(keep) == 0;
+            float target = Math.Clamp(w, SideMin, total - SideMin);
+            row.SplitOffsets = new[] { (int)(keepFirst ? target - half : half - target) };
+            if (frames > 1) KeepWidthDeferred(row, keep, w, frames - 1);
+        };
+    }
+
+    /// <summary>옆에 나란히 붙이면 도크를 새 패널 폭만큼 넓힌다(창의 60% 이내).</summary>
+    private void WidenBy(DockSide side, FloatingPanel p)
+    {
+        float cur = side.Kind == DockSideKind.Left ? _leftWidth : _rightWidth;
+        float add = Math.Max(Math.Max(p.FloatSize.X, p.MinPanelSize.X), SideMin);
+        float want = Math.Min(cur + add, _shell.GetViewport().GetVisibleRect().Size.X * 0.6f);
+        if (want > cur) { SetSideWidth(side.Kind, want); _widened[side.Kind] = (p, cur, want); }
+    }
 
     // ---------------------------------------------------------------- 드래그
 
@@ -316,21 +403,29 @@ public partial class DockManager : Node
         }
     }
 
-    /// <summary>커서 아래의 놓을 자리: 그룹 가운데 = 탭, 위/아래 띠 = 그 위/아래 새 그룹, 뷰포트 좌/우 가장자리 = 그 쪽 도크 새 그룹.</summary>
+    /// <summary>
+    /// 커서 아래의 놓을 자리. 그룹 위: 왼쪽/오른쪽 가장자리 띠(폭의 22%, 최대 70px) = 옆에 나란히,
+    /// 나머지는 세로 3등분 — 위 = 위로 분할(새 창이 위), 가운데 = 탭 추가, 아래 = 아래로 분할(새 창이 아래).
+    /// 도크 바로 옆 뷰포트 가장자리(48px)도 그 높이의 그룹 옆(나란히)으로 본다. 빈 도크는 뷰포트 가장자리가 그 도크 자리.
+    /// </summary>
     public DropTarget? FindTarget(Vector2 m)
     {
         foreach (var side in new[] { Left, Right })
         {
             if (!side.IsVisibleInTree()) continue;
-            var groups = side.Groups;
-            for (int i = 0; i < groups.Count; i++)
+            foreach (var g in side.Groups)
             {
-                var r = groups[i].GetGlobalRect();
+                var r = g.GetGlobalRect();
                 if (!r.HasPoint(m)) continue;
-                float band = Math.Min(r.Size.Y * 0.25f, 60 * S);
-                if (m.Y < r.Position.Y + band) return new DropTarget(side.Kind, i, DropMode.Before, new Rect2(r.Position, new Vector2(r.Size.X, r.Size.Y * 0.5f)));
-                if (m.Y > r.End.Y - band) return new DropTarget(side.Kind, i, DropMode.After, new Rect2(r.Position + new Vector2(0, r.Size.Y * 0.5f), new Vector2(r.Size.X, r.Size.Y * 0.5f)));
-                return new DropTarget(side.Kind, i, DropMode.Tab, r);
+                float sideBand = Math.Min(r.Size.X * 0.22f, 70 * S);
+                var half = new Vector2(r.Size.X * 0.5f, r.Size.Y);
+                if (m.X < r.Position.X + sideBand) return new DropTarget(side.Kind, g, DropMode.LeftOf, new Rect2(r.Position, half));
+                if (m.X > r.End.X - sideBand) return new DropTarget(side.Kind, g, DropMode.RightOf, new Rect2(r.Position + new Vector2(half.X, 0), half));
+                float third = r.Size.Y / 3f;
+                var halfH = new Vector2(r.Size.X, r.Size.Y * 0.5f);
+                if (m.Y < r.Position.Y + third) return new DropTarget(side.Kind, g, DropMode.Before, new Rect2(r.Position, halfH));
+                if (m.Y > r.End.Y - third) return new DropTarget(side.Kind, g, DropMode.After, new Rect2(r.Position + new Vector2(0, halfH.Y), halfH));
+                return new DropTarget(side.Kind, g, DropMode.Tab, r);
             }
         }
         var lr = _shell.Layout.GetGlobalRect();
@@ -338,8 +433,19 @@ public partial class DockManager : Node
         if (lr.HasPoint(m))
         {
             float w = Math.Min(260 * S, lr.Size.X / 3);
-            if (m.X < lr.Position.X + edge) return new DropTarget(DockSideKind.Left, Left.Groups.Count, DropMode.NewGroup, new Rect2(lr.Position, new Vector2(w, lr.Size.Y)));
-            if (m.X > lr.End.X - edge) return new DropTarget(DockSideKind.Right, Right.Groups.Count, DropMode.NewGroup, new Rect2(new Vector2(lr.End.X - w, lr.Position.Y), new Vector2(w, lr.Size.Y)));
+            DropTarget? Beside(DockSide side, DropMode mode)
+            {
+                // 도크가 보이면 그 높이의 그룹(도크와 맞닿은 열) 옆에 나란히
+                var g = side.Groups.Where(x => { var rr = x.GetGlobalRect(); return m.Y >= rr.Position.Y && m.Y <= rr.End.Y; })
+                    .OrderBy(x => mode == DropMode.LeftOf ? x.GetGlobalRect().Position.X : -x.GetGlobalRect().End.X).FirstOrDefault();
+                if (g == null) return null;
+                var r = g.GetGlobalRect(); var half = new Vector2(r.Size.X * 0.5f, r.Size.Y);
+                return new DropTarget(side.Kind, g, mode, mode == DropMode.LeftOf ? new Rect2(r.Position, half) : new Rect2(r.Position + new Vector2(half.X, 0), half));
+            }
+            if (m.X < lr.Position.X + edge)
+                return Left.Groups.Count == 0 ? new DropTarget(DockSideKind.Left, null, DropMode.NewGroup, new Rect2(lr.Position, new Vector2(w, lr.Size.Y))) : Beside(Left, DropMode.RightOf);
+            if (m.X > lr.End.X - edge)
+                return Right.Groups.Count == 0 ? new DropTarget(DockSideKind.Right, null, DropMode.NewGroup, new Rect2(new Vector2(lr.End.X - w, lr.Position.Y), new Vector2(w, lr.Size.Y))) : Beside(Right, DropMode.LeftOf);
         }
         return null;
     }
@@ -351,8 +457,15 @@ public partial class DockManager : Node
         if (!IsInstanceValid(Left)) return;
         var d = _shell.Settings.Dock;
         static List<List<string>> Ids(DockSide side) => side.Groups.Select(g => g.Panels.Where(p => p.PanelId.Length > 0).Select(p => p.PanelId).ToList()).Where(l => l.Count > 0).ToList();
+        static List<string> GroupIds(DockGroup g) => g.Panels.Where(p => p.PanelId.Length > 0).Select(p => p.PanelId).ToList();
+        static List<List<List<string>>> Rows(DockSide side) => side.Items
+            .Select(i => (i is DockRow r ? r.Groups : new List<DockGroup> { (DockGroup)i }).Select(GroupIds).Where(l => l.Count > 0).ToList())
+            .Where(l => l.Count > 0).ToList();
+        static List<List<float>> RowSplits(DockSide side) => side.Items.Select(i => i is DockRow r ? r.SplitOffsets.Select(o => o / S).ToList() : new List<float>()).ToList();
         d.Left = Ids(Left);
         d.Right = Ids(Right);
+        d.LeftRows = Rows(Left); d.RightRows = Rows(Right);
+        d.LeftRowSplits = RowSplits(Left); d.RightRowSplits = RowSplits(Right);
         d.LeftSplits = Left.SplitOffsets.Select(o => o / S).ToList();
         d.RightSplits = Right.SplitOffsets.Select(o => o / S).ToList();
         d.Active = Left.Groups.Concat(Right.Groups).Select(g => (g.GetCurrentTabControl() as FloatingPanel)?.PanelId ?? "").Where(id => id.Length > 0).ToList();
@@ -369,28 +482,41 @@ public partial class DockManager : Node
         var d = _shell.Settings.Dock;
         _leftWidth = (d.LeftWidth > 0 ? d.LeftWidth : 220) * S;
         _rightWidth = (d.RightWidth > 0 ? d.RightWidth : 260) * S;
-        foreach (var (kind, groups) in new[] { (DockSideKind.Left, d.Left), (DockSideKind.Right, d.Right) })
+        foreach (var (kind, rows, rowSplits) in new[] { (DockSideKind.Left, d.LeftRows ?? d.Left.Select(g => new List<List<string>> { g }).ToList(), d.LeftRowSplits), (DockSideKind.Right, d.RightRows ?? d.Right.Select(g => new List<List<string>> { g }).ToList(), d.RightRowSplits) })
         {
             var side = SideOf(kind);
-            foreach (var ids in groups)
+            for (int ri = 0; ri < rows.Count; ri++)
             {
-                DockGroup? g = null;
-                foreach (var id in ids)
+                var made = new List<DockGroup>();
+                foreach (var ids in rows[ri])
                 {
-                    var p = ensure(id);
-                    if (p == null || p.Docked) continue;
-                    if (g == null) { g = NewGroup(); side.AddChild(g); }
-                    Attach(p, g);
-                }
-                if (g != null && g.GetTabCount() > 0)
-                {
+                    DockGroup? g = null;
+                    foreach (var id in ids)
+                    {
+                        var p = ensure(id);
+                        if (p == null || p.Docked) continue;
+                        if (g == null) { g = NewGroup(); side.AddChild(g); }
+                        Attach(p, g);
+                    }
+                    if (g == null) continue;
                     var active = g.Panels.FirstOrDefault(pp => d.Active.Contains(pp.PanelId));
                     g.CurrentTab = active != null ? g.GetTabIdxFromControl(active) : 0;
+                    made.Add(g);
+                }
+                if (made.Count > 1)
+                {
+                    // 나란한 그룹들을 행으로 묶는다
+                    var row = new DockRow { Name = "DockRow", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
+                    int idx = made[0].GetIndex();
+                    side.AddChild(row); side.MoveChild(row, idx);
+                    foreach (var g in made) g.Reparent(row, keepGlobalTransform: false);
+                    var rs = rowSplits != null && ri < rowSplits.Count ? rowSplits[ri] : null;
+                    row.SplitOffsets = rs != null && rs.Count == made.Count - 1 ? rs.Select(v => (int)(v * S)).ToArray() : new int[made.Count - 1];
                 }
             }
             ResetGroupHeights(side);
             var splits = kind == DockSideKind.Left ? d.LeftSplits : d.RightSplits;
-            if (splits.Count == side.Groups.Count - 1 && splits.Count > 0) side.SplitOffsets = splits.Select(v => (int)(v * S)).ToArray();
+            if (splits.Count == side.Items.Count - 1 && splits.Count > 0) side.SplitOffsets = splits.Select(v => (int)(v * S)).ToArray();
         }
         foreach (var f in d.Floating)
         {
@@ -406,8 +532,9 @@ public partial class DockManager : Node
     /// <summary>디버그/표시용 레이아웃 요약: "L[outliner|uvEditor] R[properties]".</summary>
     public string Summary()
     {
-        static string Side(DockSide s) => string.Join(" / ", s.Groups.Select(g => "[" + string.Join("|", g.Panels.Select(p => p.PanelId + (g.GetCurrentTabControl() == p ? "*" : ""))) + "]"));
-        string groupsY = string.Join(",", Right.Groups.Select(g => $"{g.GlobalPosition.Y:0}-{g.GlobalPosition.Y + g.Size.Y:0}"));
+        static string G(DockGroup g) => "[" + string.Join("|", g.Panels.Select(p => p.PanelId + (g.GetCurrentTabControl() == p ? "*" : ""))) + "]";
+        static string Side(DockSide s) => string.Join(" / ", s.Items.Select(i => i is DockRow r ? "(" + string.Join(" ", r.Groups.Select(G)) + ")" : G((DockGroup)i)));
+        string groupsY = string.Join(",", Right.Groups.Select(g => $"{g.GlobalPosition.X:0},{g.GlobalPosition.Y:0}-{g.GlobalPosition.X + g.Size.X:0},{g.GlobalPosition.Y + g.Size.Y:0}"));
         return $"rightX={Right.GlobalPosition.X:0} rightGroupsY={groupsY} offsets={_mainSplit.SplitOffsets[0]},{_rightSplit.SplitOffsets[0]} want={_leftWidth:0},{_rightWidth:0} L{(Left.Visible ? Left.Size.X.ToString("0") : "-")} {Side(Left)}  R{(Right.Visible ? Right.Size.X.ToString("0") : "-")} {Side(Right)}  floating={string.Join(",", _panels.Values.Where(p => !p.Docked && p.Visible).Select(p => p.PanelId))}";
     }
 }

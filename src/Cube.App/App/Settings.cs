@@ -16,6 +16,12 @@ public sealed class DockLayoutSettings
     /// <summary>그룹 사이 경계 오프셋(px, UI 배율 1 기준).</summary>
     [JsonPropertyName("leftSplits")] public List<float> LeftSplits { get; set; } = new();
     [JsonPropertyName("rightSplits")] public List<float> RightSplits { get; set; } = new();
+    /// <summary>v0.0.34: 도크 항목(위→아래)마다 나란히 놓인 그룹들(왼→오), 그룹 = 탭 패널 ID. 있으면 Left/Right 대신 쓴다.</summary>
+    [JsonPropertyName("leftRows")] public List<List<List<string>>>? LeftRows { get; set; }
+    [JsonPropertyName("rightRows")] public List<List<List<string>>>? RightRows { get; set; }
+    /// <summary>항목마다 가로 경계 오프셋(UI 배율 1 기준).</summary>
+    [JsonPropertyName("leftRowSplits")] public List<List<float>>? LeftRowSplits { get; set; }
+    [JsonPropertyName("rightRowSplits")] public List<List<float>>? RightRowSplits { get; set; }
     /// <summary>그룹마다 앞에 보이던 탭의 패널 ID.</summary>
     [JsonPropertyName("active")] public List<string> Active { get; set; } = new();
 }

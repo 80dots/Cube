@@ -87,6 +87,12 @@ public sealed class MoveVerticesCommand : ICommand, IAppliedHook
     }
 
     public bool IsNoop { get { for (int i = 0; i < _ids.Length; i++) if (_before[i] != _after[i]) return false; return true; } }
+    /// <summary>대상 노드(Action Popup이 후속 드래그를 다시 만들 때 사용).</summary>
+    public NodeId Node => _node;
+    /// <summary>조작기 변형 정보(이동/회전/스케일). 사용자 정의 replay(Extrude 두께 등)면 null.</summary>
+    public ComponentTransformOp? Op => _op;
+    /// <summary>현재 파라미터(히스토리에서 편집되었으면 그 값).</summary>
+    public HistoryParams? Params => _entry?.Params ?? _params;
 
     public void Do(Document doc)
     {
