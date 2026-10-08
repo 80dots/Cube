@@ -2,29 +2,886 @@ using System.Numerics;
 
 namespace Cube.Core.Mesh;
 
-/// <summary>엣지 베벨(세그먼트 1 = 챔퍼, 2 이상 = 둥근 프로파일).</summary>
+/// <summary>Bevel이 영향을 주는 요소(Blender Affect).</summary>
+public enum BevelAffect { Edges, Vertices }
+
+/// <summary>Width 값의 의미(Blender Width Type).</summary>
+public enum BevelWidthType
+{
+    /// <summary>베벨 엣지에서 새 엣지까지의 수직 거리(면 위).</summary>
+    Offset,
+    /// <summary>베벨 면의 폭(새로 생긴 두 엣지 사이 거리).</summary>
+    Width,
+    /// <summary>원래 엣지에서 베벨 면까지의 수직 깊이.</summary>
+    Depth,
+    /// <summary>인접 엣지 길이의 백분율.</summary>
+    Percent,
+    /// <summary>인접 엣지를 따라 잰 거리.</summary>
+    Absolute,
+}
+
+public enum BevelMiter { Sharp, Patch, Arc }
+
+/// <summary>베벨 엣지가 3개 이상 모이는 정점의 채움(Blender Intersection Type). NGon은 하나의 다각형(Maya식).</summary>
+public enum BevelIntersection { GridFill, Cutoff, NGon }
+
+public enum BevelProfileType { Superellipse, Custom }
+
+/// <summary>Custom 프로파일 프리셋(Blender Profile Presets).</summary>
+public enum BevelProfilePreset { Default, SupportLoops, CorniceMolding, CrownMolding, Steps }
+
+/// <summary>Weighted Normal용 면 세기(Blender Face Strength). Cube에는 Weighted Normal 모디파이어가 없으므로 그 결과(가중 노멀)를 코너 노멀로 바로 고정한다.</summary>
+public enum BevelFaceStrength { None, New, Affected, All }
+
+/// <summary>Blender Bevel(Ctrl+B / Shift+Ctrl+B)의 모든 옵션.</summary>
+public sealed record BevelOptions
+{
+    public BevelAffect Affect { get; init; } = BevelAffect.Edges;
+    public BevelWidthType WidthType { get; init; } = BevelWidthType.Offset;
+    public float Width { get; init; } = 0.1f;
+    public int Segments { get; init; } = 1;
+    /// <summary>프로파일 모양 0..1(0.5 = 원호, 0.25 = 직선, 1 = 각진 모서리, 0 = 오목).</summary>
+    public float Shape { get; init; } = 0.5f;
+    /// <summary>새 면의 머티리얼 슬롯(-1 = 이웃 면을 따름).</summary>
+    public int MaterialIndex { get; init; } = -1;
+    public bool HardenNormals { get; init; }
+    public bool ClampOverlap { get; init; } = true;
+    public bool LoopSlide { get; init; } = true;
+    public bool MarkSeams { get; init; }
+    public bool MarkSharp { get; init; }
+    public BevelMiter MiterOuter { get; init; } = BevelMiter.Sharp;
+    /// <summary>Inner Miter(Sharp/Arc; Patch는 Sharp로 취급).</summary>
+    public BevelMiter MiterInner { get; init; } = BevelMiter.Sharp;
+    public float Spread { get; init; } = 0.1f;
+    public BevelIntersection Intersection { get; init; } = BevelIntersection.GridFill;
+    public BevelFaceStrength FaceStrength { get; init; } = BevelFaceStrength.None;
+    public BevelProfileType ProfileType { get; init; } = BevelProfileType.Superellipse;
+    public BevelProfilePreset Preset { get; init; } = BevelProfilePreset.Default;
+    public bool SampleStraightEdges { get; init; }
+    public bool SampleEvenLengths { get; init; }
+    /// <summary>둥근 Bevel 뒤 끝 면에 D자 캡을 합치고 60°로 스무딩(Maya식 마무리). 내부 호환용.</summary>
+    internal bool LegacyPerEdgeClamp { get; init; }
+}
+
+/// <summary>Blender식 Bevel(엣지/정점). 세그먼트·프로파일·폭 종류·마이터·교차 채움·노멀 처리.</summary>
 public static partial class MeshOps
 {
     private sealed record BevelEntry(int Vertex, Vector2 Uv, Vector3 Normal, int OriginEdge, int OriginVertex);
 
     /// <summary>
-    /// 선택 엣지를 베벨한다. 각 끝 정점에서 선택되지 않은 인접 엣지를 따라 distance만큼 물러난 새 정점을 만들고,
-    /// 선택 엣지마다 쿼드 띠(segments개), 선택 엣지가 모이는 정점에는 캡 면을 만든다. 반환값은 새로 생긴 베벨 면 ID들.
-    /// segments가 2 이상이면 한 끝의 두 오프셋 점(면 A의 p0, 면 B의 p1) 사이에 원호를 따라 segments-1개의 중간 점을 넣는다.
-    /// 원호 중심은 p0에서 면 A 안쪽(-nA)으로, p1에서 면 B 안쪽(-nB)으로 뻗은 두 직선의 최근접점(두 면에 접하는 원; 거의 공면이면 선형 보간).
+    /// 기존 API(Maya식): 인접 엣지를 따라 distance만큼(Absolute) 물러나 엣지를 베벨한다. segments 2+는 원호 프로파일,
+    /// 엣지가 3개 이상 모이는 정점은 다각형 하나로 채운다.
     /// </summary>
     public static List<int> BevelEdges(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments = 1)
+        => Bevel(m, edgeIds, new BevelOptions { WidthType = BevelWidthType.Absolute, Width = distance, Segments = segments, Intersection = BevelIntersection.NGon, LegacyPerEdgeClamp = true });
+
+    /// <summary>Bevel 실행. Affect = Edges면 ids는 엣지, Vertices면 정점 ID. 반환값은 새로 생긴 면 ID들.</summary>
+    public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o)
     {
-        var result = BevelEdgesCore(m, edgeIds, distance, segments, out var strips);
-        if (segments >= 2 && result.Count > 0) PostProcessRoundBevel(m, result, strips);
+        var info = new BevelInfo();
+        var result = o.Affect == BevelAffect.Vertices ? BevelVerticesCore(m, ids, o, info) : BevelEdgesCore(m, ids, o, info);
+        if (result.Count == 0) return result;
+        if (o.Affect == BevelAffect.Edges && o.Segments >= 2) PostProcessRoundBevel(m, result, info.Strips);
+        else if (o.Affect == BevelAffect.Vertices && o.Segments >= 2) SoftenNewFaces(m, result);
+        result.RemoveAll(f => f < 0 || f >= m.FaceCount || !m.Faces[f].Alive);
+        if (o.HardenNormals || o.FaceStrength != BevelFaceStrength.None)
+        {
+            MeshNormals.Recompute(m);
+            if (o.HardenNormals) ApplyHardenNormals(m, result, info);
+            if (o.FaceStrength != BevelFaceStrength.None) ApplyFaceStrength(m, result, info, o.FaceStrength);
+        }
+        m.BumpTopology();
         return result;
     }
 
+    /// <summary>Bevel 중간 정보(노멀 처리에 씀).</summary>
+    private sealed class BevelInfo
+    {
+        public readonly HashSet<int> Strips = new();
+        /// <summary>띠 면 → (면 A 법선, 면 B 법선, 정점 → 프로파일 위치 0..1).</summary>
+        public readonly Dictionary<int, (Vector3 nA, Vector3 nB, Dictionary<int, float> t)> StripProfiles = new();
+    }
+
+    // ================================================================ 프로파일
+
+    /// <summary>Shape(0..1) → 초타원 지수 r(0.5 → 2 = 원, 0.25 → 1 = 직선, 1 → ∞ = 각, 0 → 0 = 오목).</summary>
+    internal static float SuperellipseExponent(float shape)
+    {
+        shape = System.Math.Clamp(shape, 0.001f, 0.999f);
+        return MathF.Log(0.5f) / MathF.Log(MathF.Sqrt(shape));
+    }
+
+    /// <summary>프로파일 정의(단위 정사각 좌표: p0 = (1,0), p1 = (0,1), 모서리 K = (1,1), 안쪽 c = (0,0)).</summary>
+    private sealed class ProfileSpec
+    {
+        public float R = 2f;
+        public List<Vector2>? Custom;
+        public bool EvenLengths, StraightEdges;
+
+        public static ProfileSpec From(BevelOptions o)
+        {
+            var p = new ProfileSpec { R = SuperellipseExponent(o.Shape), EvenLengths = o.SampleEvenLengths, StraightEdges = o.SampleStraightEdges };
+            if (o.ProfileType == BevelProfileType.Custom) p.Custom = PresetPoints(o.Preset, System.Math.Max(1, o.Segments));
+            return p;
+        }
+
+        /// <summary>정사각 좌표 그리드 채움용: 대각선 방향으로 얼마나 모서리 쪽으로 부푸는가(-1..1).</summary>
+        public float Bulge => Custom != null ? 0.4f : System.Math.Clamp(2f * MathF.Pow(0.5f, 1f / MathF.Max(R, 1e-3f)) - 1f, -0.5f, 1f);
+    }
+
+    /// <summary>Blender 프로파일 프리셋(단위 정사각 좌표의 꺾은선). Support Loops와 Steps는 세그먼트 수에 맞춰 만든다.</summary>
+    internal static List<Vector2> PresetPoints(BevelProfilePreset preset, int segments)
+    {
+        var pts = new List<Vector2>();
+        switch (preset)
+        {
+            case BevelProfilePreset.SupportLoops:
+                {
+                    // 양 끝 면 가까이에 보조 루프가 몰리는 각진 프로파일
+                    int n = System.Math.Max(2, segments);
+                    float r = SuperellipseExponent(0.85f);
+                    for (int i = 0; i <= n; i++)
+                    {
+                        float t = 0.5f - 0.5f * MathF.Cos(MathF.PI * i / n); // 양 끝 조밀
+                        float th = t * MathF.PI / 2;
+                        pts.Add(new Vector2(MathF.Pow(MathF.Cos(th), 2f / r), MathF.Pow(MathF.Sin(th), 2f / r)));
+                    }
+                    pts[0] = new Vector2(1, 0); pts[^1] = new Vector2(0, 1);
+                    break;
+                }
+            case BevelProfilePreset.Steps:
+                {
+                    int k = System.Math.Max(1, segments / 2);
+                    pts.Add(new Vector2(1, 0));
+                    for (int i = 0; i < k; i++)
+                    {
+                        float x = 1f - (float)i / k, y = (float)(i + 1) / k;
+                        pts.Add(new Vector2(x, y));                 // 면 A 쪽으로 올라감
+                        pts.Add(new Vector2(1f - (float)(i + 1) / k, y)); // 안쪽으로 들어감
+                    }
+                    if (pts[^1] != new Vector2(0, 1)) pts.Add(new Vector2(0, 1));
+                    break;
+                }
+            case BevelProfilePreset.CorniceMolding:
+                pts.AddRange(new Vector2[] { new(1, 0), new(1, 0.2f), new(0.82f, 0.3f), new(0.78f, 0.52f), new(0.55f, 0.62f), new(0.4f, 0.88f), new(0.2f, 0.95f), new(0, 1) });
+                break;
+            case BevelProfilePreset.CrownMolding:
+                pts.AddRange(new Vector2[] { new(1, 0), new(0.9f, 0.12f), new(0.96f, 0.35f), new(0.72f, 0.5f), new(0.6f, 0.8f), new(0.32f, 0.88f), new(0.12f, 1), new(0, 1) });
+                break;
+            default:
+                // Default: 원호에 가까운 부드러운 곡선(제어점 9개)
+                for (int i = 0; i <= 8; i++) { float th = MathF.PI / 2 * i / 8; pts.Add(new Vector2(MathF.Cos(th), MathF.Sin(th))); }
+                break;
+        }
+        return pts;
+    }
+
+    /// <summary>
+    /// p0에서 p1까지(모서리 K 쪽으로 부푼) 프로파일의 중간 점 segments-1개. 좌표계: c = p0 + p1 − K, u = p0 − c, w = p1 − c,
+    /// 점 = c + u·x + w·y. 초타원(|x|^r + |y|^r = 1)은 호 길이로 고르게, Custom은 프리셋 꺾은선을 샘플링한다. 세 점이 한 직선이면 선형.
+    /// </summary>
+    private static List<Vector3> ProfileMidPoints(Vector3 p0, Vector3 p1, Vector3 k, int segments, ProfileSpec spec)
+    {
+        var res = new List<Vector3>(System.Math.Max(0, segments - 1));
+        if (segments < 2) return res;
+        var c = p0 + p1 - k; var u = p0 - c; var w = p1 - c;
+        float ul = u.Length(), wl = w.Length();
+        bool linear = ul < 1e-8f || wl < 1e-8f || Vector3.Cross(u, w).Length() < 1e-4f * ul * wl;
+        if (linear)
+        {
+            for (int i = 1; i < segments; i++) res.Add(Vector3.Lerp(p0, p1, (float)i / segments));
+            return res;
+        }
+        Vector3 At(Vector2 xy) => c + u * xy.X + w * xy.Y;
+        if (spec.Custom == null)
+        {
+            float e = 2f / MathF.Max(spec.R, 1e-3f);
+            Vector2 Se(float th) => new(MathF.Pow(MathF.Max(MathF.Cos(th), 0f), e), MathF.Pow(MathF.Max(MathF.Sin(th), 0f), e));
+            const int N = 512;
+            var len = new float[N + 1]; var prev = At(Se(0));
+            for (int i = 1; i <= N; i++) { var p = At(Se(MathF.PI / 2 * i / N)); len[i] = len[i - 1] + Vector3.Distance(prev, p); prev = p; }
+            for (int s = 1; s < segments; s++)
+            {
+                float target = len[N] * s / segments;
+                int j = System.Array.BinarySearch(len, target); if (j < 0) j = ~j;
+                j = System.Math.Clamp(j, 1, N);
+                float f = len[j] > len[j - 1] ? (target - len[j - 1]) / (len[j] - len[j - 1]) : 0f;
+                res.Add(At(Se(MathF.PI / 2 * (j - 1 + f) / N)));
+            }
+            return res;
+        }
+        var cp = spec.Custom.Select(At).ToList();
+        foreach (var p in SamplePolyline(cp, segments, spec.EvenLengths, spec.StraightEdges).Skip(1).Take(segments - 1)) res.Add(p);
+        return res;
+    }
+
+    /// <summary>꺾은선을 segments 구간(segments+1 점)으로 샘플링. even = 전체 길이 균등, 아니면 제어점 우선(남는 샘플은 각 구간에 고르게, StraightEdges가 꺼져 있으면 긴 구간부터).</summary>
+    private static List<Vector3> SamplePolyline(List<Vector3> cp, int segments, bool even, bool straightEdges)
+    {
+        int n = cp.Count - 1;
+        var outp = new List<Vector3>();
+        if (n <= 0) { for (int i = 0; i <= segments; i++) outp.Add(cp[0]); return outp; }
+        var seg = new float[n]; float total = 0;
+        for (int i = 0; i < n; i++) { seg[i] = Vector3.Distance(cp[i], cp[i + 1]); total += seg[i]; }
+        if (even || total < 1e-9f)
+        {
+            for (int s = 0; s <= segments; s++)
+            {
+                float target = total * s / segments; int i = 0;
+                while (i < n - 1 && target > seg[i]) { target -= seg[i]; i++; }
+                outp.Add(seg[i] > 1e-9f ? Vector3.Lerp(cp[i], cp[i + 1], System.Math.Clamp(target / seg[i], 0f, 1f)) : cp[i]);
+            }
+            return outp;
+        }
+        if (segments <= n)
+        {
+            // 제어점 일부만 사용(고르게 고름)
+            for (int s = 0; s <= segments; s++) outp.Add(cp[(int)MathF.Round((float)s * n / segments)]);
+            return outp;
+        }
+        // 제어점은 모두 쓰고 남는 샘플을 구간에 나눈다
+        var count = Enumerable.Repeat(1, n).ToArray();
+        int extra = segments - n;
+        if (straightEdges) for (int k = 0; k < extra; k++) count[k % n]++;
+        else for (int k = 0; k < extra; k++) { int best = 0; for (int i = 1; i < n; i++) if (seg[i] / count[i] > seg[best] / count[best]) best = i; count[best]++; }
+        outp.Add(cp[0]);
+        for (int i = 0; i < n; i++) for (int k = 1; k <= count[i]; k++) outp.Add(Vector3.Lerp(cp[i], cp[i + 1], (float)k / count[i]));
+        return outp;
+    }
+
+    // ================================================================ 엣지 Bevel
+
+    private static List<int> BevelEdgesCore(PolyMesh m, IEnumerable<int> edgeIds, BevelOptions o, BevelInfo info)
+    {
+        var result = new List<int>();
+        var selected = new HashSet<int>(edgeIds.Where(e => e >= 0 && e < m.EdgeCount && m.Edges[e].Alive && !m.IsBoundaryEdge(e)));
+        if (selected.Count == 0) return result;
+        int segments = System.Math.Clamp(o.Segments, 1, 100);
+        var spec = ProfileSpec.From(o);
+        float width = MathF.Max(o.Width, 1e-6f);
+
+        var V = new HashSet<int>();
+        foreach (int e in selected) { var (a, b) = m.EdgeVertices(e); V.Add(a); V.Add(b); }
+        var pos = new Dictionary<int, Vector3>();
+        var selAt = new Dictionary<int, List<int>>();
+        foreach (int v in V)
+        {
+            pos[v] = m.Verts[v].Position;
+            var es = new List<int>(); m.GetVertexEdges(v, es);
+            selAt[v] = es.Where(selected.Contains).ToList();
+        }
+
+        // 영향 면과 원래 플래그, 면 법선/머티리얼(제거 전에 기록)
+        var affected = new List<int>();
+        var tmp = new List<int>();
+        foreach (int v in V) { m.GetVertexFaces(v, tmp); foreach (int f in tmp) if (!affected.Contains(f)) affected.Add(f); }
+        var hardOf = new Dictionary<int, bool>();
+        var seamOf = new Dictionary<int, bool>();
+        var edgeVerts = new Dictionary<int, (int a, int b)>();
+        var faceNormal = new Dictionary<int, Vector3>();
+        var faceMat = new Dictionary<int, int>();
+        foreach (int f in affected)
+        {
+            var hes = new List<int>(); m.GetFaceHalfEdges(f, hes);
+            foreach (int he in hes) { int e = m.Hes[he].Edge; hardOf[e] = m.Edges[e].Hard; seamOf[e] = m.Edges[e].Seam; edgeVerts[e] = m.EdgeVertices(e); }
+            var fn = MeshNormals.FaceNormalUnnormalized(m, f);
+            faceNormal[f] = fn.LengthSquared() > 1e-18f ? Vector3.Normalize(fn) : Vector3.Zero;
+            faceMat[f] = m.Faces[f].Material;
+        }
+        var selInfo = new List<(int e, int f0, int f1, int a, int b)>();
+        foreach (int e in selected)
+        {
+            var ed = m.Edges[e];
+            selInfo.Add((e, m.Hes[ed.He0].Face, m.Hes[ed.He1].Face, m.Hes[ed.He0].Vertex, m.Hes[m.Hes[ed.He0].Next].Vertex));
+        }
+        var facesOfSel = selInfo.ToDictionary(x => x.e, x => (x.f0, x.f1));
+
+        Vector3 Dir(int v, int other) { var d = m.Verts[other].Position - m.Verts[v].Position; float l = d.Length(); return l > 1e-12f ? d / l : Vector3.Zero; }
+        int OtherEnd(int e, int v) { var (a, b) = m.EdgeVertices(e); return a == v ? b : a; }
+        float EdgeLen(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
+
+        // 엣지별 면 위 수직 오프셋(Offset/Width/Depth를 오프셋으로 환산; 두 면 사이 내각 α 사용)
+        float OffsetOf(int e)
+        {
+            if (!facesOfSel.TryGetValue(e, out var ff)) return width;
+            var n0 = faceNormal[ff.f0]; var n1 = faceNormal[ff.f1];
+            float between = MathF.Acos(System.Math.Clamp(Vector3.Dot(n0, n1), -1f, 1f)); // 법선 사이 각
+            float alpha = MathF.PI - between;                                               // 면 사이 내각
+            return o.WidthType switch
+            {
+                BevelWidthType.Width => width / MathF.Max(2f * MathF.Sin(alpha / 2f), 0.05f),
+                BevelWidthType.Depth => width / MathF.Max(MathF.Cos(alpha / 2f), 0.05f),
+                _ => width,
+            };
+        }
+        bool slideTypes = o.WidthType is BevelWidthType.Absolute or BevelWidthType.Percent;
+
+        // 비베벨 엣지 eu를 따라 v에서 물러나는 길이(클램프 전). 관련 베벨 엣지는 같은 면에서 이웃한 것 우선.
+        int RelatedSel(int v, int eu, int f)
+        {
+            var list = selAt[v];
+            if (list.Count == 1) return list[0];
+            if (f >= 0)
+            {
+                var hes = new List<int>(); m.GetFaceHalfEdges(f, hes);
+                foreach (int he in hes) { int e = m.Hes[he].Edge; if (e != eu && list.Contains(e)) { var (a, b) = m.EdgeVertices(e); if (a == v || b == v) return e; } }
+            }
+            var du = Dir(v, OtherEnd(eu, v)); int best = list[0]; float bs = -1;
+            foreach (int es in list) { float s = Vector3.Cross(du, Dir(v, OtherEnd(es, v))).Length(); if (s > bs) { bs = s; best = es; } }
+            return best;
+        }
+        float RawSlide(int v, int eu, int f)
+        {
+            float len = EdgeLen(eu);
+            if (o.WidthType == BevelWidthType.Absolute) return width;
+            if (o.WidthType == BevelWidthType.Percent) return len * width / 100f;
+            int es = RelatedSel(v, eu, f);
+            float sin = Vector3.Cross(Dir(v, OtherEnd(eu, v)), Dir(v, OtherEnd(es, v))).Length();
+            return OffsetOf(es) / MathF.Max(sin, 0.05f);
+        }
+
+        // Clamp Overlap: 모든 이동 길이를 같은 비율로 줄여 이웃 엣지 끝을 넘지 않게(양끝이 모두 베벨이면 절반까지)
+        float clamp = 1f;
+        if (o.ClampOverlap && !o.LegacyPerEdgeClamp)
+        {
+            var ev = new List<int>();
+            foreach (int v in V)
+            {
+                m.GetVertexEdges(v, ev);
+                foreach (int e in ev)
+                {
+                    float len = EdgeLen(e); if (len < 1e-9f) continue;
+                    bool otherBev = V.Contains(OtherEnd(e, v));
+                    float L = selected.Contains(e) ? (slideTypes ? (o.WidthType == BevelWidthType.Percent ? len * width / 100f : width) : OffsetOf(e)) : RawSlide(v, e, -1);
+                    if (selected.Contains(e) && selAt[v].Count < 2) continue; // 베벨 엣지 자체를 따라 물러나지 않는 끝
+                    float limit = len * (otherBev ? 0.49f : 0.98f);
+                    if (L > limit) clamp = MathF.Min(clamp, limit / L);
+                }
+            }
+        }
+        float Slide(int v, int eu, int f)
+        {
+            float L = RawSlide(v, eu, f) * clamp;
+            if (o.LegacyPerEdgeClamp) L = MathF.Min(L, EdgeLen(eu) * 0.45f);
+            return MathF.Max(L, 1e-6f);
+        }
+        float Off(int e) => OffsetOf(e) * clamp;
+
+        var pOnEdge = new Dictionary<(int v, int e), int>();
+        var qOnFace = new Dictionary<(int v, int f), int>();
+        var uvOf = new Dictionary<int, Vector2>();
+        var side = new Dictionary<(int f, int e, int v), (int vert, Vector2 uv)>();
+        var capChains = new Dictionary<int, List<(List<int> pts, int owner)>>();
+        foreach (int v in V) capChains[v] = new List<(List<int>, int)>();
+
+        // 면 코너 (c, prev, next)에서 위치 → UV(두 엣지 방향의 아핀 좌표로 보간)
+        Vector2 UvAt(Vector3 p, MeshOps.Corner c, MeshOps.Corner prev, MeshOps.Corner next)
+        {
+            var pc = m.Verts[c.Vertex].Position;
+            var dp = m.Verts[prev.Vertex].Position - pc; var dn = m.Verts[next.Vertex].Position - pc; var r = p - pc;
+            float a11 = Vector3.Dot(dp, dp), a12 = Vector3.Dot(dp, dn), a22 = Vector3.Dot(dn, dn);
+            float b1 = Vector3.Dot(r, dp), b2 = Vector3.Dot(r, dn);
+            float det = a11 * a22 - a12 * a12;
+            if (MathF.Abs(det) < 1e-14f) return c.Uv;
+            float x = (b1 * a22 - b2 * a12) / det, y = (a11 * b2 - a12 * b1) / det;
+            return c.Uv + (prev.Uv - c.Uv) * x + (next.Uv - c.Uv) * y;
+        }
+
+        int P(int v, int e, int other, int f)
+        {
+            if (pOnEdge.TryGetValue((v, e), out int id)) return id;
+            var pv = pos[v]; var du = Dir(v, other);
+            float L = Slide(v, e, f);
+            Vector3 p = pv + du * L;
+            if (!o.LoopSlide && !slideTypes && f >= 0)
+            {
+                // Loop Slide 끔: 새 엣지가 베벨 엣지에 수직(면 위에서 오프셋만큼 수직으로)
+                int es = RelatedSel(v, e, f);
+                var ds = Dir(v, OtherEnd(es, v));
+                var perp = Vector3.Cross(faceNormal[f], ds);
+                if (perp.LengthSquared() > 1e-12f)
+                {
+                    perp = Vector3.Normalize(perp);
+                    if (Vector3.Dot(perp, du) < 0) perp = -perp;
+                    p = pv + perp * Off(es);
+                }
+            }
+            id = m.AddVertex(p);
+            pOnEdge[(v, e)] = id;
+            return id;
+        }
+
+        var rebuilt = new List<(int face, List<BevelEntry> loop, int material)>();
+        foreach (int f in affected)
+        {
+            var corners = CaptureCorners(m, f);
+            int n = corners.Count;
+            var nf = faceNormal[f];
+            var loop = new List<BevelEntry>();
+            for (int i = 0; i < n; i++)
+            {
+                var c = corners[i]; var prev = corners[(i + n - 1) % n]; var next = corners[(i + 1) % n];
+                if (!V.Contains(c.Vertex)) { loop.Add(new BevelEntry(c.Vertex, c.Uv, c.Normal, -1, c.Vertex)); continue; }
+                int ePrev = m.FindEdge(prev.Vertex, c.Vertex), eNext = m.FindEdge(c.Vertex, next.Vertex);
+                bool sp = selected.Contains(ePrev), sn = selected.Contains(eNext);
+                int first = loop.Count;
+                if (!sp && !sn)
+                {
+                    int p1 = P(c.Vertex, ePrev, prev.Vertex, f), p2 = P(c.Vertex, eNext, next.Vertex, f);
+                    var uv1 = UvAt(m.Verts[p1].Position, c, prev, next); var uv2 = UvAt(m.Verts[p2].Position, c, prev, next);
+                    loop.Add(new BevelEntry(p1, uv1, c.Normal, ePrev, c.Vertex)); loop.Add(new BevelEntry(p2, uv2, c.Normal, eNext, c.Vertex));
+                    uvOf.TryAdd(p1, uv1); uvOf.TryAdd(p2, uv2);
+                    capChains[c.Vertex].Add((new List<int> { p2, p1 }, -1));
+                }
+                else if (sp != sn)
+                {
+                    int eu = sp ? eNext : ePrev; var other = sp ? next : prev;
+                    int pp = P(c.Vertex, eu, other.Vertex, f);
+                    var uvp = UvAt(m.Verts[pp].Position, c, prev, next);
+                    loop.Add(new BevelEntry(pp, uvp, c.Normal, eu, c.Vertex)); uvOf.TryAdd(pp, uvp);
+                }
+                else
+                {
+                    // 두 베벨 엣지 사이의 코너: 두 오프셋 선의 교점(Sharp) 또는 마이터
+                    var pc = pos[c.Vertex];
+                    var dp = m.Verts[prev.Vertex].Position - pc; var dn = m.Verts[next.Vertex].Position - pc;
+                    float lp = dp.Length(), ln = dn.Length();
+                    var dpH = lp > 1e-12f ? dp / lp : Vector3.Zero; var dnH = ln > 1e-12f ? dn / ln : Vector3.Zero;
+                    Vector3 q;
+                    // 면 안쪽 법선(왼쪽): prev→c 방향과 c→next 방향 기준
+                    var Lp = Vector3.Cross(nf, -dpH); var Ln = Vector3.Cross(nf, dnH);
+                    float oP = Off(ePrev), oN = Off(eNext);
+                    if (slideTypes)
+                    {
+                        float fp = o.WidthType == BevelWidthType.Percent ? width / 100f : MathF.Min(width * clamp / MathF.Max(lp, 1e-9f), 1f);
+                        float fn2 = o.WidthType == BevelWidthType.Percent ? width / 100f : MathF.Min(width * clamp / MathF.Max(ln, 1e-9f), 1f);
+                        if (o.WidthType == BevelWidthType.Percent) { fp *= clamp; fn2 *= clamp; }
+                        if (o.LegacyPerEdgeClamp) { fp = MathF.Min(width, lp * 0.45f) / MathF.Max(lp, 1e-9f); fn2 = MathF.Min(width, ln * 0.45f) / MathF.Max(ln, 1e-9f); }
+                        q = pc + dp * fp + dn * fn2;
+                    }
+                    else
+                    {
+                        // q − c = a·dpH + b·dnH,  (q−c)·Lp = oP,  (q−c)·Ln = oN
+                        float m11 = Vector3.Dot(dpH, Lp), m12 = Vector3.Dot(dnH, Lp), m21 = Vector3.Dot(dpH, Ln), m22 = Vector3.Dot(dnH, Ln);
+                        float det = m11 * m22 - m12 * m21;
+                        if (MathF.Abs(det) > 1e-5f) { float a = (oP * m22 - m12 * oN) / det, b = (m11 * oN - m21 * oP) / det; q = pc + dpH * a + dnH * b; }
+                        else q = pc + (Lp * oP + Ln * oN) * 0.5f; // 거의 일직선
+                    }
+                    bool reflex = Vector3.Dot(Vector3.Cross(dnH, dpH), nf) < -1e-6f;
+                    var miter = reflex ? o.MiterOuter : (o.MiterInner == BevelMiter.Patch ? BevelMiter.Sharp : o.MiterInner);
+                    if (miter == BevelMiter.Sharp)
+                    {
+                        if (!qOnFace.TryGetValue((c.Vertex, f), out int qi)) { qi = m.AddVertex(q); qOnFace[(c.Vertex, f)] = qi; }
+                        var uvq = UvAt(q, c, prev, next);
+                        loop.Add(new BevelEntry(qi, uvq, c.Normal, -2, c.Vertex)); uvOf.TryAdd(qi, uvq);
+                    }
+                    else
+                    {
+                        Vector3 q1, q2;
+                        if (!reflex) { float sp2 = MathF.Max(o.Spread, 1e-4f); q1 = q + dpH * MathF.Min(sp2, lp * 0.45f); q2 = q + dnH * MathF.Min(sp2, ln * 0.45f); }
+                        else { q1 = pc + Lp * oP; q2 = pc + Ln * oN; }
+                        var chain = new List<Vector3> { q1 };
+                        if (miter == BevelMiter.Patch) chain.Add(q);
+                        else chain.AddRange(ProfileMidPoints(q1, q2, q, System.Math.Max(2, segments), spec));
+                        chain.Add(q2);
+                        var ids = new List<int>();
+                        foreach (var cp in chain)
+                        {
+                            int id = m.AddVertex(cp); var uv = UvAt(cp, c, prev, next);
+                            ids.Add(id); uvOf.TryAdd(id, uv);
+                            loop.Add(new BevelEntry(id, uv, c.Normal, -2, c.Vertex));
+                        }
+                        ids.Reverse();
+                        capChains[c.Vertex].Add((ids, -1));
+                    }
+                }
+                if (sp) side[(f, ePrev, c.Vertex)] = (loop[first].Vertex, loop[first].Uv);
+                if (sn) side[(f, eNext, c.Vertex)] = (loop[^1].Vertex, loop[^1].Uv);
+            }
+            rebuilt.Add((f, loop, m.Faces[f].Material));
+        }
+
+        foreach (var (f, _, _) in rebuilt) m.RemoveFace(f, removeIsolated: false);
+
+        bool HardBetween(BevelEntry x, BevelEntry y)
+        {
+            if (x.OriginEdge >= 0 && (y.OriginEdge == x.OriginEdge || (y.OriginEdge == -1 && edgeVerts.TryGetValue(x.OriginEdge, out var ev) && (ev.a == y.Vertex || ev.b == y.Vertex)))) return hardOf[x.OriginEdge];
+            if (y.OriginEdge >= 0 && x.OriginEdge == -1 && edgeVerts.TryGetValue(y.OriginEdge, out var ev2) && (ev2.a == x.Vertex || ev2.b == x.Vertex)) return hardOf[y.OriginEdge];
+            if (x.OriginEdge == -1 && y.OriginEdge == -1)
+                foreach (var (e, (a, b)) in edgeVerts) if ((a == x.Vertex && b == y.Vertex) || (a == y.Vertex && b == x.Vertex)) return hardOf[e];
+            return false;
+        }
+        bool SeamBetween(BevelEntry x, BevelEntry y)
+        {
+            if (x.OriginEdge >= 0 && (y.OriginEdge == x.OriginEdge || (y.OriginEdge == -1 && edgeVerts.TryGetValue(x.OriginEdge, out var ev) && (ev.a == y.Vertex || ev.b == y.Vertex)))) return seamOf[x.OriginEdge];
+            if (y.OriginEdge >= 0 && x.OriginEdge == -1 && edgeVerts.TryGetValue(y.OriginEdge, out var ev2) && (ev2.a == x.Vertex || ev2.b == x.Vertex)) return seamOf[y.OriginEdge];
+            if (x.OriginEdge == -1 && y.OriginEdge == -1)
+                foreach (var (e, (a, b)) in edgeVerts) if ((a == x.Vertex && b == y.Vertex) || (a == y.Vertex && b == x.Vertex)) return seamOf[e];
+            return false;
+        }
+
+        foreach (var (_, loop, material) in rebuilt)
+        {
+            var clean = new List<BevelEntry>();
+            foreach (var en in loop) if (clean.Count == 0 || clean[^1].Vertex != en.Vertex) clean.Add(en);
+            if (clean.Count > 1 && clean[0].Vertex == clean[^1].Vertex) clean.RemoveAt(clean.Count - 1);
+            if (clean.Count < 3) continue;
+            int nf = AddFaceWithCorners(m, clean.Select(e => new Corner(e.Vertex, e.Uv, e.Normal)).ToList(), material);
+            if (nf < 0) continue;
+            for (int i = 0; i < clean.Count; i++)
+            {
+                var x = clean[i]; var y = clean[(i + 1) % clean.Count];
+                SetHard(m, x.Vertex, y.Vertex, HardBetween(x, y));
+                if (SeamBetween(x, y)) SetEdgeSeam(m, x.Vertex, y.Vertex, true);
+            }
+        }
+
+        // 프로파일 공유: 같은 정점에서 같은 두 끝점을 쓰는 프로파일(엣지 루프)은 한 번만 만든다(틈 면 방지).
+        var profCache = new Dictionary<(int v, int lo, int hi), int[]>();
+        (int[] verts, Vector2[] uvs) Profile(int v, int e, (int vert, Vector2 uv) s0, (int vert, Vector2 uv) s1)
+        {
+            var verts = new int[segments + 1]; var uvs = new Vector2[segments + 1];
+            verts[0] = s0.vert; uvs[0] = s0.uv; verts[segments] = s1.vert; uvs[segments] = s1.uv;
+            if (segments == 1) return (verts, uvs);
+            if (s0.vert == s1.vert) { for (int k = 1; k < segments; k++) { verts[k] = s0.vert; uvs[k] = s0.uv; } return (verts, uvs); }
+            bool fwd = s0.vert < s1.vert;
+            var key = (v, fwd ? s0.vert : s1.vert, fwd ? s1.vert : s0.vert);
+            if (!profCache.TryGetValue(key, out var mids))
+            {
+                var plo = m.Verts[key.Item2].Position; var phi = m.Verts[key.Item3].Position;
+                // 모서리 K = 두 끝점 중점을 원래 베벨 엣지 직선에 내린 점
+                var (ea, eb) = edgeVerts[e];
+                var la = m.Verts[ea].Position; var lb = m.Verts[eb].Position; // 원래 정점은 아직 지우지 않았다
+                var mid = (plo + phi) * 0.5f; var ld = lb - la; float ll = ld.LengthSquared();
+                var k = ll > 1e-18f ? la + ld * (Vector3.Dot(mid - la, ld) / ll) : pos[v];
+                var pts = ProfileMidPoints(plo, phi, k, segments, spec);
+                mids = new int[segments - 1];
+                for (int i = 0; i < segments - 1; i++) mids[i] = m.AddVertex(pts[i]);
+                profCache[key] = mids;
+            }
+            for (int k = 1; k < segments; k++)
+            {
+                verts[k] = fwd ? mids[k - 1] : mids[segments - 1 - k];
+                var uv = Vector2.Lerp(s0.uv, s1.uv, (float)k / segments);
+                uvs[k] = uv; uvOf.TryAdd(verts[k], uv);
+            }
+            return (verts, uvs);
+        }
+
+        // 베벨 쿼드 띠
+        int Mat(int f0, int f1) => o.MaterialIndex >= 0 ? o.MaterialIndex : faceMat.GetValueOrDefault(f0, faceMat.GetValueOrDefault(f1));
+        foreach (var (e, f0, f1, a, b) in selInfo)
+        {
+            if (!side.TryGetValue((f0, e, a), out var a0) || !side.TryGetValue((f0, e, b), out var b0) ||
+                !side.TryGetValue((f1, e, a), out var a1) || !side.TryGetValue((f1, e, b), out var b1)) continue;
+            if (a0.vert == a1.vert && b0.vert == b1.vert) continue;
+            var (pa, uva) = Profile(a, e, a0, a1);
+            var (pb, uvb) = Profile(b, e, b0, b1);
+            for (int k = 0; k < segments; k++)
+            {
+                var quad = new List<Corner> { new(pb[k], uvb[k], Vector3.Zero), new(pa[k], uva[k], Vector3.Zero), new(pa[k + 1], uva[k + 1], Vector3.Zero), new(pb[k + 1], uvb[k + 1], Vector3.Zero) };
+                if (quad.Select(c => c.Vertex).Distinct().Count() < 3) continue;
+                int q = AddFaceWithCorners(m, quad, Mat(f0, f1));
+                if (q < 0) continue;
+                result.Add(q); info.Strips.Add(q);
+                var t = new Dictionary<int, float> { [pb[k]] = (float)k / segments, [pa[k]] = (float)k / segments, [pa[k + 1]] = (float)(k + 1) / segments, [pb[k + 1]] = (float)(k + 1) / segments };
+                info.StripProfiles[q] = (faceNormal[f0], faceNormal[f1], t);
+            }
+            // Mark Seams/Sharp: 표시된 엣지는 띠의 면 f0 쪽 가장자리로 이어 간다(경로가 끊기지 않게)
+            if (o.MarkSeams && seamOf.GetValueOrDefault(e)) SetEdgeSeam(m, pa[0], pb[0], true);
+            if (o.MarkSharp && hardOf.GetValueOrDefault(e)) SetHard(m, pa[0], pb[0], true);
+            var ca = new List<int>(); for (int k = segments; k >= 0; k--) ca.Add(pa[k]);
+            var cb = new List<int>(); for (int k = 0; k <= segments; k++) cb.Add(pb[k]);
+            capChains[a].Add((ca, e)); capChains[b].Add((cb, e));
+        }
+
+        // 정점 캡
+        foreach (int v in V)
+        {
+            var loopSegs = LinkChains(capChains[v]);
+            if (loopSegs == null) continue;
+            var loop = new List<int>();
+            foreach (var (pts, _) in loopSegs) for (int i = 0; i < pts.Count - 1; i++) loop.Add(pts[i]);
+            if (loop.Count < 3 || loop.Distinct().Count() != loop.Count) continue;
+            int mat = o.MaterialIndex >= 0 ? o.MaterialIndex : affected.Where(f => faceMat.ContainsKey(f)).Select(f => faceMat[f]).DefaultIfEmpty(0).First();
+            Vector2 Uv(int id) => uvOf.TryGetValue(id, out var uv) ? uv : Vector2.Zero;
+            var capFaces = new List<int>();
+            int nSel = selAt[v].Count;
+            if (nSel >= 3 && segments >= 2 && o.Intersection == BevelIntersection.GridFill)
+                capFaces.AddRange(GridFillCap(m, loop, Uv, pos[v], spec.Bulge, mat));
+            else if (nSel >= 3 && segments >= 2 && o.Intersection == BevelIntersection.Cutoff)
+            {
+                // 엣지마다 프로파일을 평평한 면으로 막고, 가운데에 프로파일 끝점만으로 된 면
+                var center = new List<int>();
+                foreach (var (pts, owner) in loopSegs)
+                {
+                    if (owner >= 0 && pts.Count >= 3)
+                    {
+                        int cf = AddFaceWithCorners(m, pts.Select(id => new Corner(id, Uv(id), Vector3.Zero)).ToList(), mat);
+                        if (cf >= 0) capFaces.Add(cf);
+                        center.Add(pts[0]);
+                    }
+                    else for (int i = 0; i < pts.Count - 1; i++) center.Add(pts[i]);
+                }
+                if (center.Count >= 3 && center.Distinct().Count() == center.Count)
+                {
+                    int cf = AddFaceWithCorners(m, center.Select(id => new Corner(id, Uv(id), Vector3.Zero)).ToList(), mat);
+                    if (cf >= 0) capFaces.Add(cf);
+                }
+            }
+            else
+            {
+                int cf = AddFaceWithCorners(m, loop.Select(id => new Corner(id, Uv(id), Vector3.Zero)).ToList(), mat);
+                if (cf >= 0) capFaces.Add(cf);
+            }
+            result.AddRange(capFaces);
+            // Mark Seams / Sharp: 이 정점에서 표시된 베벨 엣지들의 띠 가장자리(면 f0 쪽)를 캡 둘레를 따라 이어 같은 플래그로 표시
+            if ((o.MarkSeams || o.MarkSharp) && nSel >= 2)
+                foreach (var (flags, isSeam) in new[] { (o.MarkSeams ? seamOf : null, true), (o.MarkSharp ? hardOf : null, false) })
+                {
+                    if (flags == null) continue;
+                    var anchors = new List<int>();
+                    foreach (var (e2, f0, _, _, _) in selInfo)
+                        if (flags.GetValueOrDefault(e2) && selAt[v].Contains(e2) && side.TryGetValue((f0, e2, v), out var sv)) anchors.Add(sv.vert);
+                    if (anchors.Count >= 2) MarkAlongLoop(m, loop, anchors, isSeam);
+                }
+        }
+
+        foreach (int v in V) m.RemoveVertexIfIsolated(v);
+        m.BumpTopology();
+        return result;
+    }
+
+    /// <summary>체인(시작 정점 → … → 끝 정점)들을 끝-시작으로 이어 닫힌 고리를 만든다. 실패하면 null.</summary>
+    private static List<(List<int> pts, int owner)>? LinkChains(List<(List<int> pts, int owner)> chains)
+    {
+        var valid = chains.Where(c => c.pts.Count >= 2).ToList();
+        if (valid.Count == 0) return null;
+        var byStart = new Dictionary<int, int>();
+        for (int i = 0; i < valid.Count; i++) if (!byStart.TryAdd(valid[i].pts[0], i)) return null;
+        var order = new List<(List<int>, int)>();
+        int cur = 0; var used = new HashSet<int>();
+        while (used.Add(cur))
+        {
+            order.Add(valid[cur]);
+            if (!byStart.TryGetValue(valid[cur].pts[^1], out cur)) return null;
+        }
+        if (cur != 0 || order.Count != valid.Count) return null;
+        return order;
+    }
+
+    /// <summary>Grid Fill: 캡 둘레 가운데에 원래 정점 쪽으로 부푼 점을 넣고 쿼드(짝수 둘레) 또는 삼각형으로 채운다.</summary>
+    private static List<int> GridFillCap(PolyMesh m, List<int> loop, Func<int, Vector2> uv, Vector3 corner, float bulge, int mat)
+    {
+        var faces = new List<int>();
+        var avg = Vector3.Zero; var uvAvg = Vector2.Zero;
+        foreach (int id in loop) { avg += m.Verts[id].Position; uvAvg += uv(id); }
+        avg /= loop.Count; uvAvg /= loop.Count;
+        int center = m.AddVertex(avg + (corner - avg) * bulge);
+        int n = loop.Count;
+        if (n % 2 == 0 && n >= 4)
+            for (int i = 0; i < n; i += 2)
+            {
+                int a = loop[i], b = loop[(i + 1) % n], c = loop[(i + 2) % n];
+                int f = AddFaceWithCorners(m, new List<Corner> { new(a, uv(a), Vector3.Zero), new(b, uv(b), Vector3.Zero), new(c, uv(c), Vector3.Zero), new(center, uvAvg, Vector3.Zero) }, mat);
+                if (f >= 0) faces.Add(f);
+            }
+        else
+            for (int i = 0; i < n; i++)
+            {
+                int a = loop[i], b = loop[(i + 1) % n];
+                int f = AddFaceWithCorners(m, new List<Corner> { new(a, uv(a), Vector3.Zero), new(b, uv(b), Vector3.Zero), new(center, uvAvg, Vector3.Zero) }, mat);
+                if (f >= 0) faces.Add(f);
+            }
+        return faces;
+    }
+
+    /// <summary>캡 둘레(loop)에서 이웃한 기준 정점끼리(둘이면 짧은 쪽 경로) 사이 엣지를 심 또는 하드로 표시한다.</summary>
+    private static void MarkAlongLoop(PolyMesh m, List<int> loop, List<int> anchors, bool seam)
+    {
+        int n = loop.Count;
+        var idx = anchors.Select(a => loop.IndexOf(a)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
+        if (idx.Count < 2) return;
+        var spans = new List<(int from, int count)>();
+        for (int k = 0; k < idx.Count; k++) { int a = idx[k], b = idx[(k + 1) % idx.Count]; spans.Add((a, (b - a + n) % n)); }
+        if (idx.Count == 2) spans = new List<(int, int)> { spans[0].count <= spans[1].count ? spans[0] : spans[1] };
+        else spans.RemoveAt(spans.IndexOf(spans.OrderByDescending(x => x.count).First())); // 셋 이상이면 가장 긴 구간 하나만 빼고 이어 준다
+        foreach (var (from, count) in spans)
+            for (int t = 0; t < count; t++)
+            {
+                int a = loop[(from + t) % n], b = loop[(from + t + 1) % n];
+                if (seam) SetEdgeSeam(m, a, b, true); else SetHard(m, a, b, true);
+            }
+    }
+
+    private static void SetEdgeSeam(PolyMesh m, int a, int b, bool seam)
+    {
+        int e = m.FindEdge(a, b);
+        if (e < 0) return;
+        var ed = m.Edges[e]; ed.Seam = seam; m.Edges[e] = ed;
+    }
+
+    // ================================================================ 정점 Bevel (Affect = Vertices)
+
+    /// <summary>
+    /// 선택 정점을 베벨한다: 정점에 모인 각 엣지 위에 폭만큼 물러난 점을 만들고, 정점을 둘러싼 각 면의 모서리를 그 점들 사이의 프로파일(세그먼트)로 깎은 뒤
+    /// 그 둘레로 캡을 만든다(세그먼트 2+는 가운데를 원래 정점 쪽으로 부풀린 Grid Fill).
+    /// </summary>
+    private static List<int> BevelVerticesCore(PolyMesh m, IEnumerable<int> vertIds, BevelOptions o, BevelInfo info)
+    {
+        var result = new List<int>();
+        var V = new HashSet<int>(vertIds.Where(v => v >= 0 && v < m.VertexCount && m.Verts[v].Alive));
+        if (V.Count == 0) return result;
+        int segments = System.Math.Clamp(o.Segments, 1, 100);
+        var spec = ProfileSpec.From(o);
+        float width = MathF.Max(o.Width, 1e-6f);
+        var pos = V.ToDictionary(v => v, v => m.Verts[v].Position);
+
+        float EdgeLen(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
+        int OtherEnd(int e, int v) { var (a, b) = m.EdgeVertices(e); return a == v ? b : a; }
+        float Raw(int e) => o.WidthType == BevelWidthType.Percent ? EdgeLen(e) * width / 100f : width;
+        float clamp = 1f;
+        if (o.ClampOverlap)
+        {
+            var ev = new List<int>();
+            foreach (int v in V)
+            {
+                m.GetVertexEdges(v, ev);
+                foreach (int e in ev)
+                {
+                    float len = EdgeLen(e); if (len < 1e-9f) continue;
+                    float limit = len * (V.Contains(OtherEnd(e, v)) ? 0.49f : 0.98f);
+                    if (Raw(e) > limit) clamp = MathF.Min(clamp, limit / Raw(e));
+                }
+            }
+        }
+
+        var affected = new List<int>(); var tmp = new List<int>();
+        foreach (int v in V) { m.GetVertexFaces(v, tmp); foreach (int f in tmp) if (!affected.Contains(f)) affected.Add(f); }
+        var hardOf = new Dictionary<int, bool>(); var seamOf = new Dictionary<int, bool>(); var edgeVerts = new Dictionary<int, (int, int)>();
+        var faceMat = new Dictionary<int, int>();
+        foreach (int f in affected)
+        {
+            var hes = new List<int>(); m.GetFaceHalfEdges(f, hes);
+            foreach (int he in hes) { int e = m.Hes[he].Edge; hardOf[e] = m.Edges[e].Hard; seamOf[e] = m.Edges[e].Seam; edgeVerts[e] = m.EdgeVertices(e); }
+            faceMat[f] = m.Faces[f].Material;
+        }
+
+        var pOnEdge = new Dictionary<(int v, int e), int>();
+        var uvOf = new Dictionary<int, Vector2>();
+        var capChains = V.ToDictionary(v => v, _ => new List<(List<int> pts, int owner)>());
+        int P(int v, int e, int other)
+        {
+            if (pOnEdge.TryGetValue((v, e), out int id)) return id;
+            var pv = pos[v]; var po = m.Verts[other].Position;
+            float len = Vector3.Distance(pv, po);
+            float L = Raw(e) * clamp;
+            id = m.AddVertex(len > 1e-9f ? pv + (po - pv) * (L / len) : pv);
+            pOnEdge[(v, e)] = id;
+            return id;
+        }
+
+        var rebuilt = new List<(int face, List<(int vert, Vector2 uv, int originEdge)> loop, int material)>();
+        foreach (int f in affected)
+        {
+            var corners = CaptureCorners(m, f);
+            int n = corners.Count;
+            var loop = new List<(int, Vector2, int)>();
+            for (int i = 0; i < n; i++)
+            {
+                var c = corners[i]; var prev = corners[(i + n - 1) % n]; var next = corners[(i + 1) % n];
+                if (!V.Contains(c.Vertex)) { loop.Add((c.Vertex, c.Uv, -1)); continue; }
+                int ePrev = m.FindEdge(prev.Vertex, c.Vertex), eNext = m.FindEdge(c.Vertex, next.Vertex);
+                int p1 = P(c.Vertex, ePrev, prev.Vertex), p2 = P(c.Vertex, eNext, next.Vertex);
+                float l1 = Vector3.Distance(pos[c.Vertex], m.Verts[prev.Vertex].Position), l2 = Vector3.Distance(pos[c.Vertex], m.Verts[next.Vertex].Position);
+                float t1 = l1 > 1e-9f ? Vector3.Distance(pos[c.Vertex], m.Verts[p1].Position) / l1 : 0, t2 = l2 > 1e-9f ? Vector3.Distance(pos[c.Vertex], m.Verts[p2].Position) / l2 : 0;
+                var uv1 = Vector2.Lerp(c.Uv, prev.Uv, t1); var uv2 = Vector2.Lerp(c.Uv, next.Uv, t2);
+                var chain = new List<int> { p1 };
+                loop.Add((p1, uv1, ePrev)); uvOf.TryAdd(p1, uv1);
+                var mids = ProfileMidPoints(m.Verts[p1].Position, m.Verts[p2].Position, pos[c.Vertex], segments, spec);
+                for (int k = 0; k < mids.Count; k++)
+                {
+                    int id = m.AddVertex(mids[k]);
+                    var uv = Vector2.Lerp(uv1, uv2, (float)(k + 1) / segments);
+                    loop.Add((id, uv, -2)); uvOf.TryAdd(id, uv); chain.Add(id);
+                }
+                loop.Add((p2, uv2, eNext)); uvOf.TryAdd(p2, uv2); chain.Add(p2);
+                chain.Reverse();
+                capChains[c.Vertex].Add((chain, -1));
+            }
+            rebuilt.Add((f, loop, m.Faces[f].Material));
+        }
+        foreach (var (f, _, _) in rebuilt) m.RemoveFace(f, removeIsolated: false);
+        foreach (var (_, loop, material) in rebuilt)
+        {
+            var clean = new List<(int vert, Vector2 uv, int originEdge)>();
+            foreach (var en in loop) if (clean.Count == 0 || clean[^1].vert != en.vert) clean.Add(en);
+            if (clean.Count > 1 && clean[0].vert == clean[^1].vert) clean.RemoveAt(clean.Count - 1);
+            if (clean.Count < 3) continue;
+            int nf = AddFaceWithCorners(m, clean.Select(e => new Corner(e.vert, e.uv, Vector3.Zero)).ToList(), material);
+            if (nf < 0) continue;
+            for (int i = 0; i < clean.Count; i++)
+            {
+                var x = clean[i]; var y = clean[(i + 1) % clean.Count];
+                // 원래 엣지 위 구간은 그 엣지의 하드/심을 잇는다
+                int oe = x.originEdge >= 0 && y.originEdge == -1 ? x.originEdge : y.originEdge >= 0 && x.originEdge == -1 ? y.originEdge : -1;
+                if (oe >= 0) { SetHard(m, x.vert, y.vert, hardOf.GetValueOrDefault(oe)); if (seamOf.GetValueOrDefault(oe)) SetEdgeSeam(m, x.vert, y.vert, true); }
+            }
+        }
+        foreach (int v in V)
+        {
+            var chains = capChains[v];
+            var linked = LinkChains(chains);
+            List<int> loop;
+            if (linked != null) { loop = new List<int>(); foreach (var (pts, _) in linked) for (int i = 0; i < pts.Count - 1; i++) loop.Add(pts[i]); }
+            else
+            {
+                // 경계 정점: 열린 사슬을 이어 붙이고 마지막을 직선으로 닫는다
+                loop = OpenChainLoop(chains);
+                if (loop == null) continue;
+            }
+            if (loop.Count < 3 || loop.Distinct().Count() != loop.Count) continue;
+            int mat = o.MaterialIndex >= 0 ? o.MaterialIndex : faceMat.Values.DefaultIfEmpty(0).First();
+            Vector2 Uv(int id) => uvOf.TryGetValue(id, out var uv) ? uv : Vector2.Zero;
+            if (segments >= 2 && linked != null && o.Intersection != BevelIntersection.NGon)
+                result.AddRange(GridFillCap(m, loop, Uv, pos[v], spec.Bulge, mat));
+            else
+            {
+                int cf = AddFaceWithCorners(m, loop.Select(id => new Corner(id, Uv(id), Vector3.Zero)).ToList(), mat);
+                if (cf >= 0) result.Add(cf);
+            }
+        }
+        foreach (int v in V) m.RemoveVertexIfIsolated(v);
+        m.BumpTopology();
+        return result;
+    }
+
+    /// <summary>열린 사슬들(경계 정점)을 끝-시작으로 이어 하나의 열린 경로로 만든다(닫는 엣지는 면이 만든다).</summary>
+    private static List<int>? OpenChainLoop(List<(List<int> pts, int owner)> chains)
+    {
+        var valid = chains.Where(c => c.pts.Count >= 2).ToList();
+        if (valid.Count == 0) return null;
+        var byStart = new Dictionary<int, int>();
+        for (int i = 0; i < valid.Count; i++) if (!byStart.TryAdd(valid[i].pts[0], i)) return null;
+        var ends = new HashSet<int>(valid.Select(c => c.pts[^1]));
+        int start = Enumerable.Range(0, valid.Count).FirstOrDefault(i => !ends.Contains(valid[i].pts[0]), -1);
+        if (start < 0) return null;
+        var path = new List<int>(); int cur = start; var used = new HashSet<int>();
+        while (used.Add(cur))
+        {
+            var pts = valid[cur].pts;
+            for (int i = 0; i < pts.Count - 1; i++) path.Add(pts[i]);
+            if (!byStart.TryGetValue(pts[^1], out cur)) { path.Add(pts[^1]); break; }
+        }
+        return used.Count == valid.Count ? path : null;
+    }
+
+    // ================================================================ 마무리 / 노멀
+
     /// <summary>
     /// 둥근 Bevel(세그먼트 2+) 마무리(Maya와 같게):
-    /// ① 끝 정점의 캡이 이웃한 평평한 면과 같은 평면이면(엣지 하나만 Bevel된 모서리) 그 면에 합쳐 원호 정점을 면 테두리로 흡수한다
-    ///    — 별도의 얇은 D자 캡 면이 생겨 면이 잘게 쪼개져 보이지 않게.
-    /// ② 스트립 사이/스트립과 이웃 면 사이 엣지를 30° 스무딩 각(60°)으로 소프트/하드 처리해 둥근 면이 부드럽게 음영된다.
+    /// ① 끝 정점의 캡이 이웃한 평평한 면과 같은 평면이면(엣지 하나만 Bevel된 모서리) 그 면에 합쳐 원호 정점을 면 테두리로 흡수한다.
+    /// ② 스트립 사이/스트립과 이웃 면 사이 엣지를 60° 스무딩 각으로 소프트/하드 처리해 둥근 면이 부드럽게 음영된다.
     /// </summary>
     private static void PostProcessRoundBevel(PolyMesh m, List<int> result, HashSet<int> strips)
     {
@@ -37,12 +894,25 @@ public static partial class MeshOps
             foreach (int f in result.ToArray())
             {
                 if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive) { result.Remove(f); continue; }
-                if (strips.Contains(f)) continue; // 띠는 그대로(같은 평면 이웃 면이 있어도 합치지 않음), 캡만 끝 면에 흡수
+                if (strips.Contains(f)) continue;
                 var nf = MeshNormals.FaceNormalUnnormalized(m, f);
-                if (nf.LengthSquared() < 1e-20f) continue;
-                nf = Vector3.Normalize(nf);
                 m.GetFaceHalfEdges(f, hes);
-                // 둥근 영역의 면(이웃한 새 면과 꺾여 있음)만 대상: 전부 평평한 경우(평면 위 Bevel)는 그대로 둔다
+                if (nf.LengthSquared() < 1e-14f)
+                {
+                    // 넓이 0인 캡(직선 프로파일): 이웃한 원래 면에 흡수
+                    foreach (int he in hes)
+                    {
+                        int tw = m.Hes[he].Twin; if (tw < 0) continue;
+                        int g = m.Hes[tw].Face;
+                        if (g < 0 || newSet.Contains(g) || !m.Faces[g].Alive) continue;
+                        var (ok0, _) = MergeFacesAcrossEdgeReturning(m, m.Hes[he].Edge);
+                        if (ok0) { result.Remove(f); merged = true; }
+                        break;
+                    }
+                    if (merged) break;
+                    continue;
+                }
+                nf = Vector3.Normalize(nf);
                 bool curved = false;
                 foreach (int he in hes)
                 {
@@ -59,7 +929,8 @@ public static partial class MeshOps
                     int g = m.Hes[tw].Face;
                     if (g < 0 || newSet.Contains(g) || !m.Faces[g].Alive) continue;
                     var ng = MeshNormals.FaceNormalUnnormalized(m, g);
-                    if (ng.LengthSquared() < 1e-20f || Vector3.Dot(nf, Vector3.Normalize(ng)) < 0.9999f) continue;
+                    // 같은 평면(오목 프로파일이면 캡이 뒤집혀 있으므로 방향 무관)
+                    if (ng.LengthSquared() < 1e-20f || MathF.Abs(Vector3.Dot(nf, Vector3.Normalize(ng))) < 0.9999f) continue;
                     var (ok, _) = MergeFacesAcrossEdgeReturning(m, m.Hes[he].Edge);
                     if (ok) { result.Remove(f); merged = true; }
                     break;
@@ -67,292 +938,124 @@ public static partial class MeshOps
                 if (merged) break;
             }
         }
+        SoftenNewFaces(m, result);
+    }
+
+    private static void SoftenNewFaces(PolyMesh m, List<int> faces)
+    {
+        var hes = new List<int>();
         var edges = new HashSet<int>();
-        foreach (int f in result)
+        foreach (int f in faces)
         {
-            if (!m.Faces[f].Alive) continue;
+            if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive) continue;
             m.GetFaceHalfEdges(f, hes);
             foreach (int he in hes) edges.Add(m.Hes[he].Edge);
         }
-        SoftenHardenByAngle(m, edges, 60f); // 세그먼트 사이(90°/s)와 끝 면 경계는 부드럽게, 원래의 직각 모서리는 하드
+        SoftenHardenByAngle(m, edges, 60f);
         m.BumpTopology();
-    }
-
-    private static List<int> BevelEdgesCore(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments, out HashSet<int> strips)
-    {
-        var result = new List<int>();
-        strips = new HashSet<int>();
-        var stripSet = strips;
-        var selected = new HashSet<int>(edgeIds.Where(e => e >= 0 && e < m.EdgeCount && m.Edges[e].Alive && !m.IsBoundaryEdge(e)));
-        if (selected.Count == 0) return result;
-        distance = MathF.Max(distance, 1e-5f);
-        segments = Math.Max(1, segments);
-
-        var V = new HashSet<int>();
-        foreach (int e in selected) { var (a, b) = m.EdgeVertices(e); V.Add(a); V.Add(b); }
-
-        // 영향 면과 원래 하드 플래그, 면 법선(프로파일 원호용; 제거 전에 기록)
-        var affected = new List<int>();
-        var tmp = new List<int>();
-        foreach (int v in V) { m.GetVertexFaces(v, tmp); foreach (int f in tmp) if (!affected.Contains(f)) affected.Add(f); }
-        var hardOf = new Dictionary<int, bool>();
-        var edgeVerts = new Dictionary<int, (int a, int b)>();
-        var faceNormal = new Dictionary<int, Vector3>();
-        foreach (int f in affected)
-        {
-            var hes = new List<int>(); m.GetFaceHalfEdges(f, hes);
-            foreach (int he in hes) { int e = m.Hes[he].Edge; hardOf[e] = m.Edges[e].Hard; edgeVerts[e] = m.EdgeVertices(e); }
-            var fn = MeshNormals.FaceNormalUnnormalized(m, f);
-            faceNormal[f] = fn.LengthSquared() > 1e-18f ? Vector3.Normalize(fn) : Vector3.Zero;
-        }
-        // 선택 엣지의 면/방향(제거 전에 기록)
-        var selInfo = new List<(int e, int f0, int f1, int a, int b)>();
-        foreach (int e in selected)
-        {
-            var ed = m.Edges[e];
-            int he0 = ed.He0, he1 = ed.He1;
-            selInfo.Add((e, m.Hes[he0].Face, m.Hes[he1].Face, m.Hes[he0].Vertex, m.Hes[m.Hes[he0].Next].Vertex));
-        }
-
-        var pOnEdge = new Dictionary<(int v, int e), int>();
-        var qOnFace = new Dictionary<(int v, int f), int>();
-        var uvOf = new Dictionary<int, Vector2>();
-        var side = new Dictionary<(int f, int e, int v), (int vert, Vector2 uv)>();
-        var capEdges = new Dictionary<int, List<(int from, int to)>>();
-        foreach (int v in V) capEdges[v] = new List<(int, int)>();
-
-        int P(int v, int e, int other)
-        {
-            if (pOnEdge.TryGetValue((v, e), out int id)) return id;
-            var pv = m.Verts[v].Position; var po = m.Verts[other].Position;
-            float len = Vector3.Distance(pv, po);
-            float d = MathF.Min(distance, len * 0.45f);
-            id = m.AddVertex(len > 1e-9f ? pv + (po - pv) * (d / len) : pv);
-            pOnEdge[(v, e)] = id;
-            return id;
-        }
-        float Frac(int v, int other)
-        {
-            float len = Vector3.Distance(m.Verts[v].Position, m.Verts[other].Position);
-            return len > 1e-9f ? MathF.Min(distance, len * 0.45f) / len : 0f;
-        }
-
-        var rebuilt = new List<(int face, List<BevelEntry> loop, int material)>();
-        foreach (int f in affected)
-        {
-            var corners = CaptureCorners(m, f);
-            int n = corners.Count;
-            var loop = new List<BevelEntry>();
-            for (int i = 0; i < n; i++)
-            {
-                var c = corners[i]; var prev = corners[(i + n - 1) % n]; var next = corners[(i + 1) % n];
-                if (!V.Contains(c.Vertex)) { loop.Add(new BevelEntry(c.Vertex, c.Uv, c.Normal, -1, c.Vertex)); continue; }
-                int ePrev = m.FindEdge(prev.Vertex, c.Vertex), eNext = m.FindEdge(c.Vertex, next.Vertex);
-                bool sp = selected.Contains(ePrev), sn = selected.Contains(eNext);
-                int first = loop.Count;
-                if (!sp && !sn)
-                {
-                    int p1 = P(c.Vertex, ePrev, prev.Vertex), p2 = P(c.Vertex, eNext, next.Vertex);
-                    var uv1 = Vector2.Lerp(c.Uv, prev.Uv, Frac(c.Vertex, prev.Vertex)); var uv2 = Vector2.Lerp(c.Uv, next.Uv, Frac(c.Vertex, next.Vertex));
-                    loop.Add(new BevelEntry(p1, uv1, c.Normal, ePrev, c.Vertex)); loop.Add(new BevelEntry(p2, uv2, c.Normal, eNext, c.Vertex));
-                    uvOf.TryAdd(p1, uv1); uvOf.TryAdd(p2, uv2);
-                    capEdges[c.Vertex].Add((p2, p1));
-                }
-                else if (sp && !sn)
-                {
-                    int p2 = P(c.Vertex, eNext, next.Vertex);
-                    var uv2 = Vector2.Lerp(c.Uv, next.Uv, Frac(c.Vertex, next.Vertex));
-                    loop.Add(new BevelEntry(p2, uv2, c.Normal, eNext, c.Vertex)); uvOf.TryAdd(p2, uv2);
-                }
-                else if (!sp && sn)
-                {
-                    int p1 = P(c.Vertex, ePrev, prev.Vertex);
-                    var uv1 = Vector2.Lerp(c.Uv, prev.Uv, Frac(c.Vertex, prev.Vertex));
-                    loop.Add(new BevelEntry(p1, uv1, c.Normal, ePrev, c.Vertex)); uvOf.TryAdd(p1, uv1);
-                }
-                else
-                {
-                    if (!qOnFace.TryGetValue((c.Vertex, f), out int q))
-                    {
-                        var pc = m.Verts[c.Vertex].Position;
-                        var dp = m.Verts[prev.Vertex].Position - pc; var dn = m.Verts[next.Vertex].Position - pc;
-                        var pos = pc + dp * Frac(c.Vertex, prev.Vertex) + dn * Frac(c.Vertex, next.Vertex);
-                        q = m.AddVertex(pos); qOnFace[(c.Vertex, f)] = q;
-                    }
-                    var uvq = c.Uv + (prev.Uv - c.Uv) * Frac(c.Vertex, prev.Vertex) + (next.Uv - c.Uv) * Frac(c.Vertex, next.Vertex);
-                    loop.Add(new BevelEntry(q, uvq, c.Normal, -2, c.Vertex)); uvOf.TryAdd(q, uvq);
-                }
-                if (sp) side[(f, ePrev, c.Vertex)] = (loop[first].Vertex, loop[first].Uv);
-                if (sn) side[(f, eNext, c.Vertex)] = (loop[^1].Vertex, loop[^1].Uv);
-            }
-            rebuilt.Add((f, loop, m.Faces[f].Material));
-        }
-
-        foreach (var (f, _, _) in rebuilt) m.RemoveFace(f, removeIsolated: false);
-
-        bool HardBetween(BevelEntry x, BevelEntry y)
-        {
-            if (x.OriginEdge >= 0 && (y.OriginEdge == x.OriginEdge || (y.OriginEdge == -1 && edgeVerts.TryGetValue(x.OriginEdge, out var ev) && (ev.a == y.Vertex || ev.b == y.Vertex)))) return hardOf[x.OriginEdge];
-            if (y.OriginEdge >= 0 && x.OriginEdge == -1 && edgeVerts.TryGetValue(y.OriginEdge, out var ev2) && (ev2.a == x.Vertex || ev2.b == x.Vertex)) return hardOf[y.OriginEdge];
-            if (x.OriginEdge == -1 && y.OriginEdge == -1)
-            {
-                foreach (var (e, (a, b)) in edgeVerts) if ((a == x.Vertex && b == y.Vertex) || (a == y.Vertex && b == x.Vertex)) return hardOf[e];
-            }
-            return false;
-        }
-
-        foreach (var (_, loop, material) in rebuilt)
-        {
-            // 연속 중복 제거
-            var clean = new List<BevelEntry>();
-            foreach (var en in loop) if (clean.Count == 0 || clean[^1].Vertex != en.Vertex) clean.Add(en);
-            if (clean.Count > 1 && clean[0].Vertex == clean[^1].Vertex) clean.RemoveAt(clean.Count - 1);
-            if (clean.Count < 3) continue;
-            int nf = AddFaceWithCorners(m, clean.Select(e => new Corner(e.Vertex, e.Uv, e.Normal)).ToList(), material);
-            if (nf < 0) continue;
-            for (int i = 0; i < clean.Count; i++) SetHard(m, clean[i].Vertex, clean[(i + 1) % clean.Count].Vertex, HardBetween(clean[i], clean[(i + 1) % clean.Count]));
-        }
-
-        // 한 끝의 프로파일: 면 f0의 오프셋 점 → (중간 점 segments-1개) → 면 f1의 오프셋 점. 정점 ID와 UV(프로파일을 따라 보간).
-        // 같은 정점에서 같은 두 끝점을 쓰는 프로파일(엣지 루프처럼 Bevel 엣지 두 개가 이어지는 정점)은 한 번만 만들어 공유한다:
-        // 엣지마다 따로 만들면 이웃 면 법선이 달라 중간 점이 어긋나고, 그 사이에 얇은 틈 면(뒷면)이 생겨 Bevel 방향과 직각으로 쪼개져 보인다.
-        // 공유 프로파일의 원호는 그 정점을 지나는 모든 Bevel 엣지의 면 법선 평균으로 만든다.
-        var profNormals = new Dictionary<(int v, int lo, int hi), (Vector3 nlo, Vector3 nhi)>();
-        var profCache = new Dictionary<(int v, int lo, int hi), int[]>();
-        void Gather(int v, (int vert, Vector2 uv) s0, int f0, (int vert, Vector2 uv) s1, int f1)
-        {
-            if (segments == 1 || s0.vert == s1.vert) return;
-            bool fwd = s0.vert < s1.vert;
-            var key = (v, fwd ? s0.vert : s1.vert, fwd ? s1.vert : s0.vert);
-            var nlo = fwd ? faceNormal[f0] : faceNormal[f1]; var nhi = fwd ? faceNormal[f1] : faceNormal[f0];
-            profNormals[key] = profNormals.TryGetValue(key, out var acc) ? (acc.nlo + nlo, acc.nhi + nhi) : (nlo, nhi);
-        }
-        (int[] verts, Vector2[] uvs) Profile(int v, (int vert, Vector2 uv) s0, int f0, (int vert, Vector2 uv) s1, int f1)
-        {
-            var verts = new int[segments + 1]; var uvs = new Vector2[segments + 1];
-            verts[0] = s0.vert; uvs[0] = s0.uv; verts[segments] = s1.vert; uvs[segments] = s1.uv;
-            if (segments == 1) return (verts, uvs);
-            if (s0.vert == s1.vert)
-            {
-                for (int k = 1; k < segments; k++) { verts[k] = s0.vert; uvs[k] = s0.uv; }
-                return (verts, uvs);
-            }
-            bool fwd = s0.vert < s1.vert;
-            var key = (v, fwd ? s0.vert : s1.vert, fwd ? s1.vert : s0.vert);
-            if (!profCache.TryGetValue(key, out var mids))
-            {
-                var (nlo, nhi) = profNormals.TryGetValue(key, out var acc) ? acc : (fwd ? faceNormal[f0] : faceNormal[f1], fwd ? faceNormal[f1] : faceNormal[f0]);
-                nlo = nlo.LengthSquared() > 1e-12f ? Vector3.Normalize(nlo) : nlo; nhi = nhi.LengthSquared() > 1e-12f ? Vector3.Normalize(nhi) : nhi;
-                var pts = ArcPoints(m.Verts[key.Item2].Position, nlo, m.Verts[key.Item3].Position, nhi, segments);
-                mids = new int[segments - 1];
-                for (int k = 0; k < segments - 1; k++) mids[k] = m.AddVertex(pts[k]);
-                profCache[key] = mids;
-            }
-            for (int k = 1; k < segments; k++)
-            {
-                verts[k] = fwd ? mids[k - 1] : mids[segments - 1 - k];
-                var uv = Vector2.Lerp(s0.uv, s1.uv, (float)k / segments);
-                uvs[k] = uv; uvOf.TryAdd(verts[k], uv);
-            }
-            return (verts, uvs);
-        }
-
-        foreach (var (e, f0, f1, a, b) in selInfo)
-        {
-            if (!side.TryGetValue((f0, e, a), out var a0) || !side.TryGetValue((f0, e, b), out var b0) ||
-                !side.TryGetValue((f1, e, a), out var a1) || !side.TryGetValue((f1, e, b), out var b1)) continue;
-            Gather(a, a0, f0, a1, f1); Gather(b, b0, f0, b1, f1);
-        }
-
-        // 베벨 쿼드 띠: 엣지마다 segments개의 쿼드가 양끝 프로파일의 k번째 점끼리 잇는다
-        foreach (var (e, f0, f1, a, b) in selInfo)
-        {
-            if (!side.TryGetValue((f0, e, a), out var a0) || !side.TryGetValue((f0, e, b), out var b0) ||
-                !side.TryGetValue((f1, e, a), out var a1) || !side.TryGetValue((f1, e, b), out var b1)) continue;
-            if (a0.vert == a1.vert && b0.vert == b1.vert) continue;
-            var (pa, uva) = Profile(a, a0, f0, a1, f1);
-            var (pb, uvb) = Profile(b, b0, f0, b1, f1);
-            for (int k = 0; k < segments; k++)
-            {
-                var quad = new List<Corner> { new(pb[k], uvb[k], Vector3.Zero), new(pa[k], uva[k], Vector3.Zero), new(pa[k + 1], uva[k + 1], Vector3.Zero), new(pb[k + 1], uvb[k + 1], Vector3.Zero) };
-                if (quad.Select(c => c.Vertex).Distinct().Count() < 3) continue;
-                int q = AddFaceWithCorners(m, quad);
-                if (q >= 0) { result.Add(q); stripSet.Add(q); }
-            }
-            for (int k = segments; k >= 1; k--) capEdges[a].Add((pa[k], pa[k - 1]));
-            for (int k = 0; k < segments; k++) capEdges[b].Add((pb[k], pb[k + 1]));
-        }
-
-        // 정점 캡: 그 정점에 모이는 모든 프로파일 점을 순환 순서로 잇는 n각형
-        foreach (int v in V)
-        {
-            var edges = capEdges[v];
-            if (edges.Count < 3) continue;
-            var next = new Dictionary<int, int>();
-            bool bad = false;
-            foreach (var (from, to) in edges) { if (from == to || !next.TryAdd(from, to)) { bad = true; break; } }
-            if (bad) continue;
-            var loop = new List<int>();
-            int start = edges[0].from, cur = start;
-            while (loop.Count <= edges.Count)
-            {
-                loop.Add(cur);
-                if (!next.TryGetValue(cur, out cur)) { bad = true; break; }
-                if (cur == start) break;
-            }
-            if (bad || cur != start || loop.Count < 3 || loop.Count != edges.Count) continue;
-            var corners = loop.Select(id => new Corner(id, uvOf.TryGetValue(id, out var uv) ? uv : Vector2.Zero, Vector3.Zero)).ToList();
-            int cf = AddFaceWithCorners(m, corners);
-            if (cf >= 0) result.Add(cf);
-        }
-
-        foreach (int v in V) m.RemoveVertexIfIsolated(v);
-        m.BumpTopology();
-        return result;
     }
 
     /// <summary>
-    /// p0(법선 n0인 면 위)과 p1(법선 n1인 면 위) 사이의 둥근 프로파일 중간 점 segments-1개.
-    /// 중심은 p0 - s·n0, p1 - t·n1 두 직선의 최근접점(대칭이면 두 면에 접하는 원의 중심), 반지름은 두 끝 반지름을 선형 보간.
-    /// 두 면이 거의 공면이거나 중심이 불안정하면 선형 보간.
+    /// Harden Normals: 띠 면의 코너 노멀을 프로파일 위치에 따라 두 이웃 면 법선 사이로 보간해 고정한다(양 끝 = 이웃 면 법선).
+    /// 띠와 원래 면 사이 엣지는 하드로 두어 원래 면은 평평하게 보이고, 베벨 면은 이웃과 이어지듯 부드럽게 보인다.
     /// </summary>
-    internal static List<Vector3> ArcPoints(Vector3 p0, Vector3 n0, Vector3 p1, Vector3 n1, int segments)
+    private static void ApplyHardenNormals(PolyMesh m, List<int> result, BevelInfo info)
     {
-        var pts = new List<Vector3>(Math.Max(0, segments - 1));
-        if (segments < 2) return pts;
-        bool linear = true;
-        Vector3 c = default, u0n = default, u1n = default;
-        float r0 = 0, r1 = 0, omega = 0;
-        if (n0.LengthSquared() > 0.5f && n1.LengthSquared() > 0.5f)
+        var newSet = new HashSet<int>(result);
+        var hes = new List<int>();
+        foreach (var (f, (nA, nB, t)) in info.StripProfiles)
         {
-            var d0 = -n0; var d1 = -n1;
-            float bb = Vector3.Dot(d0, d1);
-            float denom = 1f - bb * bb;
-            if (denom > 1e-4f)
+            if (f >= m.FaceCount || !m.Faces[f].Alive) continue;
+            m.GetFaceHalfEdges(f, hes);
+            foreach (int he in hes)
             {
-                var w = p0 - p1;
-                float d = Vector3.Dot(d0, w), e = Vector3.Dot(d1, w);
-                float s = (bb * e - d) / denom, t = (e - bb * d) / denom;
-                c = ((p0 + d0 * s) + (p1 + d1 * t)) * 0.5f;
-                var u0 = p0 - c; var u1 = p1 - c;
-                r0 = u0.Length(); r1 = u1.Length();
-                float chord = Vector3.Distance(p0, p1);
-                if (r0 > 1e-7f && r1 > 1e-7f && r0 < chord * 50f && r1 < chord * 50f)
-                {
-                    u0n = u0 / r0; u1n = u1 / r1;
-                    omega = MathF.Acos(System.Math.Clamp(Vector3.Dot(u0n, u1n), -1f, 1f));
-                    if (omega > 1e-3f && omega < MathF.PI - 1e-3f) linear = false;
-                }
+                var h = m.Hes[he];
+                float s = t.TryGetValue(h.Vertex, out var tv) ? tv : 0.5f;
+                var n = SlerpNormal(nA, nB, s);
+                if (n.LengthSquared() < 1e-12f) continue;
+                h.Normal = n; h.NormalLocked = true; m.Hes[he] = h;
+                int tw = h.Twin;
+                if (tw >= 0 && !newSet.Contains(m.Hes[tw].Face)) { var ed = m.Edges[h.Edge]; ed.Hard = true; m.Edges[h.Edge] = ed; }
+            }
+            // 띠 내부 엣지는 부드럽게
+            foreach (int he in hes) { int tw = m.Hes[he].Twin; if (tw >= 0 && info.Strips.Contains(m.Hes[tw].Face)) { var ed = m.Edges[m.Hes[he].Edge]; ed.Hard = false; m.Edges[m.Hes[he].Edge] = ed; } }
+        }
+    }
+
+    private static Vector3 SlerpNormal(Vector3 a, Vector3 b, float t)
+    {
+        if (a.LengthSquared() < 1e-12f) return b; if (b.LengthSquared() < 1e-12f) return a;
+        float d = System.Math.Clamp(Vector3.Dot(a, b), -1f, 1f);
+        float w = MathF.Acos(d);
+        if (w < 1e-4f) return Vector3.Normalize(Vector3.Lerp(a, b, t));
+        var r = (a * MathF.Sin((1 - t) * w) + b * MathF.Sin(t * w)) / MathF.Sin(w);
+        return r.LengthSquared() > 1e-12f ? Vector3.Normalize(r) : a;
+    }
+
+    /// <summary>
+    /// Face Strength + Weighted Normal: 새 띠 = Medium, 새 캡 = Weak, 원래 면 = Medium(Affected: 새 면과 이웃한 원래 면 = Strong, All: 원래 면 모두 Strong).
+    /// 새 면이 닿는 정점의 각 코너 노멀을, 그 코너의 스무딩 부채꼴에서 가장 센 면들만의 면적 가중 평균으로 고정한다.
+    /// </summary>
+    private static void ApplyFaceStrength(PolyMesh m, List<int> result, BevelInfo info, BevelFaceStrength mode)
+    {
+        var newSet = new HashSet<int>(result);
+        var hes = new List<int>();
+        int Strength(int f)
+        {
+            if (newSet.Contains(f)) return info.Strips.Contains(f) ? 2 : 1;
+            if (mode == BevelFaceStrength.All) return 3;
+            if (mode == BevelFaceStrength.Affected)
+            {
+                m.GetFaceHalfEdges(f, hes);
+                foreach (int he in hes) { int tw = m.Hes[he].Twin; if (tw >= 0 && newSet.Contains(m.Hes[tw].Face)) return 3; }
+                // 정점만 맞닿아도 영향 면
+                foreach (int he in hes.ToArray()) foreach (int o in m.VertexOutgoing(m.Hes[he].Vertex).ToArray()) if (newSet.Contains(m.Hes[o].Face)) return 3;
+            }
+            return 2;
+        }
+        var strength = new Dictionary<int, int>();
+        int S(int f) { if (!strength.TryGetValue(f, out int s)) { s = Strength(f); strength[f] = s; } return s; }
+        var verts = new HashSet<int>();
+        foreach (int f in result) { if (!m.Faces[f].Alive) continue; m.GetFaceHalfEdges(f, hes); foreach (int he in hes) verts.Add(m.Hes[he].Vertex); }
+        foreach (int v in verts)
+        {
+            foreach (int h in m.VertexOutgoing(v).ToArray())
+            {
+                var fan = CornerFan(m, h);
+                int best = fan.Max(S);
+                var sum = Vector3.Zero;
+                foreach (int f in fan) if (S(f) == best) sum += MeshNormals.FaceNormalUnnormalized(m, f);
+                if (sum.LengthSquared() < 1e-20f) continue;
+                var he = m.Hes[h]; he.Normal = Vector3.Normalize(sum); he.NormalLocked = true; m.Hes[h] = he;
             }
         }
-        for (int k = 1; k < segments; k++)
+    }
+
+    /// <summary>코너 h(정점의 나가는 하프에지)와 소프트 엣지로 이어진 면들(MeshNormals와 같은 스무딩 규칙).</summary>
+    private static List<int> CornerFan(PolyMesh m, int h)
+    {
+        var faces = new List<int> { m.Hes[h].Face };
+        bool wrapped = false; int cur = h;
+        for (int g = 0; g < 4096; g++)
         {
-            float f = (float)k / segments;
-            if (linear) { pts.Add(Vector3.Lerp(p0, p1, f)); continue; }
-            float sinO = MathF.Sin(omega);
-            var dir = (u0n * MathF.Sin((1f - f) * omega) + u1n * MathF.Sin(f * omega)) / sinO;
-            pts.Add(c + dir * (r0 + (r1 - r0) * f));
+            var ch = m.Hes[cur];
+            if (ch.Twin < 0 || m.Edges[ch.Edge].Hard) break;
+            int nxt = m.Hes[ch.Twin].Next;
+            if (nxt == h) { wrapped = true; break; }
+            faces.Add(m.Hes[nxt].Face); cur = nxt;
         }
-        return pts;
+        if (!wrapped)
+        {
+            cur = h;
+            for (int g = 0; g < 4096; g++)
+            {
+                var ph = m.Hes[m.Hes[cur].Prev];
+                if (ph.Twin < 0 || m.Edges[ph.Edge].Hard) break;
+                int nxt = ph.Twin;
+                if (nxt == h) break;
+                faces.Add(m.Hes[nxt].Face); cur = nxt;
+            }
+        }
+        return faces;
     }
 }

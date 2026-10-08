@@ -40,7 +40,7 @@ public static class MeshNormals
         for (int h = 0; h < m.Hes.Count; h++)
         {
             var he = m.Hes[h];
-            if (!he.Alive) continue;
+            if (!he.Alive || he.NormalLocked) continue; // 고정된 코너 노멀은 그대로
             var sum = areaNormals[he.Face];
 
             // 방향 1: 이 코너에서 나가는 하프에지의 엣지를 건너 이웃 면으로 (Next(Twin(cur)))

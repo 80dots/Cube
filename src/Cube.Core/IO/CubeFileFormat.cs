@@ -25,6 +25,7 @@ public static class CubeFileFormat
         [JsonPropertyName("seams")] public int[][] Seams { get; set; } = Array.Empty<int[]>();          // [a,b] UV 심
         [JsonPropertyName("creases")] public float[][]? Creases { get; set; }                            // [a,b,crease]
         [JsonPropertyName("lockedNormals")] public float[][]? LockedNormals { get; set; }                // [v,x,y,z]
+        [JsonPropertyName("cornerNormals")] public float[][]? CornerNormals { get; set; }                // [face, corner, x,y,z] 고정 코너 노멀
         [JsonPropertyName("pinnedUvs")] public int[][]? PinnedUvs { get; set; }                          // 면별 핀된 코너 인덱스
         [JsonPropertyName("uvSets")] public UvSetDto[]? UvSets { get; set; }
         [JsonPropertyName("currentUvSet")] public int CurrentUvSet { get; set; }
@@ -328,6 +329,13 @@ public static class CubeFileFormat
         for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Crease > 0f) { var (a, b) = m.EdgeVertices(e); creases.Add(new[] { a, b, m.Edges[e].Crease }); }
         if (creases.Count > 0) dto.Creases = creases.ToArray();
         if (m.LockedNormals.Count > 0) dto.LockedNormals = m.LockedNormals.Select(kv => new[] { kv.Key, kv.Value.X, kv.Value.Y, kv.Value.Z }).ToArray();
+        var cornerNormals = new List<float[]>();
+        for (int f = 0; f < m.FaceCount; f++)
+        {
+            m.GetFaceHalfEdges(f, loop);
+            for (int i = 0; i < loop.Count; i++) { var h = m.Hes[loop[i]]; if (h.NormalLocked) cornerNormals.Add(new[] { f, i, h.Normal.X, h.Normal.Y, h.Normal.Z }); }
+        }
+        if (cornerNormals.Count > 0) dto.CornerNormals = cornerNormals.ToArray();
         // 핀: 면별 코너 인덱스
         var pins = new List<int[]>(); bool anyPin = false;
         for (int f = 0; f < m.FaceCount; f++)
@@ -394,6 +402,19 @@ public static class CubeFileFormat
             }
         if (dto.LockedNormals != null)
             foreach (var l in dto.LockedNormals) if (l.Length >= 4) m.LockedNormals[(int)l[0]] = new Vector3(l[1], l[2], l[3]);
+        if (dto.CornerNormals != null)
+        {
+            var cl = new List<int>();
+            foreach (var c in dto.CornerNormals)
+            {
+                if (c.Length < 5) continue;
+                int f = (int)c[0], ci = (int)c[1];
+                if (f < 0 || f >= m.FaceCount) continue;
+                m.GetFaceHalfEdges(f, cl);
+                if (ci < 0 || ci >= cl.Count) continue;
+                var h = m.Hes[cl[ci]]; h.Normal = new Vector3(c[2], c[3], c[4]); h.NormalLocked = true; m.Hes[cl[ci]] = h;
+            }
+        }
         if (dto.PinnedUvs != null)
         {
             var loop = new List<int>();

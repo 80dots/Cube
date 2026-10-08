@@ -44,6 +44,9 @@ public partial class ShellInput : Node
     public event Action? SpaceUp;
     private bool _spaceHeld;
 
+    /// <summary>모달 툴 키 처리기(true = 처리함, 단축키로 보내지 않음). 모달 툴이 켜질 때 설정하고 끝날 때 비운다.</summary>
+    public Func<InputEventKey, bool>? Modal;
+
     public override void _Input(InputEvent e)
     {
         if (e is InputEventMouseMotion mm && mm.ButtonMask == 0) { _cursorPos = mm.Position; if (!_cursorFixQueued) { _cursorFixQueued = true; CallDeferred(nameof(FixCursor)); } return; }
@@ -63,6 +66,8 @@ public partial class ShellInput : Node
             if (k.Keycode == Key.Escape) { focus!.ReleaseFocus(); Actions.Invoke("app.escape"); GetViewport().SetInputAsHandled(); }
             return;
         }
+        // 모달 툴(대화형 Bevel 등)이 켜져 있으면 키를 먼저 넘긴다
+        if (Modal != null && Modal(k)) { GetViewport().SetInputAsHandled(); return; }
         if (k.Keycode == Key.Space && !k.CtrlPressed && !k.AltPressed && !k.ShiftPressed)
         {
             _spaceHeld = true; SpaceDown?.Invoke(); GetViewport().SetInputAsHandled();

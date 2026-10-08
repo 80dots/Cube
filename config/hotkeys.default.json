@@ -55,6 +55,8 @@
     { "action": "anim.nextFrame", "chord": "Alt+Period" },
     { "action": "anim.prevKey", "chord": "Comma" },
     { "action": "anim.nextKey", "chord": "Period" },
+    { "action": "mesh.bevelTool", "chord": "Ctrl+B" },
+    { "action": "mesh.bevelVerticesTool", "chord": "Ctrl+Shift+B" },
     { "action": "app.escape", "chord": "Escape" }
   ]
 }

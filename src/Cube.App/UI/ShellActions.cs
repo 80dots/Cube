@@ -29,6 +29,7 @@ public partial class Shell
         Tools.Register(new TargetWeldTool());
         Tools.Register(new AppendPolygonTool());
         Tools.Register(new CutSewUvTool());
+        Tools.Register(new BevelTool());
     }
 
     private void RegisterActions()
@@ -605,7 +606,7 @@ public partial class Shell
             .Item("mesh.cleanup");
 
         Menus.Build(Add("Edit Mesh"))
-            .Op("mesh.addDivisions").Op("mesh.bevel").Item("mesh.bridge").Op("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach")
+            .Op("mesh.addDivisions").Op("mesh.bevel").Item("mesh.bevelTool").Item("mesh.bevelVerticesTool").Item("mesh.bridge").Op("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach")
             .Item("mesh.extrude").Op("mesh.merge").Item("mesh.mergeToCenter").Op("mesh.flipComponents").Op("mesh.symmetrizeComponents").Separator()
             .Op("mesh.averageVertices").Op("mesh.chamferVertices").Separator()
             .Item("mesh.deleteComponents").Item("mesh.flipTriangleEdge").Item("mesh.spinEdgeBackward").Item("mesh.spinEdgeForward").Separator()

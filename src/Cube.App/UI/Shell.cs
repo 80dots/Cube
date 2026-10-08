@@ -170,6 +170,7 @@ public partial class Shell : Control
         {
             var panel = p;
             panel.ToolInput = e => Layout.Active == panel && Tools.HandleInput(e);
+            panel.ModalTool = () => Tools.Current is IModalTool;
             panel.PieItems = (shift, ctrl) => ctrl ? PieMenus.SelectMenu(this) : shift ? PieMenus.ContextMenu(this) : PieMenus.ModeMenu(this);
             panel.PieExecute = item => { if (item.Run != null) item.Run(); else Actions.Invoke(item.ActionId); };
         }

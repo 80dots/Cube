@@ -1,0 +1,293 @@
+using Cube.App.Bridge;
+using Cube.App.UI;
+using Cube.Core.Mesh;
+using Cube.Core.Scene;
+using Godot;
+using NVec3 = System.Numerics.Vector3;
+
+namespace Cube.App.Tools;
+
+/// <summary>
+/// Blender식 대화형 Bevel(Ctrl+B 엣지 / Shift+Ctrl+B 정점). 마우스를 선택 중심에서 멀리/가까이 움직이면 폭이 바뀌고, 휠 = 세그먼트.
+/// 키: A 폭 / S 세그먼트 / P 프로파일 모양(이후 마우스가 그 값을 바꿈), V Affect, M Width Type, C Clamp, H Harden Normals, U Mark Seams, K Mark Sharp,
+/// O Miter Outer, I Miter Inner, N Intersection, Z Profile Type, 숫자 입력(Backspace로 지움). Shift = 세밀, Ctrl = 눈금 스냅.
+/// LMB/Enter = 확정(마지막 Bevel 옵션으로 저장되어 Action Popup에서 계속 조정), RMB/Esc = 취소. 미리보기는 원본을 복사해 매번 다시 계산한다.
+/// </summary>
+public sealed class BevelTool : ToolBase, IModalTool
+{
+    public override string Id => "bevelTool";
+    public override string Label => "Bevel";
+    public override string HelpText => "Bevel: move the mouse to set the width, wheel = segments. LMB/Enter confirm, RMB/Esc cancel.";
+
+    /// <summary>Shift+Ctrl+B로 시작하면 정점 Bevel.</summary>
+    public bool VertexMode;
+
+    private enum Mode { Width, Segments, Profile }
+    private Mode _mode;
+    private BevelOptions _o = new();
+    private readonly List<(NodeId id, PolyMesh before, int[] ids)> _targets = new();
+    private Vector2 _center;
+    private float _refDist, _refValue;   // 모드 전환 시점의 마우스 거리와 값
+    private Vector2 _mouse;
+    private float _virtualDist;           // Shift 세밀 조정용 가상 거리
+    private string _typed = "";
+    private bool _active;
+
+    private Shell Shell => Shell.Instance;
+
+    public override void Activate(ToolContext ctx)
+    {
+        base.Activate(ctx);
+        _o = Shell.BevelOptionsFrom(Shell.Options("mesh.bevel")) with { Affect = VertexMode ? BevelAffect.Vertices : BevelAffect.Edges };
+        if (!Collect())
+        {
+            Ctx.SetHelp?.Invoke("Bevel: select edges, faces or vertices first.");
+            Callable.From(() => Shell.Tools.SetTool("select")).CallDeferred();
+            return;
+        }
+        _active = true;
+        _mode = Mode.Width;
+        _mouse = Ctx.Viewport.LastMouseLocal;
+        _virtualDist = Dist(_mouse);
+        StartMode(Mode.Width);
+        Shell.Hotkeys.Modal = HandleModalKey;
+        Preview();
+    }
+
+    public override void Deactivate()
+    {
+        if (_active) Restore(); // 다른 툴로 바뀌면 취소
+        End();
+        base.Deactivate();
+    }
+
+    public override void Cancel()
+    {
+        if (_active) { Restore(); End(); }
+    }
+
+    private void End()
+    {
+        _active = false;
+        if (Shell.Hotkeys.Modal == HandleModalKey) Shell.Hotkeys.Modal = null;
+        _targets.Clear();
+        _typed = "";
+    }
+
+    /// <summary>대상 메시 원본과 컴포넌트를 모으고 화면 중심을 구한다.</summary>
+    private bool Collect()
+    {
+        _targets.Clear();
+        var doc = Ctx.Doc;
+        var proj = Ctx.Viewport.Picker.Projection();
+        var sum = Vector2.Zero; int n = 0;
+        foreach (var (id, ids) in Shell.CollectBevelTargets(_o.Affect))
+        {
+            var node = doc.Find(id); var mesh = node?.Mesh; if (mesh == null) continue;
+            _targets.Add((id, mesh.Clone(), ids));
+            var world = node!.WorldMatrix;
+            foreach (int c in ids)
+            {
+                NVec3 p;
+                if (_o.Affect == BevelAffect.Vertices) p = mesh.Verts[c].Position;
+                else { var (a, b) = mesh.EdgeVertices(c); p = (mesh.Verts[a].Position + mesh.Verts[b].Position) * 0.5f; }
+                var s = proj.Project(NVec3.Transform(p, world), out _);
+                if (s is { } sp) { sum += new Vector2(sp.X, sp.Y); n++; }
+            }
+        }
+        if (_targets.Count == 0) return false;
+        _center = n > 0 ? sum / n : Ctx.Viewport.Size / 2;
+        return true;
+    }
+
+    private float Dist(Vector2 p) => Math.Max((p - _center).Length(), 1f);
+
+    private float ModeValue(Mode m) => m switch { Mode.Segments => _o.Segments, Mode.Profile => _o.Shape, _ => _o.Width };
+
+    private void StartMode(Mode m)
+    {
+        _mode = m;
+        _typed = "";
+        _refDist = Math.Max(_virtualDist, 30f * CubeApp.Instance.UiScale);
+        _refValue = ModeValue(m);
+        if (m == Mode.Width && _refValue <= 0f) _refValue = 0.1f;
+    }
+
+    public override bool HandleInput(InputEvent e)
+    {
+        if (!_active) return false;
+        switch (e)
+        {
+            case InputEventMouseMotion mm:
+                {
+                    float d = Dist(mm.Position);
+                    float prev = Dist(_mouse);
+                    _mouse = mm.Position;
+                    _virtualDist += (d - prev) * (mm.ShiftPressed ? 0.1f : 1f);
+                    if (_typed.Length > 0) return true; // 숫자 입력 중에는 마우스 무시
+                    ApplyMouse(mm.CtrlPressed);
+                    return true;
+                }
+            case InputEventMouseButton { Pressed: true } mb:
+                switch (mb.ButtonIndex)
+                {
+                    case MouseButton.WheelUp: SetSegments(_o.Segments + 1); return true;
+                    case MouseButton.WheelDown: SetSegments(_o.Segments - 1); return true;
+                    case MouseButton.Left: Confirm(); return true;
+                    case MouseButton.Right: Restore(); End(); Ctx.SetHelp?.Invoke("Bevel cancelled."); Callable.From(() => Shell.Tools.SwapToPrevious()).CallDeferred(); return true;
+                }
+                return true;
+            case InputEventMouseButton:
+                return true;
+        }
+        return false;
+    }
+
+    private void ApplyMouse(bool snap)
+    {
+        float ratio = _virtualDist / _refDist;
+        switch (_mode)
+        {
+            case Mode.Width:
+                {
+                    float w = Math.Max(0f, _refValue * ratio);
+                    if (snap) w = _o.WidthType == BevelWidthType.Percent ? MathF.Round(w) : MathF.Round(w * 100f) / 100f;
+                    _o = _o with { Width = w };
+                    break;
+                }
+            case Mode.Segments:
+                SetSegments((int)MathF.Round(_refValue + (_virtualDist - _refDist) / (20f * CubeApp.Instance.UiScale)), preview: false);
+                break;
+            case Mode.Profile:
+                {
+                    float s = Math.Clamp(_refValue + (_virtualDist - _refDist) / (300f * CubeApp.Instance.UiScale), 0f, 1f);
+                    if (snap) s = MathF.Round(s * 20f) / 20f;
+                    _o = _o with { Shape = s };
+                    break;
+                }
+        }
+        Preview();
+    }
+
+    private void SetSegments(int s, bool preview = true)
+    {
+        _o = _o with { Segments = Math.Clamp(s, 1, 100) };
+        if (preview) Preview();
+    }
+
+    /// <summary>모달 키(단축키보다 먼저). 처리한 키는 true.</summary>
+    public bool HandleModalKey(InputEventKey k)
+    {
+        if (!_active) return false;
+        switch (k.Keycode)
+        {
+            case Key.Escape: Restore(); End(); Ctx.SetHelp?.Invoke("Bevel cancelled."); Callable.From(() => Shell.Tools.SwapToPrevious()).CallDeferred(); return true;
+            case Key.Enter: case Key.KpEnter:
+                if (_typed.Length > 0) { ApplyTyped(); return true; }
+                Confirm(); return true;
+            case Key.Backspace: if (_typed.Length > 0) { _typed = _typed[..^1]; ApplyTyped(keepText: true); } return true;
+            case Key.A: StartMode(Mode.Width); break;
+            case Key.S: StartMode(Mode.Segments); break;
+            case Key.P: StartMode(Mode.Profile); break;
+            case Key.V:
+                Restore();
+                _o = _o with { Affect = _o.Affect == BevelAffect.Edges ? BevelAffect.Vertices : BevelAffect.Edges };
+                if (!Collect()) { _o = _o with { Affect = _o.Affect == BevelAffect.Edges ? BevelAffect.Vertices : BevelAffect.Edges }; Collect(); }
+                break;
+            case Key.M: _o = _o with { WidthType = (BevelWidthType)(((int)_o.WidthType + 1) % 5) }; break;
+            case Key.C: _o = _o with { ClampOverlap = !_o.ClampOverlap }; break;
+            case Key.H: _o = _o with { HardenNormals = !_o.HardenNormals }; break;
+            case Key.U: _o = _o with { MarkSeams = !_o.MarkSeams }; break;
+            case Key.K: _o = _o with { MarkSharp = !_o.MarkSharp }; break;
+            case Key.O: _o = _o with { MiterOuter = (BevelMiter)(((int)_o.MiterOuter + 1) % 3) }; break;
+            case Key.I: _o = _o with { MiterInner = _o.MiterInner == BevelMiter.Arc ? BevelMiter.Sharp : BevelMiter.Arc }; break;
+            case Key.N: _o = _o with { Intersection = (BevelIntersection)(((int)_o.Intersection + 1) % 3) }; break;
+            case Key.Z: _o = _o with { ProfileType = _o.ProfileType == BevelProfileType.Custom ? BevelProfileType.Superellipse : BevelProfileType.Custom }; break;
+            default:
+                {
+                    // 숫자 입력: 0-9 . -
+                    string ch = k.Keycode switch
+                    {
+                        >= Key.Key0 and <= Key.Key9 => ((int)(k.Keycode - Key.Key0)).ToString(),
+                        >= Key.Kp0 and <= Key.Kp9 => ((int)(k.Keycode - Key.Kp0)).ToString(),
+                        Key.Period or Key.KpPeriod => ".",
+                        Key.Minus or Key.KpSubtract => "-",
+                        _ => "",
+                    };
+                    if (ch.Length == 0) return true; // 모달 동안 다른 단축키는 막는다
+                    _typed += ch;
+                    ApplyTyped(keepText: true);
+                    return true;
+                }
+        }
+        Preview();
+        return true;
+    }
+
+    private void ApplyTyped(bool keepText = false)
+    {
+        if (float.TryParse(_typed, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float v))
+        {
+            _o = _mode switch
+            {
+                Mode.Segments => _o with { Segments = Math.Clamp((int)MathF.Round(v), 1, 100) },
+                Mode.Profile => _o with { Shape = Math.Clamp(v, 0f, 1f) },
+                _ => _o with { Width = Math.Max(0f, v) },
+            };
+        }
+        if (!keepText) _typed = "";
+        Preview();
+    }
+
+    /// <summary>원본에서 다시 계산해 미리 보여 준다.</summary>
+    private void Preview()
+    {
+        var doc = Ctx.Doc;
+        foreach (var (id, before, ids) in _targets)
+        {
+            var mesh = doc.Find(id)?.Mesh; if (mesh == null) continue;
+            mesh.CopyFrom(before);
+            MeshOps.Bevel(mesh, ids, _o);
+            MeshNormals.Recompute(mesh);
+            doc.Notify(new DocChange(ChangeKind.MeshTopology, id));
+        }
+        ShowStatus();
+    }
+
+    private void Restore()
+    {
+        var doc = Ctx.Doc;
+        foreach (var (id, before, _) in _targets)
+        {
+            var mesh = doc.Find(id)?.Mesh; if (mesh == null) continue;
+            mesh.CopyFrom(before);
+            doc.Notify(new DocChange(ChangeKind.MeshTopology, id));
+        }
+    }
+
+    private void ShowStatus()
+    {
+        string Mark(Mode m, string s) => _mode == m ? $"[{s}{(_typed.Length > 0 ? " = " + _typed : "")}]" : s;
+        string[] wt = { "Offset", "Width", "Depth", "Percent", "Absolute" };
+        Ctx.SetHelp?.Invoke(
+            $"Bevel {(_o.Affect == BevelAffect.Vertices ? "Vertices" : "Edges")}:  {Mark(Mode.Width, $"(A)Width {_o.Width:0.###}{(_o.WidthType == BevelWidthType.Percent ? "%" : "")}")}  " +
+            $"{Mark(Mode.Segments, $"(S)Segments {_o.Segments}")}  {Mark(Mode.Profile, $"(P)Shape {_o.Shape:0.00}")}  " +
+            $"(M){wt[(int)_o.WidthType]}  (C)Clamp {(_o.ClampOverlap ? "on" : "off")}  (H)Harden {(_o.HardenNormals ? "on" : "off")}  " +
+            $"(U)Seams {(_o.MarkSeams ? "on" : "off")}  (K)Sharp {(_o.MarkSharp ? "on" : "off")}  (O)Outer {_o.MiterOuter}  (I)Inner {_o.MiterInner}  " +
+            $"(N){_o.Intersection}  (Z){_o.ProfileType}  (V)Affect  |  wheel segments, Shift fine, Ctrl snap, LMB/Enter OK, RMB/Esc cancel");
+    }
+
+    /// <summary>확정: 원본으로 되돌린 뒤 옵션을 저장하고 Bevel 액션으로 실행(Undo·구성 이력·Action Popup).</summary>
+    private void Confirm()
+    {
+        Restore();
+        var opts = _o;
+        End();
+        Shell.WriteBevelOptions(Shell.Options("mesh.bevel"), opts);
+        Callable.From(() =>
+        {
+            Shell.Actions.Invoke("mesh.bevelApply");
+            Shell.Tools.SwapToPrevious();
+        }).CallDeferred();
+    }
+}

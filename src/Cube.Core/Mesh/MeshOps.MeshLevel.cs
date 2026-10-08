@@ -284,7 +284,17 @@ public static partial class MeshOps
         }
     }
 
-    public static void UnlockNormals(PolyMesh m, IEnumerable<int> vertIds) { foreach (int v in vertIds) m.LockedNormals.Remove(v); }
+    /// <summary>정점 잠금과 그 정점의 코너 고정(Bevel Harden Normals 등)을 모두 푼다.</summary>
+    public static void UnlockNormals(PolyMesh m, IEnumerable<int> vertIds)
+    {
+        foreach (int v in vertIds)
+        {
+            m.LockedNormals.Remove(v);
+            if (v < 0 || v >= m.VertexCount || !m.Verts[v].Alive) continue;
+            var outs = m.VertexOutgoing(v).ToArray();
+            foreach (int he in outs) { var h = m.Hes[he]; if (h.NormalLocked) { h.NormalLocked = false; m.Hes[he] = h; } }
+        }
+    }
 
     /// <summary>Set Vertex Normal: 정점 노멀을 지정 방향으로 잠근다.</summary>
     public static void SetVertexNormal(PolyMesh m, IEnumerable<int> vertIds, Vector3 normal)

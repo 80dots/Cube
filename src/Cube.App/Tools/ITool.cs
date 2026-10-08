@@ -47,6 +47,15 @@ public interface ITool
     void Cancel();
 }
 
+/// <summary>
+/// 모달 툴(Blender식 대화형 연산: Bevel 등). 켜져 있는 동안 키 입력은 단축키보다 먼저 <see cref="HandleModalKey"/>로,
+/// 뷰포트의 RMB/휠은 파이 메뉴·줌보다 먼저 툴로 간다(Alt 내비게이션은 그대로).
+/// </summary>
+public interface IModalTool : ITool
+{
+    bool HandleModalKey(InputEventKey k);
+}
+
 public abstract class ToolBase : ITool
 {
     protected ToolContext Ctx { get; private set; } = null!;

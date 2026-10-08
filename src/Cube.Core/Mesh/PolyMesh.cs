@@ -27,6 +27,8 @@ public struct HalfEdge
     public Vector2 Uv0;
     /// <summary>UV 편집기 Pin: 이 코너의 UV 점은 Unfold/Optimize/브러시 등에서 움직이지 않는다.</summary>
     public bool PinUv;
+    /// <summary>코너 노멀 고정(사용자 지정 분할 노멀, Bevel Harden Normals/Face Strength): MeshNormals.Recompute가 Normal을 덮어쓰지 않는다.</summary>
+    public bool NormalLocked;
     public bool Alive;
 }
 

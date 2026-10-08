@@ -271,13 +271,19 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>이 패널이 마지막으로 받은 마우스 위치(로컬). OS 커서 위치 대신 쓰므로 주입된 입력에서도 맞다.</summary>
     public Vector2 LastMouseLocal { get; private set; }
 
+    /// <summary>현재 툴이 모달(대화형)인지. 셸이 설정한다.</summary>
+    public Func<bool>? ModalTool;
+
     public override void _GuiInput(InputEvent e)
     {
         if (e is InputEventMouse me) { LastMouseLocal = me.Position; if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); } }
         if (e is InputEventMouseButton { Pressed: true }) { GrabFocus(); Activated?.Invoke(); }
+        bool modal = ModalTool?.Invoke() == true;
+        // 모달 툴: 휠과 Alt 없는 마우스 버튼은 줌/파이보다 먼저 툴로(Blender Bevel의 휠 = 세그먼트, RMB = 취소)
+        if (modal && e is InputEventMouseButton { AltPressed: false } && ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
         if (Navigation.Handle(e)) { AcceptEvent(); return; }
         if (Navigation.IsDragging) { AcceptEvent(); return; }
-        if (HandlePie(e)) { AcceptEvent(); return; }
+        if (!modal && HandlePie(e)) { AcceptEvent(); return; }
         if (ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
     }
 
