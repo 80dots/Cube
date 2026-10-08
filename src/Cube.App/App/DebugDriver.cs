@@ -633,7 +633,7 @@ public partial class DebugDriver : Node
             case "print":
                 {
                     var doc = CubeApp.Instance.Document;
-                    GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen} cursor={DisplayServer.CursorGetShape()}");
+                    GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen} cursor={DisplayServer.CursorGetShape()} vpSubs={UI.Shell.Instance.ToolContext.ViewportChangedSubscribers}");
                     GD.Print($"[Drive] {UI.Shell.Instance.ActionPopup.DebugSummary()} dialogs={UI.Shell.Instance.FindChildren("*", "ConfirmationDialog", true, false).Count(n => n is Window w && w.Visible)}");
                     if (doc.Animations.Count > 0)
                     {

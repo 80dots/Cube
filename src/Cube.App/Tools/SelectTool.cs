@@ -107,11 +107,16 @@ public class SelectTool : ToolBase
         Ctx.Viewport.Overlay.Marquee = null;
     }
 
-    /// <summary>비활성화: 마키·호버 정리. (주의: base.Deactivate를 부르지 않으므로 ViewportChanged 구독은 유지된다.)</summary>
+    /// <summary>
+    /// 비활성화: 마키·호버를 정리하고 <see cref="ToolBase.Deactivate"/>로 ViewportChanged 구독을 푼다.
+    /// v0.0.52 전에는 base를 부르지 않아 툴을 바꿀 때마다 구독이 쌓였다(Select/Move/Rotate/Scale 등 SelectTool 파생 전부;
+    /// 4분할 뷰에서 활성 패널이 바뀌면 쌓인 수만큼 OnViewportChanged가 반복 실행됨).
+    /// </summary>
     public override void Deactivate()
     {
         Cancel();
         SetHover(null);
+        base.Deactivate();
     }
 
     /// <summary>두 점으로 정규화된(음수 크기 없는) 사각형을 만든다.</summary>

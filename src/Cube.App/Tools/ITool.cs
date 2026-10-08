@@ -47,6 +47,8 @@ public sealed class ToolContext
     }
     /// <summary>활성 뷰포트가 바뀐 뒤 호출된다. 툴은 기즈모/오버레이를 새 패널로 옮긴다.</summary>
     public event Action<ViewportPanel>? ViewportChanged;
+    /// <summary>현재 ViewportChanged 구독 수(진단용; 툴 활성화/비활성화가 짝을 이루면 활성 툴 몫만 남는다). DebugDriver print의 vpSubs.</summary>
+    public int ViewportChangedSubscribers => ViewportChanged?.GetInvocationList().Length ?? 0;
 
     /// <summary><see cref="AxisOrientation"/>의 저장 필드(기본 World).</summary>
     private AxisOrientation _axis = AxisOrientation.World;
