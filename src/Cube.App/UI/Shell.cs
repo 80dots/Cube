@@ -25,6 +25,7 @@ public partial class Shell : Control
     public HBoxContainer PolyShelf { get; private set; } = null!;
     public HBoxContainer UvShelf { get; private set; } = null!;
     public HBoxContainer RigShelf { get; private set; } = null!;
+    public HBoxContainer LightShelf { get; private set; } = null!;
     private readonly List<(Button button, string action)> _shelfButtons = new();
     public VBoxContainer ToolBox { get; private set; } = null!;
     /// <summary>Outliner를 담은 도킹 가능한 패널(기본: 왼쪽 도크).</summary>
@@ -98,9 +99,11 @@ public partial class Shell : Control
         ShelfRow.AddThemeConstantOverride("separation", 0);
         root.AddChild(ShelfRow);
         Shelf = new TabContainer { Name = "Shelf", SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        StyleShelfTabs(s);
         PolyShelf = MakeShelfTab("Polygons");
         UvShelf = MakeShelfTab("UV");
         RigShelf = MakeShelfTab("Rigging");
+        LightShelf = MakeShelfTab("Light");
         ShelfRow.AddChild(Shelf);
         ShelfRow.AddChild(new VSeparator());
         var bridgePanel = new PanelContainer { Name = "BridgePanel" };
@@ -318,6 +321,26 @@ public partial class Shell : Control
         ToolBox.AddChild(_redoBtn);
     }
 
+    /// <summary>셸프 탭 머리: 이름 좌우 여백과 탭 사이 간격을 넉넉하게(기본 테마의 탭은 좁아 붙어 보였음, v0.0.44).</summary>
+    private void StyleShelfTabs(float s)
+    {
+        StyleBoxFlat Tab(Color bg, Color? top = null)
+        {
+            var sb = new StyleBoxFlat
+            {
+                BgColor = bg, ContentMarginLeft = 18 * s, ContentMarginRight = 18 * s, ContentMarginTop = 5 * s, ContentMarginBottom = 5 * s,
+                CornerRadiusTopLeft = (int)(3 * s), CornerRadiusTopRight = (int)(3 * s),
+            };
+            if (top is { } c) { sb.BorderColor = c; sb.BorderWidthTop = (int)Math.Max(2, 2 * s); }
+            return sb;
+        }
+        Shelf.AddThemeStyleboxOverride("tab_selected", Tab(MayaTheme.Panel, MayaTheme.Accent));
+        Shelf.AddThemeStyleboxOverride("tab_unselected", Tab(MayaTheme.PanelDark));
+        Shelf.AddThemeStyleboxOverride("tab_hovered", Tab(MayaTheme.ButtonHover));
+        Shelf.AddThemeConstantOverride("tab_separation", (int)(4 * s));
+        Shelf.AddThemeFontSizeOverride("font_size", (int)(13 * s));
+    }
+
     /// <summary>셸프 탭 하나(가로 스크롤 + 버튼 줄). 탭 제목은 ScrollContainer의 이름.</summary>
     private HBoxContainer MakeShelfTab(string title)
     {
@@ -357,6 +380,11 @@ public partial class Shell : Control
         Fill(RigShelf,
             new[] { ("skeleton.jointTool", "Joint Tool", "rig_joint"), ("skeleton.insertJointTool", "Insert Joint", "rig_insert_joint"), ("skeleton.mirror", "Mirror Joint", "rig_mirror"), ("skeleton.orient", "Orient Joint", "rig_orient"), ("skeleton.orientApply", "Orient Now", "rig_orient") },
             new[] { ("skin.bind", "Bind Skin", "skin_bind"), ("skin.detach", "Detach Skin", "skin_detach"), ("skin.paintTool", "Paint Weights", "skin_paint"), ("skin.normalize", "Normalize", "skin_normalize"), ("skin.rebind", "Reset Weights", "skin_rebind") });
+        Fill(LightShelf,
+            new[] { ("create.lightDirectional", "Directional", "light_directional"), ("create.lightPoint", "Point", "light_point"), ("create.lightSpot", "Spot", "light_spot") },
+            new[] { ("display.lit", "All Lights", "view_lit"), ("render.headlight", "Headlight", "light_headlight"), ("render.shadows", "Shadows", "light_shadows") },
+            new[] { ("render.ibl", "IBL", "light_ibl"), ("render.background", "HDRI BG", "light_background"), ("render.nextHdri", "Next HDRI", "light_next_hdri") },
+            new[] { ("select.lights", "Select Lights", "light_select"), ("windows.renderSettings", "Render Settings", "render_settings") });
         Document.Selection.Changed += RefreshShelf;
         Document.Selection.ModeChanged += RefreshShelf;
         Tools.ToolChanged += _ => RefreshShelf();

@@ -564,6 +564,7 @@ public partial class Shell
         Menus.Build(Add("Select"))
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
+            .Item("select.lights").Separator()
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
 
         Menus.Build(Add("Mesh"))

@@ -20,6 +20,7 @@ public partial class Shell
         Actions.Register("create.lightDirectional", "Directional Light", () => CreateLight(LightType.Directional), repeatable: true);
         Actions.Register("create.lightPoint", "Point Light", () => CreateLight(LightType.Point), repeatable: true);
         Actions.Register("create.lightSpot", "Spot Light", () => CreateLight(LightType.Spot), repeatable: true);
+        Actions.Register("select.lights", "All Lights", SelectAllLights, canExecute: () => doc.Nodes.Values.Any(n => n.IsLight));
         Actions.Register("windows.materialEditor", "Material Editor", ToggleMaterialEditor, isChecked: () => MaterialEditor?.IsOpen ?? false);
 
         bool JointSelected() => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.IsJoint == true);
@@ -82,6 +83,18 @@ public partial class Shell
         AddChild(dlg);
         _jointSizeDialog = dlg;
         dlg.PopupCentered();
+    }
+
+    /// <summary>Select → All Lights: 씬의 모든 라이트를 오브젝트 선택(Undo 가능).</summary>
+    private void SelectAllLights()
+    {
+        var sel = Document.Selection;
+        var ids = Document.Nodes.Values.Where(n => n.IsLight).Select(n => n.Id).ToList();
+        var before = sel.Capture();
+        if (sel.Mode != SelectMode.Object) sel.Mode = SelectMode.Object;
+        sel.SelectObjects(ids);
+        Document.Undo.Push(new SelectionCommand(before, sel.Capture()), alreadyApplied: true);
+        HelpLine.Text = $"Selected {ids.Count} light(s).";
     }
 
     private void CreateLight(LightType type)
