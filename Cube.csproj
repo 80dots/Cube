@@ -12,6 +12,7 @@
     <!-- Godot.NET.Sdk는 루트 이하 모든 *.cs를 글로빙하므로 하위 프로젝트는 제외한다 -->
     <Compile Remove="src\Cube.Core\**" />
     <Compile Remove="tests\**" />
+    <Compile Remove=".claude\**" />
     <None Remove="src\Cube.Core\**" />
     <None Remove="tests\**" />
   </ItemGroup>

@@ -40,3 +40,6 @@ TestResults/
 # Release artifacts
 build/
 dist/
+
+# Claude Code agent worktrees
+.claude/worktrees/
