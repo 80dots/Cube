@@ -139,6 +139,34 @@ public class FbxWriterTests
     }
 
     [Fact]
+    public void SceneBuilder_MaterialParameterTextures_ConnectToStandardSlots()
+    {
+        var doc = new Document();
+        var cube = CreatePrimitiveCommand.Cube(doc); doc.Undo.Push(cube);
+        var mat = new MaterialDef { Name = "pbr", Type = MaterialType.Pbr };
+        mat.SetTex("color", "C:/t/base.png"); mat.SetTex("normal", "C:/t/n.png"); mat.SetTex("roughness", "C:/t/r.png");
+        mat.SetTex("metallic", "C:/t/m.png"); mat.SetTex("emissive", "C:/t/e.png"); mat.SetTex("occlusion", "C:/t/base.png");
+        mat.Set("emissive", Vector3.One); mat.Set("emissiveStrength", 3f);
+        doc.Undo.Push(new AddMaterialCommand(mat));
+        doc.Undo.Push(new AssignMaterialCommand(new[] { cube.Node.Id }, doc.Materials[0].Id));
+        var (_, nodes) = FbxBinaryReader.Read(FbxBinaryWriter.Write(new FbxSceneBuilder(doc).Build(new[] { cube.Node })));
+        var objects = nodes.First(n => n.Name == "Objects");
+        var texByFile = objects.All("Texture").ToDictionary(t => t.Prop<long>(0), t => t.Child("FileName")!.Prop<string>(0));
+        Assert.Equal(5, texByFile.Count); // base.png는 Color와 Occlusion이 공유
+        long matId = objects.All("Material").Single().Prop<long>(0);
+        var conns = nodes.First(n => n.Name == "Connections").All("C").Where(c => c.Prop<string>(0) == "OP" && c.Prop<long>(2) == matId)
+            .ToDictionary(c => c.Prop<string>(3), c => texByFile[c.Prop<long>(1)]);
+        Assert.Equal("C:/t/base.png", conns["DiffuseColor"]);
+        Assert.Equal("C:/t/n.png", conns["NormalMap"]);
+        Assert.Equal("C:/t/r.png", conns["ShininessExponent"]);
+        Assert.Equal("C:/t/m.png", conns["ReflectionFactor"]);
+        Assert.Equal("C:/t/e.png", conns["EmissiveColor"]);
+        Assert.Equal("C:/t/base.png", conns["AmbientColor"]);
+        var props = objects.All("Material").Single().Child("Properties70")!.All("P").Where(x => x.Prop<string>(0) == "EmissiveFactor").Single();
+        Assert.Equal(3.0, props.Prop<double>(4), 3);
+    }
+
+    [Fact]
     public void SceneBuilder_SkinnedMesh_WritesSkinClustersAndBindPose()
     {
         var doc = new Document();

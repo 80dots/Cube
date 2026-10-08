@@ -79,7 +79,10 @@ public partial class MaterialEditorWindow : FloatingPanel
         right.AddChild(new Label { Text = "Properties" });
         _props = new MaterialPropsEditor { Name = "Props" };
         _props.Setup(shell);
-        right.AddChild(_props);
+        // 파라미터가 많으므로(glTF 확장 그룹) 스크롤
+        var scroll = new ScrollContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
+        scroll.AddChild(_props);
+        right.AddChild(scroll);
         _assigned = new Label { Text = "", Modulate = new GColor(1, 1, 1, 0.7f), AutowrapMode = TextServer.AutowrapMode.WordSmart };
         right.AddChild(_assigned);
         root.AddChild(right);

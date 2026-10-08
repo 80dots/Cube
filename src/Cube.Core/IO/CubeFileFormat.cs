@@ -82,6 +82,10 @@ public static class CubeFileFormat
         [JsonPropertyName("roughness")] public float Roughness { get; set; } = 0.5f;
         [JsonPropertyName("matcap")] public string? Matcap { get; set; }
         [JsonPropertyName("texture")] public string? Texture { get; set; }
+        /// <summary>v0.0.36: 모든 파라미터 값(키 → [x,y,z]) — 위의 개별 필드보다 우선.</summary>
+        [JsonPropertyName("values")] public Dictionary<string, float[]>? Values { get; set; }
+        /// <summary>v0.0.36: 파라미터 텍스처(키 → 이미지 경로).</summary>
+        [JsonPropertyName("textures")] public Dictionary<string, string>? Textures { get; set; }
     }
 
     private sealed class AnimationDto
@@ -140,7 +144,9 @@ public static class CubeFileFormat
         }
         foreach (var c in doc.Root.Children) Walk(c, -1);
         foreach (var mt in doc.Materials)
-            dto.Materials.Add(new MaterialDto { Id = mt.Id, Name = mt.Name, Type = mt.Type.ToString().ToLowerInvariant(), Color = V(mt.Color), Specular = V(mt.Specular), Shininess = mt.Shininess, Metallic = mt.Metallic, Roughness = mt.Roughness, Matcap = mt.MatcapPath, Texture = mt.TexturePath });
+            dto.Materials.Add(new MaterialDto { Id = mt.Id, Name = mt.Name, Type = mt.Type.ToString().ToLowerInvariant(), Color = V(mt.Color), Specular = V(mt.Specular), Shininess = mt.Shininess, Metallic = mt.Metallic, Roughness = mt.Roughness, Matcap = mt.MatcapPath, Texture = mt.TexturePath,
+                Values = mt.Values.Count > 0 ? mt.Values.ToDictionary(kv => kv.Key, kv => new[] { kv.Value.X, kv.Value.Y, kv.Value.Z }) : null,
+                Textures = mt.Textures.Count > 0 ? new Dictionary<string, string>(mt.Textures) : null });
         // 스킨은 노드 인덱스가 모두 정해진 뒤에 기록한다(메시는 Compact 리맵 반영)
         for (int i = 0; i < order.Count; i++)
         {
@@ -176,7 +182,14 @@ public static class CubeFileFormat
         if (dto.Version > Version) throw new InvalidDataException($"document version {dto.Version} is newer than supported {Version}");
         doc.Clear();
         foreach (var md in dto.Materials)
-            doc.AddMaterialWithId(new MaterialDef { Id = md.Id, Name = md.Name, Type = Enum.TryParse<MaterialType>(md.Type, true, out var mt) ? mt : MaterialType.Lambert, Color = V3(md.Color, new Vector3(0.5f)), Specular = V3(md.Specular, new Vector3(0.5f)), Shininess = md.Shininess, Metallic = md.Metallic, Roughness = md.Roughness, MatcapPath = md.Matcap, TexturePath = md.Texture });
+        {
+            var mdef = new MaterialDef { Id = md.Id, Name = md.Name, Type = Enum.TryParse<MaterialType>(md.Type, true, out var mt) ? mt : MaterialType.Lambert, Color = V3(md.Color, new Vector3(0.5f)), Specular = V3(md.Specular, new Vector3(0.5f)), Shininess = md.Shininess, Metallic = md.Metallic, Roughness = md.Roughness, MatcapPath = md.Matcap, TexturePath = md.Texture };
+            // v0.0.36 전 파일: 컬러 텍스처가 색을 대신했으므로(곱하지 않음) 색을 흰색으로 맞춰 같은 모습을 유지
+            if (md.Values == null && !string.IsNullOrEmpty(md.Texture)) mdef.Color = Vector3.One;
+            if (md.Values != null) foreach (var (k, v) in md.Values) mdef.Values[k] = V3(v, Vector3.Zero);
+            if (md.Textures != null) foreach (var (k, v) in md.Textures) mdef.SetTex(k, v);
+            doc.AddMaterialWithId(mdef);
+        }
         var nodes = new List<SceneNode>(dto.Nodes.Count);
         foreach (var nd in dto.Nodes)
         {

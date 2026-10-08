@@ -31,11 +31,15 @@ public static class DocumentToGodotScene
         public readonly HashSet<NodeId> InSet = new();
         /// <summary>일반 노드 → 만든 Godot 노드와(월드 베이크 시) 부모 월드 행렬. 애니메이션 트랙 경로/값 변환용.</summary>
         public readonly Dictionary<NodeId, (Node3D node, NMat? parentWorld)> Nodes = new();
+        /// <summary>문서 머티리얼 ID → 이번 내보내기의 StandardMaterial3D(같은 머티리얼은 glTF 머티리얼 하나).</summary>
+        public readonly Dictionary<int, StandardMaterial3D> Materials = new();
+        public readonly List<MaterialDef> UsedMaterials = new();
         public int Count, Tris;
         public Ctx(Node3D root) { Root = root; }
     }
 
-    public static (Node3D root, int nodeCount, int triCount) Build(IReadOnlyList<SceneNode> nodes, string rootName, IReadOnlyList<AnimationClip>? clips = null)
+    /// <param name="usedMaterials">채워지면 내보낸 메시가 쓰는 문서 머티리얼(<see cref="GltfMaterialExtension"/>이 텍스처·확장을 쓰는 데 쓴다).</param>
+    public static (Node3D root, int nodeCount, int triCount) Build(IReadOnlyList<SceneNode> nodes, string rootName, IReadOnlyList<AnimationClip>? clips = null, List<MaterialDef>? usedMaterials = null)
     {
         var root = new Node3D { Name = rootName };
         var ctx = new Ctx(root);
@@ -63,6 +67,7 @@ public static class DocumentToGodotScene
             BuildNode(ctx, t, root, t.Parent != null && !t.Parent.IsRoot);
         }
         if (clips is { Count: > 0 }) AddAnimations(ctx, clips);
+        usedMaterials?.AddRange(ctx.UsedMaterials);
         return (root, ctx.Count, ctx.Tris);
     }
 
@@ -93,23 +98,33 @@ public static class DocumentToGodotScene
         AddBone(rootJoint, -1);
     }
 
-    private static readonly Dictionary<int, StandardMaterial3D> MaterialCacheExport = new();
-
-    /// <summary>MaterialDef → 내보내기용 StandardMaterial3D(glTF PBR로 기록됨).</summary>
-    private static Material MaterialFor(SceneNode n)
+    /// <summary>
+    /// MaterialDef → 내보내기용 StandardMaterial3D. 값(색·메탈릭·러프니스·알파 모드·양면·Unlit)만 넣고 텍스처는 넣지 않는다:
+    /// 텍스처 패킹과 PBR 확장은 <see cref="GltfMaterialExtension"/>이 glTF JSON의 이 머티리얼 항목을 다시 써서 기록한다(메타 cube_material_id로 짝).
+    /// </summary>
+    private static Material MaterialFor(Ctx ctx, SceneNode n)
     {
         var def = CubeApp.Instance.Document.FindMaterial(n.MaterialId);
         if (def == null) return DefaultMaterial;
-        var m = new StandardMaterial3D { ResourceName = def.Name, AlbedoColor = new Color(def.Color.X, def.Color.Y, def.Color.Z) };
-        var tex = Viewport.MaterialCache.LoadTexture(def.TexturePath);
-        if (tex != null) { m.AlbedoTexture = tex; m.AlbedoColor = Colors.White; }
+        if (ctx.Materials.TryGetValue(def.Id, out var cached)) return cached;
+        var c = def.Color;
+        var m = new StandardMaterial3D { ResourceName = def.Name, AlbedoColor = new Color(c.X, c.Y, c.Z, def.GetF("alpha")) };
         switch (def.Type)
         {
             case MaterialType.Pbr: m.Metallic = def.Metallic; m.Roughness = def.Roughness; break;
-            case MaterialType.BlinnPhong: m.Metallic = 0; m.Roughness = Math.Clamp(MathF.Sqrt(2f / (def.Shininess + 2f)), 0.05f, 1f); break;
-            case MaterialType.Unlit: case MaterialType.Matcap: m.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded; m.Roughness = 1; break;
+            case MaterialType.BlinnPhong: m.Metallic = 0; m.Roughness = GltfMaterialExtension.ShininessToRoughness(def.Shininess); break;
+            case MaterialType.Unlit: case MaterialType.Matcap: m.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded; m.Roughness = 1; m.Metallic = 0; break;
             default: m.Roughness = 1; m.Metallic = 0; break;
         }
+        switch ((int)def.GetF("alphaMode"))
+        {
+            case 1: m.Transparency = BaseMaterial3D.TransparencyEnum.AlphaScissor; m.AlphaScissorThreshold = def.GetF("alphaCutoff"); break;
+            case 2: m.Transparency = BaseMaterial3D.TransparencyEnum.Alpha; break;
+        }
+        if (def.GetF("doubleSided") > 0.5f) m.CullMode = BaseMaterial3D.CullModeEnum.Disabled;
+        m.SetMeta(GltfMaterialExtension.MetaKey, def.Id);
+        ctx.Materials[def.Id] = m;
+        ctx.UsedMaterials.Add(def);
         return m;
     }
 
@@ -138,7 +153,7 @@ public static class DocumentToGodotScene
             var render = MeshTessellator.Build(mesh);
             var arr = new ArrayMesh { ResourceName = n.Name + "Shape" };
             new GodotMeshBridge().UploadSurface(arr, render);
-            if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(n));
+            if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(ctx, n));
             ctx.Tris += render.TriangleCount;
             g = new MeshInstance3D { Mesh = arr };
         }
@@ -196,7 +211,7 @@ public static class DocumentToGodotScene
         }
         var arr = new ArrayMesh { ResourceName = n.Name + "Shape" };
         new GodotMeshBridge().UploadSurface(arr, render, null, bones4, weights4);
-        if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(n));
+        if (arr.GetSurfaceCount() > 0) arr.SurfaceSetMaterial(0, MaterialFor(ctx, n));
         ctx.Tris += render.TriangleCount;
 
         // Skin: 스킨 조인트 j = 바인드 j(메시 BONES 값은 바인드 번호), 역바인드(스켈레톤 공간) = skelWorld · inv(jointWorld)

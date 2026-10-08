@@ -459,6 +459,39 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] mattex {id} -> {after.TexturePath ?? "(none)"}");
                     break;
                 }
+            case "matset":
+            case "matmap":
+                {
+                    // matset ID KEY VALUE[,Y,Z] : 머티리얼 파라미터 값 / matmap ID KEY [PATH] : 파라미터 텍스처(빈 PATH면 해제)
+                    var doc = CubeApp.Instance.Document;
+                    int id = int.Parse(p[1]);
+                    var m = doc.FindMaterial(id);
+                    if (m == null) { GD.PrintErr($"[Drive] no material {id}"); break; }
+                    var after = m.Clone();
+                    if (p[0] == "matset")
+                    {
+                        var f = p[3].Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+                        after.Set(p[2], new System.Numerics.Vector3(f[0], f.Length > 1 ? f[1] : 0, f.Length > 2 ? f[2] : 0));
+                    }
+                    else after.SetTex(p[2], p.Length > 3 ? string.Join(" ", p.Skip(3)) : null);
+                    doc.Undo.Push(new Core.Commands.SetMaterialCommand(id, after));
+                    GD.Print($"[Drive] {p[0]} {id} {p[2]} = {(p[0] == "matset" ? after.Get(p[2]).ToString() : after.Tex(p[2]) ?? "(none)")}");
+                    break;
+                }
+            case "mkpng":
+                {
+                    // mkpng PATH R G B [SIZE] : 테스트용 그라디언트 PNG(R/G/B 0..255 기준색, 가로로 밝기 0→1)
+                    int size = p.Length > 5 ? int.Parse(p[5]) : 16;
+                    var img = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
+                    for (int y = 0; y < size; y++)
+                        for (int x = 0; x < size; x++)
+                        {
+                            float t = (x + 0.5f) / size;
+                            img.SetPixel(x, y, new Color(int.Parse(p[2]) / 255f * t, int.Parse(p[3]) / 255f * t, int.Parse(p[4]) / 255f * t, 1f));
+                        }
+                    GD.Print($"[Drive] mkpng {p[1]}: {img.SavePng(p[1])}");
+                    break;
+                }
             case "shelf":
                 {
                     // shelf N : 셸프 탭 전환(0 Polygons, 1 UV, 2 Rigging)

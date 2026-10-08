@@ -442,6 +442,59 @@ public sealed partial class FbxSceneBuilder
 
     // ---------------------------------------------------------------- 머티리얼 / 텍스처
 
+    /// <summary>머티리얼 파라미터 → FBX 텍스처 연결 속성. PBR 확장 맵은 FBX에 표준 슬롯이 없어 glTF로만 나간다.</summary>
+    private static readonly (string key, string prop)[] FbxTextureSlots =
+    {
+        ("color", "DiffuseColor"), ("alpha", "TransparentColor"), ("specular", "SpecularColor"), ("shininess", "ShininessExponent"),
+        ("roughness", "ShininessExponent"), ("metallic", "ReflectionFactor"), ("normal", "NormalMap"), ("occlusion", "AmbientColor"),
+        ("emissive", "EmissiveColor"), ("specularColorFactor", "SpecularColor"),
+    };
+
+    private readonly Dictionary<string, long> _textureIds = new();
+
+    /// <summary>이미지 경로 하나에 Video + Texture 노드(RelativeFilename = FBX 위치 기준). 같은 경로는 재사용.</summary>
+    private long TextureId(string fullPath)
+    {
+        if (_textureIds.TryGetValue(fullPath, out long tid0)) return tid0;
+        string path = fullPath.Replace('\\', '/');
+        string file = Path.GetFileName(path);
+        string rel = file;
+        if (!string.IsNullOrEmpty(_opt.BaseDir))
+        {
+            try { rel = Path.GetRelativePath(_opt.BaseDir, fullPath).Replace('\\', '/'); } catch { rel = file; }
+        }
+        long vid = NewId("Video");
+        var video = new FbxNode("Video", vid, FbxNode.Id("Video", file), "Clip");
+        video.Add("Type", "Clip");
+        var vp = video.Add("Properties70");
+        vp.Add("P", "Path", "KString", "XRefUrl", "", path);
+        vp.Add("P", "RelPath", "KString", "XRefUrl", "", rel);
+        video.Add("UseMipMap", 0);
+        video.Add("Filename", path);
+        video.Add("RelativeFilename", rel);
+        _objects.Add(video);
+
+        long tid = NewId("Texture");
+        var tex = new FbxNode("Texture", tid, FbxNode.Id("Texture", file), "");
+        tex.Add("Type", "TextureVideoClip");
+        tex.Add("Version", 202);
+        tex.Add("TextureName", FbxNode.Id("Texture", file));
+        var tpp = tex.Add("Properties70");
+        tpp.Add("P", "UVSet", "KString", "", "", "map1");
+        tpp.Add("P", "UseMaterial", "bool", "", "", 1);
+        tex.Add("Media", FbxNode.Id("Video", file));
+        tex.Add("FileName", path);
+        tex.Add("RelativeFilename", rel);
+        tex.Add("ModelUVTranslation", 0, 0);
+        tex.Add("ModelUVScaling", 1, 1);
+        tex.Add("Texture_Alpha_Source", "None");
+        tex.Add("Cropping", 0, 0, 0, 0);
+        _objects.Add(tex);
+        _connections.Add((vid, tid, null));
+        _textureIds[fullPath] = tid;
+        return tid;
+    }
+
     private long MaterialId(int docMaterialId)
     {
         if (_materialIds.TryGetValue(docMaterialId, out long id)) return id;
@@ -457,15 +510,20 @@ public sealed partial class FbxSceneBuilder
         var p = m.Add("Properties70");
         var color = def?.Color ?? new Vector3(0.5f, 0.5f, 0.5f);
         p.Add("P", "ShadingModel", "KString", "", "", phong ? "Phong" : "Lambert");
-        p.Add("P", "EmissiveColor", "Color", "", "A", 0.0, 0.0, 0.0);
-        p.Add("P", "EmissiveFactor", "Number", "", "A", 0.0);
+        var emis = def?.Get("emissive") ?? Vector3.Zero;
+        float emisStrength = def?.GetF("emissiveStrength") ?? 1f;
+        bool hasEmis = emis != Vector3.Zero || def?.Tex("emissive") != null;
+        p.Add("P", "EmissiveColor", "Color", "", "A", (double)emis.X, (double)emis.Y, (double)emis.Z);
+        p.Add("P", "EmissiveFactor", "Number", "", "A", hasEmis ? (double)emisStrength : 0.0);
         p.Add("P", "AmbientColor", "Color", "", "A", 0.0, 0.0, 0.0);
         p.Add("P", "AmbientFactor", "Number", "", "A", 0.0);
         p.Add("P", "DiffuseColor", "Color", "", "A", (double)color.X, (double)color.Y, (double)color.Z);
         p.Add("P", "DiffuseFactor", "Number", "", "A", 1.0);
         p.Add("P", "TransparentColor", "Color", "", "A", 1.0, 1.0, 1.0);
-        p.Add("P", "TransparencyFactor", "Number", "", "A", 0.0);
-        p.Add("P", "Opacity", "Number", "", "A", 1.0);
+        float opacity = def?.GetF("alpha") ?? 1f;
+        p.Add("P", "TransparencyFactor", "Number", "", "A", (double)(1f - opacity));
+        p.Add("P", "Opacity", "Number", "", "A", (double)opacity);
+        if (def != null && def.GetF("normal") != 1f) p.Add("P", "BumpFactor", "double", "Number", "", (double)def.GetF("normal"));
         if (phong)
         {
             var spec = def!.Type == MaterialType.BlinnPhong ? def.Specular : new Vector3(def.Metallic * 0.9f + 0.04f);
@@ -484,45 +542,16 @@ public sealed partial class FbxSceneBuilder
         p.Add("P", "Opacity", "double", "Number", "", 1.0);
         _objects.Add(m);
 
-        if (def != null && !string.IsNullOrEmpty(def.TexturePath))
+        // 파라미터 텍스처 → FBX 표준 슬롯(Maya/Unity/Blender가 읽는 이름). 같은 이미지는 Video/Texture를 한 번만 만든다.
+        if (def != null)
         {
-            string path = def.TexturePath.Replace('\\', '/');
-            string file = Path.GetFileName(path);
-            // RelativeFilename은 FBX 파일 위치 기준(임포터가 먼저 찾는 경로)
-            string rel = file;
-            if (!string.IsNullOrEmpty(_opt.BaseDir))
+            foreach (var (key, prop) in FbxTextureSlots)
             {
-                try { rel = Path.GetRelativePath(_opt.BaseDir, def.TexturePath).Replace('\\', '/'); } catch { rel = file; }
+                var tp = def.Tex(key);
+                if (tp == null) continue;
+                if (key == "roughness" && def.Tex("shininess") != null) continue; // 같은 슬롯
+                _connections.Add((TextureId(tp), id, prop));
             }
-            long vid = NewId("Video");
-            var video = new FbxNode("Video", vid, FbxNode.Id("Video", file), "Clip");
-            video.Add("Type", "Clip");
-            var vp = video.Add("Properties70");
-            vp.Add("P", "Path", "KString", "XRefUrl", "", path);
-            vp.Add("P", "RelPath", "KString", "XRefUrl", "", rel);
-            video.Add("UseMipMap", 0);
-            video.Add("Filename", path);
-            video.Add("RelativeFilename", rel);
-            _objects.Add(video);
-
-            long tid = NewId("Texture");
-            var tex = new FbxNode("Texture", tid, FbxNode.Id("Texture", file), "");
-            tex.Add("Type", "TextureVideoClip");
-            tex.Add("Version", 202);
-            tex.Add("TextureName", FbxNode.Id("Texture", file));
-            var tp = tex.Add("Properties70");
-            tp.Add("P", "UVSet", "KString", "", "", "map1");
-            tp.Add("P", "UseMaterial", "bool", "", "", 1);
-            tex.Add("Media", FbxNode.Id("Video", file));
-            tex.Add("FileName", path);
-            tex.Add("RelativeFilename", rel);
-            tex.Add("ModelUVTranslation", 0, 0);
-            tex.Add("ModelUVScaling", 1, 1);
-            tex.Add("Texture_Alpha_Source", "None");
-            tex.Add("Cropping", 0, 0, 0, 0);
-            _objects.Add(tex);
-            _connections.Add((vid, tid, null));
-            _connections.Add((tid, id, "DiffuseColor"));
         }
         return id;
     }
