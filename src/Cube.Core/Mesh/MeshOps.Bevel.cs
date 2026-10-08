@@ -75,12 +75,29 @@ public static partial class MeshOps
     public static List<int> BevelEdges(PolyMesh m, IEnumerable<int> edgeIds, float distance, int segments = 1)
         => Bevel(m, edgeIds, new BevelOptions { WidthType = BevelWidthType.Absolute, Width = distance, Segments = segments, Intersection = BevelIntersection.NGon, LegacyPerEdgeClamp = true });
 
+    /// <summary>
+    /// 면 재구성·D자 캡 병합 뒤 어떤 면에도 쓰이지 않는 정점이 남을 수 있다(반복 Bevel에서 고립 정점) → 죽인다.
+    /// 하프에지를 한 번만 훑는다(정점마다 RemoveVertexIfIsolated를 부르면 O(V·H)).
+    /// </summary>
+    private static void RemoveIsolatedVertices(PolyMesh m)
+    {
+        var used = new bool[m.VertexCount];
+        for (int h = 0; h < m.HalfEdgeCount; h++) { var he = m.Hes[h]; if (he.Alive && he.Vertex >= 0 && he.Vertex < used.Length) used[he.Vertex] = true; }
+        bool any = false;
+        for (int v = 0; v < m.VertexCount; v++)
+        {
+            if (!m.Verts[v].Alive || used[v]) continue;
+            var vert = m.Verts[v]; vert.Alive = false; vert.HalfEdge = -1; m.Verts[v] = vert; any = true;
+        }
+        if (any) m.BumpTopology();
+    }
+
     /// <summary>Bevel 실행. Affect = Edges면 ids는 엣지, Vertices면 정점 ID. 반환값은 새로 생긴 면 ID들.</summary>
     public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o)
     {
         var info = new BevelInfo();
         var result = o.Affect == BevelAffect.Vertices ? BevelVerticesCore(m, ids, o, info) : BevelEdgesCore(m, ids, o, info);
-        if (result.Count == 0) return result;
+        if (result.Count == 0) { RemoveIsolatedVertices(m); return result; }
         if (o.Affect == BevelAffect.Edges && o.Segments >= 2) PostProcessRoundBevel(m, result, info.Strips);
         else if (o.Affect == BevelAffect.Vertices && o.Segments >= 2) SoftenNewFaces(m, result);
         result.RemoveAll(f => f < 0 || f >= m.FaceCount || !m.Faces[f].Alive);
@@ -90,6 +107,7 @@ public static partial class MeshOps
             if (o.HardenNormals) ApplyHardenNormals(m, result, info);
             if (o.FaceStrength != BevelFaceStrength.None) ApplyFaceStrength(m, result, info, o.FaceStrength);
         }
+        RemoveIsolatedVertices(m);
         m.BumpTopology();
         return result;
     }
@@ -337,7 +355,10 @@ public static partial class MeshOps
             if (o.WidthType == BevelWidthType.Percent) return len * width / 100f;
             int es = RelatedSel(v, eu, f);
             float sin = Vector3.Cross(Dir(v, OtherEnd(eu, v)), Dir(v, OtherEnd(es, v))).Length();
-            return OffsetOf(es) / MathF.Max(sin, 0.05f);
+            // 베벨 엣지와 거의 일직선으로 이어지는 엣지(차수 2 끝점 등): 오프셋 선이 그 엣지와 만나지 않으므로 물러나지 않는다(띠가 끝점에서 뾰족하게 끝남).
+            // 예전에는 sin을 0.05로 잘라 이어진 엣지를 거의 끝까지(98%) 미끄러졌다.
+            if (sin < 0.05f) return 0f;
+            return OffsetOf(es) / sin;
         }
 
         // Clamp Overlap: 모든 이동 길이를 같은 비율로 줄여 이웃 엣지 끝을 넘지 않게(양끝이 모두 베벨이면 절반까지)
@@ -580,7 +601,9 @@ public static partial class MeshOps
             for (int k = 0; k < segments; k++)
             {
                 var quad = new List<Corner> { new(pb[k], uvb[k], Vector3.Zero), new(pa[k], uva[k], Vector3.Zero), new(pa[k + 1], uva[k + 1], Vector3.Zero), new(pb[k + 1], uvb[k + 1], Vector3.Zero) };
-                if (quad.Select(c => c.Vertex).Distinct().Count() < 3) continue;
+                // 끝점 한쪽이 한 점으로 모이면(차수 2 끝점: 두 면의 옆 정점이 같음) 연속 중복 정점을 빼 삼각형으로 — 그대로 넘기면 면 추가가 거부되어 구멍이 났다
+                for (int qi = quad.Count - 1; qi >= 0 && quad.Count > 0; qi--) if (quad[qi].Vertex == quad[(qi + 1) % quad.Count].Vertex) quad.RemoveAt(qi);
+                if (quad.Count < 3 || quad.Select(c => c.Vertex).Distinct().Count() < 3) continue;
                 int q = AddFaceWithCorners(m, quad, Mat(f0, f1));
                 if (q < 0) continue;
                 result.Add(q); info.Strips.Add(q);

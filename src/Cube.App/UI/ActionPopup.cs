@@ -144,7 +144,7 @@ public partial class ActionPopup : PanelContainer
 
     private void ShowFor(ICommand cmd, string? actionId)
     {
-        _command = cmd;
+        _command = cmd; _baseCommand = cmd; // 기능 명령 = 후속 단계의 바탕(후속 단계가 없어도 UndoFollowUps가 이 값을 되돌려 준다)
         _kind = Kind.None; _optionId = null; _extrude.Clear(); _historyEntries.Clear(); _historyParams = null; _transform = null; _follow.Clear();
         _title = cmd.Name;
         var newEntries = NewHistoryEntries();
@@ -482,7 +482,8 @@ public partial class ActionPopup : PanelContainer
             undo.Undo();
             _follow[i].Command = null;
         }
-        _command = from == 0 ? _baseCommand : _follow[from - 1].Command;
+        // 후속 단계가 없으면 _command는 그대로(기능 명령). v0.0.34~46: 여기서 _baseCommand(null)로 덮어써 옵션 변경이 항상 "더 이상 마지막이 아님"으로 숨겨졌다
+        if (_follow.Count > 0) _command = from == 0 ? _baseCommand : _follow[from - 1].Command;
         return true;
     }
 

@@ -304,9 +304,21 @@ public sealed class PolyMesh
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long Key(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
+    /// <summary>
+    /// 디버그/테스트: 유효하다고 판단된 캐시를 처음부터 다시 만든 결과와 비교해 불일치면 예외를 던진다(위상 버전마다 한 번).
+    /// 테스트 프로젝트가 모듈 초기화에서 켠다(CacheVerifyInit) — 직접 구조를 고친 뒤 캐시를 무효화하지 않는 연산을 바로 잡아낸다.
+    /// 검증은 O(엣지)라 하프에지 2천 개 미만인 메시에서만 한다(대형 가져오기 성능 테스트가 O(n²)이 되지 않게).
+    /// </summary>
+    public static bool VerifyCaches;
+    private int _edgeMapVerified = -1, _outgoingVerified = -1;
+
     private void EnsureEdgeMap()
     {
-        if (_edgeMap != null && _edgeMapVersion == TopologyVersion) return;
+        if (_edgeMap != null && _edgeMapVersion == TopologyVersion)
+        {
+            if (VerifyCaches && Hes.Count < 2000 && _edgeMapVerified != TopologyVersion) { VerifyEdgeMap(); _edgeMapVerified = TopologyVersion; }
+            return;
+        }
         _edgeMap ??= new Dictionary<long, int>(PairKeyComparer.Instance);
         _edgeMap.Clear();
         for (int e = 0; e < Edges.Count; e++)
@@ -316,6 +328,37 @@ public sealed class PolyMesh
             _edgeMap[Key(a, b)] = e;
         }
         _edgeMapVersion = TopologyVersion;
+    }
+
+    private void VerifyEdgeMap()
+    {
+        var fresh = new Dictionary<long, int>(PairKeyComparer.Instance);
+        for (int e = 0; e < Edges.Count; e++)
+        {
+            if (!Edges[e].Alive) continue;
+            var (a, b) = EdgeVertices(e);
+            fresh[Key(a, b)] = e;
+        }
+        if (fresh.Count != _edgeMap!.Count) throw new InvalidOperationException($"edge map stale: count {_edgeMap.Count} vs {fresh.Count}");
+        foreach (var kv in fresh)
+            if (!_edgeMap.TryGetValue(kv.Key, out int e) || e != kv.Value) throw new InvalidOperationException($"edge map stale: key ({kv.Key >> 32},{(int)kv.Key}) → {(_edgeMap.TryGetValue(kv.Key, out int ee) ? ee : -1)} vs {kv.Value}");
+    }
+
+    private void VerifyOutgoing()
+    {
+        var counts = new int[Verts.Count];
+        for (int i = 0; i < Hes.Count; i++) if (Hes[i].Alive) counts[Hes[i].Vertex]++;
+        for (int v = 0; v < Verts.Count; v++)
+        {
+            int cached = v < _vertexOutgoing!.Length ? _vertexOutgoing[v].Length : 0;
+            if (cached != counts[v]) throw new InvalidOperationException($"vertex outgoing stale: v{v} cached {cached} vs {counts[v]}");
+        }
+        for (int i = 0; i < Hes.Count; i++)
+        {
+            if (!Hes[i].Alive) continue;
+            int v = Hes[i].Vertex;
+            if (v >= _vertexOutgoing!.Length || Array.IndexOf(_vertexOutgoing[v], i) < 0) throw new InvalidOperationException($"vertex outgoing stale: he{i} missing at v{v}");
+        }
     }
 
     /// <summary>두 정점을 잇는 살아있는 엣지 ID, 없으면 -1.</summary>
@@ -366,6 +409,7 @@ public sealed class PolyMesh
     /// <summary>정점에서 출발하는 살아있는 하프에지 목록(비매니폴드 정점도 포함). 위상 버전별로 캐시된다.</summary>
     public ReadOnlySpan<int> VertexOutgoing(int v)
     {
+        if (VerifyCaches && Hes.Count < 2000 && _vertexOutgoing != null && _vertexOutgoingVersion == TopologyVersion && _outgoingVerified != TopologyVersion) { VerifyOutgoing(); _outgoingVerified = TopologyVersion; }
         if (_vertexOutgoing == null || _vertexOutgoingVersion != TopologyVersion)
         {
             var counts = new int[Verts.Count];
