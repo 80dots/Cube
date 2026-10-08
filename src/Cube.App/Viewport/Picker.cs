@@ -129,15 +129,18 @@ public sealed class Picker
     public PickHit? Pick(GVec2 px, SelectMode mode, bool cameraBased)
     {
         var p = new NVec2(px.X, px.Y);
+        long t0 = AnimPerf.Begin();
         var targets = Targets();
-        if (mode == SelectMode.Object && PickJoint(p) is { } jh) return jh;
-        if (mode == SelectMode.Object && PickLight(p) is { } lh) return lh;
-        return mode switch
+        if (mode == SelectMode.Object && PickJoint(p) is { } jh) { AnimPerf.End("pick", t0); return jh; }
+        if (mode == SelectMode.Object && PickLight(p) is { } lh) { AnimPerf.End("pick", t0); return lh; }
+        var hit = mode switch
         {
             SelectMode.Vertex or SelectMode.Uv => RayPicker.PickVertex(targets, Projection(), p, cameraBased, RayPicker.VertexThresholdPx * Scale),
             SelectMode.Edge => RayPicker.PickEdge(targets, Projection(), p, cameraBased, RayPicker.EdgeThresholdPx * Scale),
             _ => RayPicker.Pick(targets, Projection(), p, mode, cameraBased),
         };
+        AnimPerf.End("pick", t0);
+        return hit;
     }
 
     public List<SelItem> Marquee(Rect2 rect, SelectMode mode, bool cameraBased)

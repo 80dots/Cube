@@ -72,5 +72,37 @@ public class TessellatorTests
         for (int i = 0; i < r.CornerCount; i++) if (r.Positions[i] == new Vector3(5, 5, 5)) hits++;
         Assert.Equal(3, hits); // 정점 0은 3개 면의 코너
         Assert.Contains(new Vector3(5, 5, 5), r.PointPositions.Take(r.PointCount));
+        // 바운드·선분·면 중심도 같이 따라간다
+        Assert.Equal(new Vector3(5, 5, 5), r.BoundsMax);
+        Assert.Equal(new Vector3(-0.5f, -0.5f, -0.5f), r.BoundsMin);
+        int lineHits = 0; for (int i = 0; i < r.LineVertexCount; i++) if (r.LinePositions[i] == new Vector3(5, 5, 5)) lineHits++;
+        Assert.Equal(3, lineHits); // 정점 0에 엣지 3개
+    }
+
+    [Fact]
+    public void UpdatePositions_WithDeformedArray_MatchesFullRebuild()
+    {
+        // 스킨 변형 경로: 정점 배열을 넘기면 코너/선분/점/면 중심/바운드가 그 배열로 다시 만든 결과와 같아야 한다
+        var m = MeshBuilder.Cylinder(segments: 8);
+        var r = MeshTessellator.Build(m);
+        int v0 = r.PositionVersion;
+        var deformed = new Vector3[m.VertexCount];
+        for (int v = 0; v < m.VertexCount; v++) deformed[v] = m.Verts[v].Position * new Vector3(2f, 0.5f, 1f) + new Vector3(0.1f * v, 0, 0);
+        MeshTessellator.UpdatePositions(m, r, deformed);
+        Assert.True(r.PositionVersion > v0);
+
+        var expected = m.Clone();
+        for (int v = 0; v < expected.VertexCount; v++) { var vert = expected.Verts[v]; vert.Position = deformed[v]; expected.Verts[v] = vert; }
+        var r2 = MeshTessellator.Build(expected);
+        Assert.Equal(r2.CornerCount, r.CornerCount);
+        for (int i = 0; i < r.CornerCount; i++) Assert.Equal(r2.Positions[i], r.Positions[i]);
+        for (int i = 0; i < r.LineVertexCount; i++) Assert.Equal(r2.LinePositions[i], r.LinePositions[i]);
+        for (int i = 0; i < r.PointCount; i++) Assert.Equal(r2.PointPositions[i], r.PointPositions[i]);
+        for (int i = 0; i < r.FaceCenterCount; i++) Assert.True(Vector3.Distance(r2.FaceCenters[i], r.FaceCenters[i]) < 1e-5f);
+        Assert.Equal(r2.BoundsMin, r.BoundsMin); Assert.Equal(r2.BoundsMax, r.BoundsMax);
+        // null을 넘기면 메시 위치로 돌아온다
+        MeshTessellator.UpdatePositions(m, r, null);
+        var r3 = MeshTessellator.Build(m);
+        for (int i = 0; i < r.CornerCount; i++) Assert.Equal(r3.Positions[i], r.Positions[i]);
     }
 }

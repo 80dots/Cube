@@ -18,6 +18,13 @@ public sealed class PolyCount
 
     public void Recompute(Document doc)
     {
+        long t0 = AnimPerf.Begin();
+        RecomputeCore(doc);
+        AnimPerf.End("shell.polycount", t0);
+    }
+
+    private void RecomputeCore(Document doc)
+    {
         var sel = doc.Selection;
         SceneVerts = SceneEdges = SceneFaces = SceneTris = SceneObjects = 0;
         ObjVerts = ObjEdges = ObjFaces = ObjTris = ObjObjects = 0;

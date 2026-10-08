@@ -118,9 +118,13 @@ public sealed class Document
         Notify(new DocChange(ChangeKind.NodeReparented, node.Id));
     }
 
+    /// <summary>통지마다 증가하는 일련번호. 같은 통지를 받는 여러 리스너(뷰포트 패널 4개)가 비싼 계산(스킨 변형)을 한 번만 하고 공유하는 키.</summary>
+    public int ChangeSerial { get; private set; }
+
     public void Notify(DocChange change)
     {
         if (change.Kind != ChangeKind.Selection) IsDirty = true;
+        ChangeSerial++;
         Changed?.Invoke(change);
     }
 

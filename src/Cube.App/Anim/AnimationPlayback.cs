@@ -165,7 +165,9 @@ public partial class AnimationPlayback : Node
     private void Apply()
     {
         var clip = Clip; if (clip == null) return;
+        long t0 = AnimPerf.Begin();
         AnimationPose.Apply(_doc, clip, Time);
+        AnimPerf.End("notify.total", t0);
         Posed = true;
     }
 
@@ -185,6 +187,9 @@ public partial class AnimationPlayback : Node
         else if (t < start) t = start;
         Time = t;
         Apply();
+        long t1 = AnimPerf.Begin();
         TimeChanged?.Invoke();
+        AnimPerf.End("timeslider", t1);
+        if (AnimPerf.Enabled) AnimPerf.Frame($"clip={clip.Name} quad={UI.Shell.Instance?.Layout.IsQuad}");
     }
 }

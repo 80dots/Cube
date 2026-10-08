@@ -45,17 +45,33 @@ public partial class JointView : Node3D
     /// <summary>뷰포트에서 집을 수 있는지(노드가 보이고 Display → Joints가 켜져 있음).</summary>
     public bool Pickable => Visible && CubeApp.Instance.Settings.ShowJoints;
 
-    /// <summary>자식 조인트 위치가 바뀌었을 때 본을 다시 만든다. 구 크기도 갱신.</summary>
+    // 마지막으로 만든 본의 입력(반지름/표시/자식 끝점). 같으면 메시를 다시 만들지 않는다(재생 중 매 프레임 호출되지만 회전만 하는 리그는 끝점이 그대로)
+    private float _builtRadius = -1;
+    private bool _builtShown, _builtAxes;
+    private readonly List<Vector3> _builtTips = new();
+    private readonly List<Vector3> _tips = new();
+
+    /// <summary>자식 조인트 위치가 바뀌었을 때 본을 다시 만든다. 구 크기도 갱신. 입력이 지난번과 같으면 아무것도 하지 않는다.</summary>
     public void Refresh()
     {
         if (_sphere == null) return;
         float r = Radius;
+        bool shown = CubeApp.Instance.Settings.ShowJoints;
+        bool showAxes = shown && CubeApp.Instance.Settings.ShowJointAxes;
+        _tips.Clear();
+        foreach (var c in Node.Children) if (c.IsJoint) _tips.Add(c.Evaluated.Translation.ToGodot());
+        if (r == _builtRadius && shown == _builtShown && showAxes == _builtAxes && _tips.Count == _builtTips.Count)
+        {
+            bool same = true;
+            for (int i = 0; i < _tips.Count && same; i++) same = _tips[i] == _builtTips[i];
+            if (same) return;
+        }
+        _builtRadius = r; _builtShown = shown; _builtAxes = showAxes;
+        _builtTips.Clear(); _builtTips.AddRange(_tips);
         _sphere.Scale = new Vector3(r * 2, r * 2, r * 2);
         // Display → Joints: 노드 표시(Visible)와 별개로 구·본·축만 숨긴다(자식 뷰·스킨 메시는 그대로)
-        bool shown = CubeApp.Instance.Settings.ShowJoints;
         _sphere.Visible = shown; _bones.Visible = shown;
         // 로컬 회전 축(Display → Joint Local Rotation Axes)
-        bool showAxes = shown && CubeApp.Instance.Settings.ShowJointAxes;
         _axes.Visible = showAxes;
         if (showAxes)
         {
@@ -69,10 +85,8 @@ public partial class JointView : Node3D
         }
         _boneMesh.ClearSurfaces();
         var verts = new List<Vector3>();
-        foreach (var c in Node.Children)
+        foreach (var tip in _tips)
         {
-            if (!c.IsJoint) continue;
-            var tip = c.Evaluated.Translation.ToGodot();
             float len = tip.Length();
             if (len < 1e-5f) continue;
             var dir = tip / len;

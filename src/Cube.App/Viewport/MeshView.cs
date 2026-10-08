@@ -55,6 +55,8 @@ public partial class MeshView : Node3D
     private MeshInstance3D _surface = null!, _wire = null!, _tint = null!;
     private MultiMeshInstance3D _points = null!, _faceCenters = null!;
     private ShaderMaterial _pointsMat = null!, _faceCentersMat = null!;
+    /// <summary>점/면 중심 MultiMesh 인스턴스 버퍼(변환 12 + 색 4 float). 위치만 갱신할 때 색을 유지한다.</summary>
+    private float[] _pointsBuf = Array.Empty<float>(), _faceCentersBuf = Array.Empty<float>();
 
     /// <summary>표시 스타일. 선택/호버 상태를 바깥에서 주입한다.</summary>
     public sealed class ComponentStyle
@@ -134,6 +136,7 @@ public partial class MeshView : Node3D
         if (Deformed != null) MeshTessellator.UpdatePositions(mesh, Render, Deformed);
         UploadSurface();
         RefreshStyle();
+        ApplyBounds();
     }
 
     /// <summary>Smooth Mesh Preview(1/2/3키): 0 = 케이지, 1 = 케이지 와이어 + 스무스 표면, 2 = 스무스 표면 + 스무스 와이어.</summary>
@@ -152,15 +155,81 @@ public partial class MeshView : Node3D
         MeshTessellator.Build(cur, _smoothRender);
     }
 
-    /// <summary>위치만 바뀐 경우(드래그). 위상 동일.</summary>
+    /// <summary>
+    /// 위치만 바뀐 경우(드래그, 스킨 변형 재생). 위상 동일.
+    /// 표면/와이어/점/틴트의 정점 버퍼 위치만 덮어쓰고(<see cref="GodotMeshBridge.UpdateSurfacePositions"/> 등) 서피스를 다시 만들지 않는다.
+    /// 스무스 프리뷰는 서브디비전 결과라 전체 재생성. 노멀은 코너 노멀 그대로(변형 전과 같다).
+    /// </summary>
     public void UpdatePositions()
+    {
+        if (Node.Mesh == null) return;
+        long t0 = AnimPerf.Begin();
+        PreparePositions();
+        AnimPerf.End("mesh.updatePositions", t0);
+        CommitPositions();
+    }
+
+    /// <summary>위치 갱신의 CPU 단계(렌더 배열만 건드림, Godot 호출 없음 → 여러 메시를 병렬로 돌릴 수 있다). 뒤에 <see cref="CommitPositions"/>를 부를 것.</summary>
+    public void PreparePositions()
     {
         var mesh = Node.Mesh;
         if (mesh == null) return;
         MeshTessellator.UpdatePositions(mesh, Render, Deformed);
-        // 노멀이 바뀌므로 표면은 다시 올린다(코너 수는 동일)
-        UploadSurface();
-        RefreshStyle();
+    }
+
+    /// <summary>위치 갱신의 업로드 단계(메인 스레드).</summary>
+    public void CommitPositions()
+    {
+        if (Node.Mesh == null || _surface == null) return;
+        long t1 = AnimPerf.Begin();
+        if (SmoothPreview > 0 || _smoothShown)
+        {
+            UploadSurface();
+            AnimPerf.End("mesh.uploadSurface", t1);
+            long t2 = AnimPerf.Begin();
+            RefreshStyle();
+            AnimPerf.End("mesh.refreshStyle", t2);
+            ApplyBounds();
+            return;
+        }
+        if (!_bridge.UpdateSurfacePositions(_surfaceMesh, Render)) UploadSurface();
+        AnimPerf.End("mesh.uploadSurface", t1);
+        long t3 = AnimPerf.Begin();
+        RefreshPositions();
+        AnimPerf.End("mesh.refreshStyle", t3);
+        ApplyBounds();
+    }
+
+    /// <summary>스타일(색·표시 여부)은 그대로 두고 와이어/점/면 중심/틴트의 위치만 따라가게 한다. 부분 갱신이 안 되면 그 요소만 다시 올린다.</summary>
+    private void RefreshPositions()
+    {
+        var s = Style;
+        if (_wire.Visible && !_bridge.UpdateLinePositions(_wireMesh, Render)) UploadWire();
+        if (_points.Visible)
+        {
+            var pts = new ReadOnlySpan<System.Numerics.Vector3>(Render.PointPositions, 0, Render.PointCount);
+            if (!GodotMeshBridge.UpdatePointPositions(_pointsMm, pts, _pointsBuf)) UploadVertexPoints();
+        }
+        if (_faceCenters.Visible)
+        {
+            var pts = new ReadOnlySpan<System.Numerics.Vector3>(Render.FaceCenters, 0, Render.FaceCenterCount);
+            if (!GodotMeshBridge.UpdatePointPositions(_faceCentersMm, pts, _faceCentersBuf)) UploadFaceCenterPoints();
+        }
+        if (s.FaceSelected != null && _tintMesh.GetSurfaceCount() > 0 && !_bridge.UpdateFaceSubsetPositions(_tintMesh, Render)) _bridge.UploadFaceSubset(_tintMesh, Render, s.FaceSelected);
+    }
+
+    /// <summary>
+    /// 부분 갱신은 Godot이 서피스 AABB를 다시 재지 않으므로(변형된 메시가 원래 상자 밖으로 나가면 컬링됨) 현재 점 바운드를 커스텀 AABB로 준다.
+    /// 스킨 변형 메시의 AABB 재계산 비용도 피한다.
+    /// </summary>
+    private void ApplyBounds()
+    {
+        if (_surface == null) return;
+        var mn = Render.BoundsMin; var mx = Render.BoundsMax;
+        const float pad = 1e-3f;
+        var aabb = new Aabb((mn - new System.Numerics.Vector3(pad)).ToGodot(), (mx - mn + new System.Numerics.Vector3(pad * 2)).ToGodot());
+        _surface.CustomAabb = aabb; _wire.CustomAabb = aabb; _tint.CustomAabb = aabb; _points.CustomAabb = aabb; _faceCenters.CustomAabb = aabb;
+        if (_smoothShown) { _surface.CustomAabb = default; _smoothWire.CustomAabb = default; }
     }
 
     /// <summary>스킨 변형 위치를 지정(null = 해제)하고 표시를 갱신한다.</summary>
@@ -169,6 +238,9 @@ public partial class MeshView : Node3D
         Deformed = positions;
         if (_surface != null) UpdatePositions();
     }
+
+    /// <summary>변형 위치만 바꾼다(표시 갱신은 호출자가 <see cref="PreparePositions"/>/<see cref="CommitPositions"/>로).</summary>
+    public void SetDeformedNoUpload(System.Numerics.Vector3[]? positions) => Deformed = positions;
 
     private void UploadSurface()
     {
@@ -214,27 +286,36 @@ public partial class MeshView : Node3D
         _points.Visible = s.ShowVertices;
         _faceCenters.Visible = s.ShowFaceCenters;
 
-        if (s.ShowWire)
-        {
-            _bridge.UploadLines(_wireMesh, Render, e =>
-            {
-                if (s.EdgeColor != null) return s.EdgeColor(e);
-                return s.ObjectWireColor;
-            });
-        }
-        if (s.ShowVertices)
-        {
-            _pointsMat.SetShaderParameter("point_px", s.VertexPx * CubeApp.Instance.UiScale);
-            var pts = new ReadOnlySpan<System.Numerics.Vector3>(Render.PointPositions, 0, Render.PointCount);
-            GodotMeshBridge.UploadPoints(_pointsMm, pts, i => s.VertexColor != null ? s.VertexColor(Render.PointToVertex[i]) : VertexNormal);
-        }
-        if (s.ShowFaceCenters)
-        {
-            _faceCentersMat.SetShaderParameter("point_px", s.VertexPx * CubeApp.Instance.UiScale);
-            var pts = new ReadOnlySpan<System.Numerics.Vector3>(Render.FaceCenters, 0, Render.FaceCenterCount);
-            GodotMeshBridge.UploadPoints(_faceCentersMm, pts, i => s.FaceSelected != null && s.FaceSelected(Render.FaceCenterToFace[i]) ? VertexSelected : FaceCenter);
-        }
+        if (s.ShowWire) UploadWire();
+        if (s.ShowVertices) UploadVertexPoints();
+        if (s.ShowFaceCenters) UploadFaceCenterPoints();
         if (s.FaceSelected != null) _bridge.UploadFaceSubset(_tintMesh, Render, s.FaceSelected);
         else _tintMesh.ClearSurfaces();
+    }
+
+    private void UploadWire()
+    {
+        var s = Style;
+        _bridge.UploadLines(_wireMesh, Render, e =>
+        {
+            if (s.EdgeColor != null) return s.EdgeColor(e);
+            return s.ObjectWireColor;
+        });
+    }
+
+    private void UploadVertexPoints()
+    {
+        var s = Style;
+        _pointsMat.SetShaderParameter("point_px", s.VertexPx * CubeApp.Instance.UiScale);
+        var pts = new ReadOnlySpan<System.Numerics.Vector3>(Render.PointPositions, 0, Render.PointCount);
+        GodotMeshBridge.UploadPoints(_pointsMm, pts, i => s.VertexColor != null ? s.VertexColor(Render.PointToVertex[i]) : VertexNormal, ref _pointsBuf);
+    }
+
+    private void UploadFaceCenterPoints()
+    {
+        var s = Style;
+        _faceCentersMat.SetShaderParameter("point_px", s.VertexPx * CubeApp.Instance.UiScale);
+        var pts = new ReadOnlySpan<System.Numerics.Vector3>(Render.FaceCenters, 0, Render.FaceCenterCount);
+        GodotMeshBridge.UploadPoints(_faceCentersMm, pts, i => s.FaceSelected != null && s.FaceSelected(Render.FaceCenterToFace[i]) ? VertexSelected : FaceCenter, ref _faceCentersBuf);
     }
 }

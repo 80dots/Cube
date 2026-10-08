@@ -544,7 +544,7 @@ public partial class DebugDriver : Node
                     if (doc.Animations.Count > 0)
                     {
                         var pb = UI.Shell.Instance.Playback;
-                        GD.Print($"[Drive] anims={doc.Animations.Count} {string.Join(",", doc.Animations.Select(a => $"{a.Name}:{a.Length:F2}s@{a.FrameRate:0.#}/{a.Tracks.Count}tr/{a.KeyCount}k"))} current={pb.ClipIndex} frame={pb.Frame}/{pb.EndFrame} playing={pb.Playing} posed={pb.Posed} posedNodes={doc.Nodes.Values.Count(n => n.Pose != null)}");
+                        GD.Print($"[Drive] anims={doc.Animations.Count} {string.Join(",", doc.Animations.Select(a => $"{a.Name}:{a.Length:F2}s@{a.FrameRate:0.#}/{a.Tracks.Count}tr/{a.KeyCount}k"))} current={pb.ClipIndex} frame={pb.Frame}/{pb.EndFrame} playing={pb.Playing} posed={pb.Posed} posedNodes={doc.Nodes.Values.Count(n => n.Pose != null)} fastpath=[{Bridge.GodotMeshBridge.FastPathState}]{(Bridge.GodotMeshBridge.FastPathDisabledReason != null ? " disabled: " + Bridge.GodotMeshBridge.FastPathDisabledReason : "")}");
                     }
                     var lights = doc.LightNodes().ToList();
                     if (lights.Count > 0) GD.Print($"[Drive] lights={lights.Count} {string.Join(",", lights.Select(l => $"{l.Name}:{l.Light!.Type}/{l.Light.Intensity:F1}"))} materials={doc.Materials.Count} {string.Join(",", doc.Materials.Select(m => m.Name + ":" + m.Type))}");

@@ -37,6 +37,45 @@ public class RayPickerTests
     }
 
     [Fact]
+    public void RayBox_RejectsMissAndAcceptsHit()
+    {
+        var min = new Vector3(-0.5f); var max = new Vector3(0.5f);
+        Assert.True(RayPicker.RayIntersectsBox(new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, -1)), min, max));
+        Assert.False(RayPicker.RayIntersectsBox(new Ray(new Vector3(3, 0, 5), new Vector3(0, 0, -1)), min, max));
+        Assert.False(RayPicker.RayIntersectsBox(new Ray(new Vector3(0, 0, 5), new Vector3(0, 0, 1)), min, max)); // 뒤쪽
+        Assert.True(RayPicker.RayIntersectsBox(new Ray(new Vector3(0, 0, 0), new Vector3(1, 1, 1)), min, max)); // 안에서 출발
+        // 축에 평행한 방향(성분 0)도 처리
+        Assert.True(RayPicker.RayIntersectsBox(new Ray(new Vector3(-3, 0.2f, 0.1f), new Vector3(1, 0, 0)), min, max));
+        Assert.False(RayPicker.RayIntersectsBox(new Ray(new Vector3(-3, 0.8f, 0.1f), new Vector3(1, 0, 0)), min, max));
+        // 평평한 박스(두께 0)도 패딩으로 통과
+        Assert.True(RayPicker.RayIntersectsBox(new Ray(new Vector3(0, 2, 0), new Vector3(0, -1, 0)), new Vector3(-1, 0, -1), new Vector3(1, 0, 1)));
+    }
+
+    [Fact]
+    public void ScreenBounds_FilterTargets()
+    {
+        var (targets, _, cam) = CubeScene();
+        Assert.True(RayPicker.ScreenBoundsMayContain(targets[0], cam, Vp / 2, 6f));
+        Assert.False(RayPicker.ScreenBoundsMayContain(targets[0], cam, new Vector2(10, 10), 6f));
+        // 카메라 뒤에 코너가 있으면 보수적으로 true
+        var near = CameraProjection.Perspective(new Vector3(0, 0, 0.2f), new Vector3(0, 0, -1), Vector3.UnitY, 45, Vp);
+        Assert.True(RayPicker.ScreenBoundsMayContain(targets[0], near, new Vector2(10, 10), 6f));
+    }
+
+    [Fact]
+    public void PickFace_UsesBounds_AfterDeformUpdate()
+    {
+        // 변형으로 메시가 옮겨 가면(UpdatePositions) 바운드도 따라가 새 위치에서 집힌다
+        var (targets, mesh, cam) = CubeScene();
+        var moved = new Vector3[mesh.VertexCount];
+        for (int v = 0; v < mesh.VertexCount; v++) moved[v] = mesh.Verts[v].Position + new Vector3(1.5f, 0, 0);
+        MeshTessellator.UpdatePositions(mesh, targets[0].Render, moved);
+        Assert.Null(RayPicker.PickFace(targets, cam, Vp / 2));
+        var px = cam.Project(new Vector3(1.5f, 0, 0.5f), out _)!.Value;
+        Assert.NotNull(RayPicker.PickFace(targets, cam, px));
+    }
+
+    [Fact]
     public void PickFace_HitsFrontFace()
     {
         var (targets, mesh, cam) = CubeScene();

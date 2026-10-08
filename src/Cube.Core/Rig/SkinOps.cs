@@ -95,14 +95,20 @@ public static class SkinOps
             skinMats[j] = skin.BindInverse[j] * w.Value;
             valid[j] = true;
         }
-        for (int v = 0; v < mesh.VertexCount; v++)
+        var verts = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(mesh.Verts);
+        var weights = skin.Weights;
+        int vc = Math.Min(verts.Length, outPositions.Length);
+        for (int v = 0; v < vc; v++)
         {
-            var local = mesh.Verts[v].Position;
-            if (!mesh.Verts[v].Alive || v >= skin.Weights.Length || skin.Weights[v] == null || skin.Weights[v]!.Count == 0) { outPositions[v] = local; continue; }
+            ref readonly var vert = ref verts[v];
+            var local = vert.Position;
+            var list = v < weights.Length ? weights[v] : null;
+            if (!vert.Alive || list == null || list.Count == 0) { outPositions[v] = local; continue; }
             var pw = Vector3.Transform(local, skin.MeshBindWorld);
             var acc = Vector3.Zero; float sum = 0;
-            foreach (var (j, wgt) in skin.Weights[v]!)
+            for (int k = 0; k < list.Count; k++)
             {
+                var (j, wgt) = list[k];
                 if (j < 0 || j >= skinMats.Length || !valid[j]) continue;
                 acc += Vector3.Transform(pw, skinMats[j]) * wgt; sum += wgt;
             }
