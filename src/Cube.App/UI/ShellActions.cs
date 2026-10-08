@@ -10,8 +10,17 @@ using Godot;
 
 namespace Cube.App.UI;
 
+/// <summary>
+/// Shell의 액션 등록부(공통). 툴 등록, 기본 액션(툴/선택 모드/선택/피벗·스냅/편집/생성/메시/파일/뷰/표시/창),
+/// 선택 변환(Grow/Shrink/Convert/To Boundary Edge/To UV), 기본 편집 명령(삭제·복제·결합·분리·하드/소프트 엣지·뒤집기·Bridge),
+/// 그리고 상단 메뉴바 구성(BuildMenus)을 담당한다. 영역별 액션은 ShellMeshActions/ShellUvActions 등 다른 partial 파일이 등록한다.
+/// </summary>
 public partial class Shell
 {
+    /// <summary>
+    /// ToolManager에 모든 툴 인스턴스를 등록한다. 툴은 Id로 구분되며 액션(tool.*, mesh.insertLoop 등)이
+    /// Tools.SetTool(id)로 전환한다. 새 툴을 만들면 여기에 추가해야 SetTool로 찾을 수 있다.
+    /// </summary>
     private void RegisterTools()
     {
         Tools.Register(new SelectTool());
@@ -32,11 +41,18 @@ public partial class Shell
         Tools.Register(new BevelTool());
     }
 
+    /// <summary>
+    /// 공통 액션을 ActionRegistry에 등록한 뒤 영역별 등록 함수(UV/Rig/Scene/Anim/Log/Component Editor/Mesh/Render/Bridge)를 호출한다.
+    /// Register(id, label, run, canExecute, isChecked, repeatable): canExecute는 메뉴·셸프 비활성 판정,
+    /// isChecked는 체크/토글 표시, repeatable이면 Repeat Last(G)의 대상이 된다.
+    /// 이 함수는 메뉴·셸프 생성보다 먼저 호출되어야 한다(_Ready 참고).
+    /// </summary>
     private void RegisterActions()
     {
         var doc = Document;
         var sel = doc.Selection;
 
+        // tool.* = 기본 변형 툴 전환(체크 = 현재 툴), tool.last = 직전 툴로 되돌아가기, axis.* = 조작기 축 방향
         // --- 툴
         foreach (var (id, label) in new[] { ("select", "Select Tool"), ("move", "Move Tool"), ("rotate", "Rotate Tool"), ("scale", "Scale Tool") })
         {
@@ -48,6 +64,8 @@ public partial class Shell
         Actions.Register("axis.local", "Axis: Local", () => ToolContext.AxisOrientation = AxisOrientation.Object, isChecked: () => ToolContext.AxisOrientation == AxisOrientation.Object);
         Actions.Register("axis.normal", "Axis: Normal", () => ToolContext.AxisOrientation = AxisOrientation.Normal, isChecked: () => ToolContext.AxisOrientation == AxisOrientation.Normal);
 
+        // mode.* = 선택 모드 전환. 컴포넌트 모드는 SetComponentMode로 마지막 모드를 기억해 mode.toggle(F8)이 그 모드로 돌아간다.
+        // UV/UV Island는 같은 SelectMode.Uv이며 UV 편집기 캔버스의 IslandMode 플래그로 구분한다.
         // --- 선택 모드
         Actions.Register("mode.object", "Object Mode", () => sel.Mode = SelectMode.Object, isChecked: () => sel.Mode == SelectMode.Object);
         Actions.Register("mode.toggle", "Toggle Object/Component", () => sel.Mode = sel.Mode == SelectMode.Object ? _lastComponentMode : SelectMode.Object);
@@ -57,6 +75,8 @@ public partial class Shell
         Actions.Register("mode.uv", "UV", () => { SetComponentMode(SelectMode.Uv); UvEditorWindow?.Canvas.SetIslandMode(false); }, isChecked: () => sel.Mode == SelectMode.Uv && !(UvEditorWindow?.Canvas.IslandMode ?? false));
         Actions.Register("mode.uvIsland", "UV Island", () => { SetComponentMode(SelectMode.Uv); UvEditorWindow?.Canvas.SetIslandMode(true); }, isChecked: () => sel.Mode == SelectMode.Uv && (UvEditorWindow?.Canvas.IslandMode ?? false));
 
+        // select.* = 전체 선택/해제, Grow/Shrink, 컴포넌트 변환(To Vertices/Edges/Faces/Boundary/UV/UV Island), 계층 선택.
+        // 모두 RecordSelection으로 감싸 선택 변경이 Undo 가능(Maya와 동일).
         Actions.Register("select.all", "Select All", () => RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); }));
         Actions.Register("select.none", "Deselect All", () => RecordSelection(s => s.ClearAll()), canExecute: () => !sel.IsEmpty);
         Actions.Register("select.grow", "Grow Selection", () => GrowShrink(true), canExecute: () => sel.IsComponentMode);
@@ -69,12 +89,16 @@ public partial class Shell
         Actions.Register("select.toUvIsland", "To UV Island", () => ConvertToUv(island: true), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.hierarchy", "Select Hierarchy", SelectHierarchy, canExecute: () => sel.Objects.Count > 0);
 
+        // Center Pivot = 메시 AABB 중심으로 피벗 이동, Edit Pivot = 피벗 편집 툴 토글(Insert),
+        // snap.grid/point = 상태 라인 스냅 토글(설정 저장 후 상태 라인 버튼 동기화)
         // --- 피벗 / 스냅
         Actions.Register("edit.centerPivot", "Center Pivot", CenterPivot, canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Mesh != null), repeatable: true);
         Actions.Register("edit.editPivot", "Edit Pivot", ToggleEditPivot, isChecked: () => Tools.Current?.Id == "editPivot");
         Actions.Register("snap.grid", "Snap to Grid", () => { Settings.SnapToGrid = !Settings.SnapToGrid; Settings.Save(); SyncStatusLine(); }, isChecked: () => Settings.SnapToGrid);
         Actions.Register("snap.point", "Snap to Points", () => { Settings.SnapToPoints = !Settings.SnapToPoints; Settings.Save(); SyncStatusLine(); }, isChecked: () => Settings.SnapToPoints);
 
+        // Undo/Redo/Repeat Last, 삭제(모드에 따라 노드 또는 컴포넌트), 복제, 환경설정, 구성 이력 삭제,
+        // Smooth Mesh Preview 1/2/3(표시 전용 서브디비전 미리보기 단계)
         // --- 편집
         Actions.Register("edit.undo", "Undo", () => doc.Undo.Undo(), canExecute: () => doc.Undo.CanUndo);
         Actions.Register("edit.redo", "Redo", () => doc.Undo.Redo(), canExecute: () => doc.Undo.CanRedo);
@@ -84,12 +108,14 @@ public partial class Shell
         Actions.Register("edit.preferences", "Preferences...", ShowPreferences);
         Actions.Register("edit.deleteHistory", "Delete History", () => { var ids = sel.Objects.Where(id => doc.Find(id)?.MeshShape?.History.Count > 0).ToArray(); if (ids.Length > 0) doc.Undo.Push(new DeleteHistoryCommand(ids)); },
             canExecute: () => sel.Objects.Any(id => doc.Find(id)?.MeshShape?.History.Count > 0));
+        // 레벨 0 = 케이지, 1 = 케이지 + 스무스, 2 = 스무스. lv를 지역 변수로 복사해 람다가 루프 변수를 공유하지 않게 한다.
         foreach (var (level, id, label) in new[] { (0, "display.smoothPreviewOff", "Smooth Mesh Preview: Cage (1)"), (1, "display.smoothPreviewBoth", "Smooth Mesh Preview: Cage + Smooth (2)"), (2, "display.smoothPreviewOn", "Smooth Mesh Preview: Smooth (3)") })
         {
             int lv = level;
             Actions.Register(id, label, () => SetSmoothPreview(lv), canExecute: () => sel.Objects.Any(x => doc.Find(x)?.Mesh != null) || sel.NodesWithComponents(sel.Mode).Any());
         }
 
+        // 기본 폴리곤 도형 생성(CreatePrimitiveCommand; repeatable이라 G로 반복 생성 가능)
         // --- 생성
         Actions.Register("create.cube", "Polygon Cube", () => doc.Undo.Push(CreatePrimitiveCommand.Cube(doc)), repeatable: true);
         Actions.Register("create.sphere", "Polygon Sphere", () => doc.Undo.Push(CreatePrimitiveCommand.Sphere(doc)), repeatable: true);
@@ -98,6 +124,7 @@ public partial class Shell
         Actions.Register("create.plane", "Polygon Plane", () => doc.Undo.Push(CreatePrimitiveCommand.Plane(doc)), repeatable: true);
         Actions.Register("create.torus", "Polygon Torus", () => doc.Undo.Push(CreatePrimitiveCommand.Torus(doc)), repeatable: true);
 
+        // Extrude(옵션 쌍), 컴포넌트 삭제(Maya Delete Edge/Vertex), Combine/Separate, 하드/소프트 엣지, 면 뒤집기, Bridge, 엣지 루프/크리즈 툴
         // --- 메시 편집
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
         Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
@@ -110,6 +137,7 @@ public partial class Shell
         Actions.Register("mesh.insertLoop", "Insert Edge Loop Tool", () => Tools.SetTool("insertLoop"), isChecked: () => Tools.Current?.Id == "insertLoop");
         Actions.Register("mesh.creaseTool", "Crease Tool", () => Tools.SetTool("creaseTool"), isChecked: () => Tools.Current?.Id == "creaseTool");
 
+        // 파일 액션 객체를 만들고(헬프 라인으로 메시지 출력) 씬 파일이 바뀌면 카메라 Home·창 제목 갱신
         // --- 파일
         Files = new IO.FileActions(doc, Settings, this, msg => HelpLine.Text = msg);
         SceneFiles = new IO.SceneFileActions(doc, Settings, this, msg => HelpLine.Text = msg);
@@ -123,6 +151,7 @@ public partial class Shell
         Actions.Register("file.exportAll", "Export All...", () => Files.ShowExportDialog(false), canExecute: () => doc.Root.Children.Count > 0);
         Actions.Register("file.exit", "Exit", () => GetTree().Quit());
 
+        // 활성 뷰포트 카메라: 프레임, Home, 정사영/원근 뷰 전환, 투영 토글, 1/4분할, 최대화
         // --- 뷰
         Actions.Register("view.frameSelected", "Frame Selected", () => Viewport.FrameSelected());
         Actions.Register("view.frameAll", "Frame All", () => Viewport.FrameAll());
@@ -138,6 +167,7 @@ public partial class Shell
         Actions.Register("view.toggleLayout", "Single / Four Panes", () => { Layout.Toggle(); Settings.QuadView = Layout.IsQuad; }, isChecked: () => Layout.IsQuad);
         Actions.Register("view.maximize", "Maximize Viewport", ToggleMaximizeViewport, isChecked: () => _maximized);
 
+        // 활성 뷰포트 셰이딩 모드. Wireframe on Shaded/Grid는 모든 패널에 같이 적용하고 설정에 저장한다.
         // --- 표시
         Actions.Register("display.wireframe", "Wireframe", () => Viewport.Display.SetMode(ShadingMode.Wireframe), isChecked: () => Viewport.Display.Mode == ShadingMode.Wireframe);
         Actions.Register("display.shaded", "Smooth Shade All", () => Viewport.Display.SetMode(ShadingMode.Shaded), isChecked: () => Viewport.Display.Mode == ShadingMode.Shaded);
@@ -149,17 +179,21 @@ public partial class Shell
         Actions.Register("display.background", "Background Color", () => { Viewport.CycleBackground(); });
         Actions.Register("display.polyCount", "Poly Count (HUD)", () => { Settings.ShowPolyCount = !Settings.ShowPolyCount; Settings.Save(); }, isChecked: () => Settings.ShowPolyCount);
 
+        // Outliner/Properties 패널 열기/닫기 토글, About(버전 정보를 헬프 라인에)
         // --- 창
         Actions.Register("windows.outliner", "Outliner", () => TogglePanel(OutlinerWindow), isChecked: () => OutlinerWindow.IsOpen);
         Actions.Register("windows.properties", "Properties", () => TogglePanel(PropertiesWindow), isChecked: () => PropertiesWindow.IsOpen);
         Actions.Register("help.about", "About Cube", () => HelpLine.Text = $"Cube {ProjectSettings.GetSetting("application/config/version")} — Godot {Engine.GetVersionInfo()["string"]}");
 
+        // Esc: 열린 파이 메뉴를 모두 닫고, Edit Pivot 중이면 이전 툴(없으면 Select)로 돌아가며,
+        // 현재 툴의 진행 중 동작을 취소하고 뷰포트에 포커스를 돌려준다.
         Actions.Register("app.escape", "Escape", () =>
         {
             foreach (var p in Layout.Panels) p.Pie.Close();
             if (Tools.Current?.Id == "editPivot") Tools.SetTool(Tools.Previous != null && Tools.Previous.Id != "editPivot" ? Tools.Previous.Id : "select");
             Tools.CancelCurrent(); Viewport.GrabFocus();
         });
+        // 영역별 액션 등록(각 partial 파일). 순서는 메뉴/셸프가 참조하기 전이기만 하면 된다.
         RegisterUvActions();
         RegisterRigActions();
         RegisterSceneActions();
@@ -171,8 +205,10 @@ public partial class Shell
         RegisterBridgeActions();
     }
 
+    /// <summary>마지막으로 쓴 컴포넌트 모드(기본 Vertex). mode.toggle이 오브젝트 → 컴포넌트로 갈 때 이 모드로 간다.</summary>
     private SelectMode _lastComponentMode = SelectMode.Vertex;
 
+    /// <summary>컴포넌트 선택 모드로 전환하고 그 모드를 _lastComponentMode로 기억한다.</summary>
     private void SetComponentMode(SelectMode mode)
     {
         _lastComponentMode = mode;
@@ -182,12 +218,20 @@ public partial class Shell
     }
 
     /// <summary>선택 변경을 Undo 가능하게 기록한다.</summary>
+    /// <remarks>
+    /// SelectionCommand.Record가 변경 전 스냅샷을 찍고 change를 적용한 뒤 변경 후 스냅샷을 비교한다.
+    /// 실제로 바뀐 것이 없으면(IsNoop) Undo 스택에 넣지 않는다. 이미 적용된 상태라 alreadyApplied: true로 넣는다.
+    /// </remarks>
     public void RecordSelection(Action<SelectionState> change)
     {
         var cmd = SelectionCommand.Record(Document, change);
         if (!cmd.IsNoop) Document.Undo.Push(cmd, alreadyApplied: true);
     }
 
+    /// <summary>
+    /// Grow/Shrink Selection: 현재 모드의 컴포넌트가 있는 노드마다 SelectionOps.Grow/Shrink로
+    /// 선택 집합을 제자리에서 한 고리 넓히거나 좁힌다(Undo 가능). 끝나면 뷰포트 표시를 갱신한다.
+    /// </summary>
     private void GrowShrink(bool grow)
     {
         var sel = Document.Selection;
@@ -205,6 +249,10 @@ public partial class Shell
     }
 
     /// <summary>UV 모드 선택은 정점 집합으로 바꾼 ComponentSet을 돌려준다(그 외 모드는 그대로).</summary>
+    /// <remarks>
+    /// SelectionOps.Convert는 UV 점을 모르므로 UV 점 ID를 UvTopology로 원래 정점 ID로 바꿔 Vertex 모드로 넘긴다.
+    /// 범위를 벗어난 UV 점 ID(토폴로지가 바뀐 뒤 남은 옛 ID)는 건너뛴다.
+    /// </remarks>
     private static (ComponentSet comps, SelectMode from) NormalizeForConvert(PolyMesh mesh, ComponentSet comps, SelectMode from)
     {
         if (from != SelectMode.Uv) return (comps, from);
@@ -214,6 +262,10 @@ public partial class Shell
         return (c, SelectMode.Vertex);
     }
 
+    /// <summary>
+    /// Convert Selection(To Vertices/Edges/Faces): 현재 모드의 선택을 노드별로 대상 모드 컴포넌트로 변환하고 모드를 바꾼다.
+    /// 같은 모드이거나 오브젝트 모드에서는 모드만 바꾼다. 첫 노드는 replace, 이후 노드는 추가로 선택한다.
+    /// </summary>
     private void ConvertSelection(SelectMode to)
     {
         var sel = Document.Selection;
@@ -221,6 +273,7 @@ public partial class Shell
         if (from == to || from == SelectMode.Object) { sel.Mode = to; return; }
         RecordSelection(s =>
         {
+            // 모드를 바꾸기 전에 모든 노드의 변환 결과를 먼저 계산한다(모드 변경이 컴포넌트 선택을 비울 수 있으므로)
             var converted = new Dictionary<NodeId, HashSet<int>>();
             foreach (var id in s.NodesWithComponents(from).ToArray())
             {
@@ -240,6 +293,7 @@ public partial class Shell
         var sel = Document.Selection;
         var from = sel.Mode;
         if (from == SelectMode.Object) { sel.Mode = SelectMode.Edge; return; }
+        // 면 집합을 구한 뒤 그 바깥 경계 엣지만 남긴다
         RecordSelection(s =>
         {
             var converted = new Dictionary<NodeId, HashSet<int>>();
@@ -268,6 +322,7 @@ public partial class Shell
             foreach (var id in s.NodesWithComponents(from).ToArray())
             {
                 var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
+                // 노드마다 UV 토폴로지를 만들어 선택 → UV 점 집합으로 바꾼다(UV 모드면 유효한 점만 그대로)
                 var topo = UvTopology.Build(mesh);
                 var comps = s.GetComponents(id);
                 var points = new HashSet<int>();
@@ -277,6 +332,7 @@ public partial class Shell
                     var verts = from == SelectMode.Vertex ? comps.Verts : SelectionOps.Convert(mesh, comps, from, SelectMode.Vertex);
                     for (int p = 0; p < topo.Points.Count; p++) if (verts.Contains(topo.Points[p].Vertex)) points.Add(p);
                 }
+                // 섬(셸) 확장: 고른 UV 점이 속한 셸의 모든 점을 더한다
                 if (island)
                 {
                     var shells = new HashSet<int>(points.Select(p => topo.Points[p].Shell));
@@ -309,6 +365,11 @@ public partial class Shell
     }
 
     /// <summary>Center Pivot: 메시 바운딩 박스 중심(오브젝트 공간)으로 피벗을 옮긴다(월드는 그대로).</summary>
+    /// <remarks>
+    /// 선택 오브젝트마다 살아 있는 정점의 AABB를 구해 그 중심을 새 피벗으로 하고,
+    /// Transform3.WithPivotKeepingMatrix로 월드 행렬이 바뀌지 않게 Translate를 보정한다.
+    /// 바뀐 노드만 모아 TransformNodesCommand 하나로 Undo에 넣는다.
+    /// </remarks>
     private void CenterPivot()
     {
         var ids = new List<NodeId>(); var before = new List<Transform3>(); var after = new List<Transform3>();
@@ -345,6 +406,9 @@ public partial class Shell
         HelpLine.Text = $"Assigned {(id == 0 ? "lambert1" : Document.FindMaterial(id)?.Name)} to {ids.Length} object(s).";
     }
 
+    /// <summary>
+    /// Delete: 오브젝트 모드면 선택 노드를 삭제(DeleteNodesCommand), 컴포넌트 모드면 mesh.deleteComponents에 위임한다.
+    /// </summary>
     private void DeleteSelection()
     {
         var sel = Document.Selection;
@@ -362,6 +426,8 @@ public partial class Shell
     private void ForEachComponentNode(string groupName, SelectMode mode, Func<NodeId, ComponentSet, ICommand?> make)
     {
         var doc = Document;
+        // 대상 노드 목록을 먼저 고정한다(명령 실행 중 선택이 바뀌어도 순회가 깨지지 않도록).
+        // 컴포넌트 집합은 Clone해서 넘긴다 — 명령이 위상을 바꾸며 선택을 비웠다 복원하기 때문.
         var targets = doc.Selection.NodesWithComponents(mode).ToArray();
         if (targets.Length == 0) return;
         using (doc.Undo.BeginGroup(groupName))
@@ -374,6 +440,7 @@ public partial class Shell
         }
     }
 
+    /// <summary>현재 모드의 선택 컴포넌트(정점/엣지/면)를 노드별 DeleteComponentsCommand로 삭제한다(한 Undo 그룹).</summary>
     private void DeleteComponents()
     {
         var mode = Document.Selection.Mode;
@@ -381,6 +448,10 @@ public partial class Shell
     }
 
     /// <summary>1/2/3 키: 선택 오브젝트의 Smooth Mesh Preview(표시 전용, 케이지는 그대로 편집).</summary>
+    /// <remarks>
+    /// 대상 = 선택 오브젝트 + 현재 모드 컴포넌트가 있는 노드. MeshShape.SmoothPreview만 바꾸고
+    /// DisplayChanged를 알려 MeshView가 표면을 다시 만들게 한다. 문서 데이터 변경이 아니므로 Undo에 넣지 않는다.
+    /// </remarks>
     private void SetSmoothPreview(int level)
     {
         var sel = Document.Selection;
@@ -395,6 +466,10 @@ public partial class Shell
         HelpLine.Text = level switch { 0 => "Smooth Mesh Preview off (cage).", 1 => "Smooth Mesh Preview: cage + smooth.", _ => "Smooth Mesh Preview: smooth." };
     }
 
+    /// <summary>
+    /// Bridge: 선택한 경계 엣지 체인 두 개를 쿼드로 잇는다(MeshOps.BridgeEdges). 결과 면을 면 모드로 선택하고,
+    /// 만든 면 수(made, 람다가 누적)를 헬프 라인에 알린다. 실패하면 사용법 안내를 띄운다.
+    /// </summary>
     private void BridgeSelection()
     {
         int made = 0;
@@ -406,6 +481,7 @@ public partial class Shell
         HelpLine.Text = made > 0 ? $"Bridge: {made} faces created." : "Bridge: select two border edge chains with the same number of edges.";
     }
 
+    /// <summary>Combine: 선택한 메시 오브젝트 2개 이상을 하나의 메시로 합친다(CombineCommand).</summary>
     private void CombineSelection()
     {
         var ids = Document.Selection.Objects.Where(id => Document.Find(id)?.Mesh != null).ToArray();
@@ -413,6 +489,9 @@ public partial class Shell
         Document.Undo.Push(new CombineCommand(ids));
     }
 
+    /// <summary>
+    /// Separate: 활성 오브젝트 메시를 연결 요소별 노드로 나눈다. Prepare가 false면(조각이 하나) 안내만 한다.
+    /// </summary>
     private void SeparateSelection()
     {
         var id = Document.Selection.ActiveObject;
@@ -421,12 +500,17 @@ public partial class Shell
         Document.Undo.Push(cmd);
     }
 
+    /// <summary>Harden/Soften Edge 실행 가능 여부: 오브젝트 모드면 메시 오브젝트 선택, 컴포넌트 모드면 해당 모드 선택이 있어야 한다.</summary>
     private bool HasEdgeTargets()
     {
         var sel = Document.Selection;
         return sel.Mode == SelectMode.Object ? sel.Objects.Any(id => Document.Find(id)?.Mesh != null) : sel.NodesWithComponents(sel.Mode).Any();
     }
 
+    /// <summary>
+    /// Harden/Soften Edge: 오브젝트 모드면 각 메시의 살아 있는 모든 엣지, 컴포넌트 모드면 선택을 엣지로 변환한 집합에
+    /// SetEdgesHardCommand를 적용한다(노드별 명령, 한 Undo 그룹).
+    /// </summary>
     private void SetEdgesHard(bool hard)
     {
         var doc = Document; var sel = doc.Selection;
@@ -450,6 +534,9 @@ public partial class Shell
         });
     }
 
+    /// <summary>
+    /// Reverse(면 방향 뒤집기): 오브젝트 모드면 각 메시의 모든 면, 면 모드면 선택 면에 ReverseFacesCommand를 적용한다.
+    /// </summary>
     private void ReverseSelection()
     {
         var doc = Document; var sel = doc.Selection;
@@ -466,6 +553,10 @@ public partial class Shell
         ForEachComponentNode("Reverse", SelectMode.Face, (id, comps) => new ReverseFacesCommand(id, comps.Faces));
     }
 
+    /// <summary>
+    /// Duplicate: 선택 오브젝트마다 이름을 고유하게 바꾼 새 SceneNode(같은 Local 트랜스폼, 메시 복제)를 같은 부모 아래에 추가하고
+    /// 만든 노드들을 선택한다. 메시가 없는 노드는 트랜스폼만 복제된다(자식은 복제하지 않음). 한 Undo 그룹.
+    /// </summary>
     private void DuplicateSelection()
     {
         var doc = Document;
@@ -487,10 +578,13 @@ public partial class Shell
         }
     }
 
+    /// <summary>창 제목을 현재 씬 파일 이름(+ 변경 표시)으로 갱신한다.</summary>
     public void UpdateTitle() => DisplayServer.WindowSetTitle(SceneFiles.Title);
 
+    /// <summary>Preferences 창(한 번 만들어 재사용; 셸 재생성 등으로 해제되었으면 다시 만든다).</summary>
     private PreferencesDialog? _prefs;
 
+    /// <summary>Edit → Preferences 창을 화면 가운데에 띄운다.</summary>
     private void ShowPreferences()
     {
         if (_prefs == null || !GodotObject.IsInstanceValid(_prefs))
@@ -505,12 +599,15 @@ public partial class Shell
     public void SyncStatusLine()
     {
         _cameraBased.SetPressedNoSignal(Settings.CameraBasedSelection);
+        // 스냅 버튼은 토글 설정 또는 홀드 키(X = 그리드, V = 점)가 눌려 있으면 눌림 표시
         _snapGrid.SetPressedNoSignal(Settings.SnapToGrid || Hotkeys.HeldKeys.Contains(Key.X));
         _snapPoint.SetPressedNoSignal(Settings.SnapToPoints || Hotkeys.HeldKeys.Contains(Key.V));
     }
 
+    /// <summary>File → Open Recent 하위 메뉴. 파일 메뉴가 열릴 때마다 RefreshRecentMenu로 다시 채운다.</summary>
     private PopupMenu? _recentMenu;
 
+    /// <summary>최근 파일 목록 중 아직 존재하는 파일만 하위 메뉴에 넣는다(없으면 비활성 "(empty)").</summary>
     private void RefreshRecentMenu()
     {
         if (_recentMenu == null) return;
@@ -525,8 +622,15 @@ public partial class Shell
 
     // ---------------------------------------------------------------- 메뉴
 
+    /// <summary>
+    /// 상단 메뉴바를 Maya 2027 구성에 맞춰 만든다: File / Edit / Create / Select / Mesh / Edit Mesh / Mesh Tools / Mesh Display /
+    /// UV / Skeleton / Skin / Display / Animation / Render / Bridge / Windows / Help.
+    /// 항목은 액션 ID로만 넣고(라벨·단축키·체크는 MenuBuilder가 액션에서 가져옴), 옵션 명령은 Op(id)로 실행 + Options... 두 항목을 넣는다.
+    /// 같은 기능을 여러 메뉴에 중복해 넣지 않는다(CLAUDE.md 메뉴 중복 금지 규칙).
+    /// </summary>
     private void BuildMenus()
     {
+        // 메뉴바에 PopupMenu를 하나 추가하고 제목을 붙여 돌려준다(MenuBar는 자식 순서로 메뉴 인덱스를 매김)
         PopupMenu Add(string title)
         {
             var pm = new PopupMenu { Name = title.Replace(" ", "") };
@@ -535,6 +639,8 @@ public partial class Shell
             return pm;
         }
 
+        // File 메뉴: New/Open → Open Recent 하위 메뉴(직접 만든 PopupMenu) → 저장/가져오기/내보내기/종료.
+        // MenuBuilder.Build를 같은 팝업에 두 번 불러 항목을 이어 붙인다(클릭 핸들러는 팝업당 한 번만 연결됨).
         var fileMenu = Add("File");
         Menus.Build(fileMenu)
             .Item("file.new").Item("file.open");

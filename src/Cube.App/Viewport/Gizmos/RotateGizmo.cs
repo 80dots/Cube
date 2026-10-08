@@ -8,13 +8,21 @@ using NVec3 = System.Numerics.Vector3;
 namespace Cube.App.Viewport.Gizmos;
 
 /// <summary>Maya 회전 조작기: 축별 링 3개 + 화면 평행 외곽 링.</summary>
+/// <remarks>
+/// 축 링은 축에 수직인 로컬 반지름 1 원이고, 외곽 링(Screen)은 카메라 Right/Up 평면의 반지름 <see cref="OuterRadius"/> 원이다.
+/// 외곽 링은 카메라가 움직이면 모양이 달라지므로 그릴 때마다 카메라 기저를 읽어 로컬 좌표로 바꿔 넣는다.
+/// </remarks>
 public partial class RotateGizmo : GizmoBase
 {
+    /// <summary>링 하나를 근사하는 선분 수.</summary>
     public const int Segments = 48;
+    /// <summary>외곽(화면 평행) 링 반지름(로컬 단위, 축 링 = 1).</summary>
     public const float OuterRadius = 1.25f;
 
+    /// <summary>마지막으로 그릴 때의 카메라 오른쪽/위 방향(월드). 외곽 링 점 계산에 쓴다.</summary>
     private NVec3 _camRight = NVec3.UnitX, _camUp = NVec3.UnitY;
 
+    /// <summary>축 링 3개 + 외곽 링(선) 서피스와 중앙 작은 큐브(삼각형) 서피스를 다시 만든다.</summary>
     protected override void Rebuild()
     {
         Mesh.ClearSurfaces();
@@ -37,6 +45,7 @@ public partial class RotateGizmo : GizmoBase
         Mesh.SurfaceEnd();
     }
 
+    /// <summary>축에 수직인 단위 원을 <see cref="Segments"/>개 선분으로 그린다(로컬 공간).</summary>
     private void Ring(Vector3 axis, Color col)
     {
         var (u, v) = Perp(axis);
@@ -54,6 +63,7 @@ public partial class RotateGizmo : GizmoBase
     private Vector3 ToLocal(NVec3 worldOffset)
         => new(NVec3.Dot(worldOffset, AxisX), NVec3.Dot(worldOffset, AxisY), NVec3.Dot(worldOffset, AxisZ));
 
+    /// <summary>외곽 링(피벗 화면점에서의 픽셀 반지름 차이)을 먼저 보고, 아니면 각 축 링의 투영 폴리라인까지 가장 가까운 축을 고른다.</summary>
     public override GizmoPart HitTest(NVec2 px, CameraProjection proj)
     {
         float s = CubeApp.Instance.UiScale;
@@ -64,6 +74,7 @@ public partial class RotateGizmo : GizmoBase
         float rPx = ScreenSizePx * s * OuterRadius;
         if (MathF.Abs(NVec2.Distance(c.Value, px) - rPx) <= thr) return GizmoPart.Screen;
 
+        // 축 링: 원을 화면에 투영한 폴리라인의 각 선분까지 거리를 재서 최소값을 찾는다(카메라 뒤 점은 건너뜀)
         GizmoPart best = GizmoPart.None; float bestD = thr;
         foreach (var (part, axis) in new[] { (GizmoPart.X, Vector3.Right), (GizmoPart.Y, Vector3.Up), (GizmoPart.Z, Vector3.Back) })
         {

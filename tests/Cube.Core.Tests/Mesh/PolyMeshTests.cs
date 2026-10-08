@@ -3,8 +3,16 @@ using Cube.Core.Mesh;
 
 namespace Cube.Core.Tests.Mesh;
 
+/// <summary>
+/// 하프에지 메시 <c>PolyMesh</c>의 기본 불변식을 검증한다: 비매니폴드 면 거부, 면 삭제 시 고립 요소 정리,
+/// 삭제 후에도 ID(슬롯 인덱스)가 안정적이고 Compact만 재번호를 매긴다는 점, 복제 독립성, 정점 인접 조회.
+/// </summary>
 public class PolyMeshTests
 {
+    /// <summary>
+    /// 엣지 a-b에 이미 두 면(반대 방향)이 붙어 있을 때 세 번째 면이나 같은 방향의 중복 면은 -1로 거부되어야 하고,
+    /// 메시는 여전히 유효하며 엣지 수도 늘지 않아야 한다.
+    /// </summary>
     [Fact]
     public void AddFace_RejectsNonManifoldThirdFace()
     {
@@ -18,6 +26,10 @@ public class PolyMeshTests
         Assert.Equal(5, m.AliveEdgeCount);
     }
 
+    /// <summary>
+    /// 큐브에서 면 하나를 지우면 엣지/정점은 다른 면이 쓰고 있어 모두 남고 경계 엣지 4개가 생긴다.
+    /// 반면 면 하나뿐인 평면에서 면을 지우면 고립된 엣지·정점까지 모두 정리되어 아무것도 남지 않아야 한다.
+    /// </summary>
     [Fact]
     public void RemoveFace_RemovesIsolatedEdgesAndVertices()
     {
@@ -38,6 +50,10 @@ public class PolyMeshTests
         Assert.Equal(0, p.AliveVertexCount);
     }
 
+    /// <summary>
+    /// 면을 지워도 다른 요소의 ID(슬롯 인덱스)와 데이터는 그대로이고 지운 슬롯은 Alive=false로 남는다(선택·Undo 안정성).
+    /// <c>Compact()</c>를 해야 비로소 빈 슬롯이 제거되고 remap 표(삭제 = -1, 뒤 슬롯은 앞으로 당겨짐)가 반환되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Ids_AreStableAcrossRemoval_AndCompactRemaps()
     {
@@ -54,6 +70,7 @@ public class PolyMeshTests
         Assert.Empty(MeshValidator.Check(m));
     }
 
+    /// <summary>복제본의 정점 이동·면 삭제가 원본 메시에 영향을 주지 않는지(깊은 복사인지) 확인한다.</summary>
     [Fact]
     public void Clone_IsIndependent()
     {
@@ -65,6 +82,7 @@ public class PolyMeshTests
         Assert.Equal(6, m.AliveFaceCount);
     }
 
+    /// <summary>큐브 꼭짓점은 면 3개·엣지 3개·나가는 하프에지 3개와 인접해야 한다(정점 인접 조회 함수 검증).</summary>
     [Fact]
     public void VertexAdjacency_OnCubeCorner()
     {

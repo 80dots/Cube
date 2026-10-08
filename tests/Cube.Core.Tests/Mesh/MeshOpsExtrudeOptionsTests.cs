@@ -6,10 +6,16 @@ namespace Cube.Core.Tests.Mesh;
 /// <summary>Blender식 Extrude(ExtrudeOptions) 검사.</summary>
 public class MeshOpsExtrudeOptionsTests
 {
+    /// <summary>오일러 특성 V - E + F(닫힌 구 위상 = 2).</summary>
     private static int Euler(PolyMesh m) => m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount;
+    /// <summary>살아 있는 엣지 중 경계 엣지가 하나도 없는지(구멍 없이 닫혔는지).</summary>
     private static bool Closed(PolyMesh m) => Enumerable.Range(0, m.EdgeCount).All(e => !m.Edges[e].Alive || !m.IsBoundaryEdge(e));
+    /// <summary>법선이 위(+Y)를 향하는 첫 번째 살아 있는 면(큐브 윗면)을 찾는다.</summary>
     private static int TopFace(PolyMesh m) => Enumerable.Range(0, m.FaceCount).First(f => m.Faces[f].Alive && MeshNormals.FaceNormalUnnormalized(m, f).Y > 0.5f);
 
+    /// <summary>
+    /// Region 모드로 큐브 윗면을 Offset 0.5만큼 돌출하면 캡 1개, 면 10개(6 + 옆면 4)가 되고 캡 정점이 Y=1에 놓여야 한다.
+    /// </summary>
     [Fact]
     public void Region_CubeTopFace_OffsetAlongNormal()
     {
@@ -23,6 +29,9 @@ public class MeshOpsExtrudeOptionsTests
         Assert.All(ids, v => Assert.Equal(1f, m.Verts[v].Position.Y, 4));
     }
 
+    /// <summary>
+    /// 경계가 모두 메시 테두리인 열린 판을 Extrude하면 원래 면을 뒤집어 바닥으로 남기므로 닫힌 직육면체(면 6, 정점 8, 오일러 2)가 되어야 한다.
+    /// </summary>
     [Fact]
     public void Region_OpenPlane_BecomesClosedBox()
     {
@@ -38,6 +47,10 @@ public class MeshOpsExtrudeOptionsTests
         Assert.Equal(2, Euler(m));
     }
 
+    /// <summary>
+    /// 경계가 없는 닫힌 볼륨(큐브 전체 면)을 Extrude하면 옆면을 만들 곳이 없으므로 껍질만 복제한다:
+    /// 면 12, 정점 16, 연결 요소 2개가 되어야 한다.
+    /// </summary>
     [Fact]
     public void Region_ClosedVolume_DuplicatesShell()
     {
@@ -51,6 +64,10 @@ public class MeshOpsExtrudeOptionsTests
         Assert.Equal(2, MeshOps.ConnectedComponents(m).Count);
     }
 
+    /// <summary>
+    /// IndividualFaces 모드로 인접한 윗면·옆면을 돌출하면 공유 엣지에도 각자 옆면이 생겨 면 14개가 되고,
+    /// 각 캡은 자기 법선 방향으로 0.25 이동해 평면 거리 0.75에 놓여야 한다.
+    /// </summary>
     [Fact]
     public void Individual_TwoAdjacentFaces_EachAlongOwnNormal()
     {
@@ -73,6 +90,9 @@ public class MeshOpsExtrudeOptionsTests
         }
     }
 
+    /// <summary>
+    /// Region + FaceNormals 방향: 인접 두 면을 함께 돌출해도 마이터 보정으로 각 캡이 자기 법선 방향 평면 0.75에 정확히 놓여야 한다.
+    /// </summary>
     [Fact]
     public void Region_TwoAdjacentFaces_FaceNormalsKeepsShape()
     {
@@ -92,6 +112,11 @@ public class MeshOpsExtrudeOptionsTests
         }
     }
 
+    /// <summary>
+    /// 방향을 월드 축(X 또는 Z)으로 지정하면 윗면 캡이 그 축으로만 0.3 이동하고 높이(Y=0.5)는 그대로여야 한다.
+    /// </summary>
+    /// <param name="dir">돌출 방향 옵션.</param>
+    /// <param name="axis">검사할 좌표 성분(0 = X, 2 = Z).</param>
     [Theory]
     [InlineData(ExtrudeDirection.X, 0)]
     [InlineData(ExtrudeDirection.Z, 2)]
@@ -110,6 +135,9 @@ public class MeshOpsExtrudeOptionsTests
         }
     }
 
+    /// <summary>
+    /// Steps = 4(Extrude Repeat)면 0.2씩 네 번 쌓여 옆면이 4단(16면) 생기고 최종 캡이 Y = 0.5 + 0.8 = 1.3에 있어야 한다.
+    /// </summary>
     [Fact]
     public void Repeat_StepsStackSegments()
     {
@@ -123,6 +151,7 @@ public class MeshOpsExtrudeOptionsTests
         Assert.All(ids, v => Assert.Equal(1.3f, m.Verts[v].Position.Y, 4));
     }
 
+    /// <summary>FlipNormals 옵션이면 결과 연결 요소 전체가 뒤집혀 윗면 캡의 법선이 아래(-Y)를 향해야 한다.</summary>
     [Fact]
     public void FlipNormals_InvertsResult()
     {
@@ -132,6 +161,10 @@ public class MeshOpsExtrudeOptionsTests
         Assert.True(MeshNormals.FaceNormalUnnormalized(m, caps[0]).Y < -0.5f);
     }
 
+    /// <summary>
+    /// 평면의 경계 엣지를 Offset 0.5·Steps 2로 Extrude하면 면 2개와 새 바깥 엣지 1개가 생기고,
+    /// 새 엣지는 면 평면(Y=0) 안에서 바깥쪽으로 정확히 1만큼 떨어져 있어야 한다.
+    /// </summary>
     [Fact]
     public void Edges_BorderOfPlane_OutwardAndRepeat()
     {

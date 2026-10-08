@@ -3,8 +3,15 @@ using Cube.Core.Selection;
 
 namespace Cube.Core.Tests.Selection;
 
+/// <summary>
+/// <c>SelectionOps</c>의 선택 확장/축소(Grow/Shrink)와 컴포넌트 모드 간 변환(Convert)을 검증한다.
+/// </summary>
 public class SelectionOpsTests
 {
+    /// <summary>
+    /// 큐브 정점 하나에서 Grow를 두 번 하면 4개(자신+이웃 3) → 7개(반대 꼭짓점 제외)로 늘고,
+    /// Shrink를 두 번 하면 정확히 역순으로 원래 정점 하나로 돌아오는지 확인한다.
+    /// </summary>
     [Fact]
     public void Grow_Vertex_OnCube_AddsNeighbors()
     {
@@ -20,6 +27,10 @@ public class SelectionOpsTests
         Assert.Equal(new HashSet<int> { 0 }, set);
     }
 
+    /// <summary>
+    /// 5x5 평면의 가운데 면(12)에서 Grow하면 정점을 공유하는 3x3 블록이 되고,
+    /// Shrink하면 다시 가운데 면 하나, 한 번 더 Shrink하면 빈 선택이 되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Grow_Face_OnPlane_ThenShrink()
     {
@@ -33,6 +44,10 @@ public class SelectionOpsTests
         Assert.Empty(set);
     }
 
+    /// <summary>
+    /// 면 → 엣지(4) → 정점(4) → 면 변환을 차례로 한다. 정점→면은 정점을 하나라도 포함하는 면(5개)을,
+    /// 정점→엣지는 양 끝이 모두 선택된 엣지(4개)만 고르는 Maya 규칙을 따르는지 확인한다.
+    /// </summary>
     [Fact]
     public void Convert_FaceToEdgesToVerticesToFaces()
     {

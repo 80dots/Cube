@@ -14,9 +14,16 @@ namespace Cube.App.UI;
 /// </summary>
 public partial class Shell
 {
+    /// <summary>Copy UVs(face)가 저장한 면 하나의 코너 UV 목록(면의 하프에지 순서). Paste UVs가 같은 변 수의 면에 붙인다.</summary>
     private List<Vector2>? _uvClipboard;
 
     /// <summary>현재 선택을 UV 점 집합으로(캔버스와 같은 규칙).</summary>
+    /// <remarks>
+    /// 규칙: 오브젝트 모드 = 선택된 오브젝트면 모든 UV 점, UV 모드 = 유효한 선택 UV 점, 정점 모드 = 선택 정점에 속한 모든 UV 점,
+    /// 엣지 모드 = 엣지 양쪽 하프에지의 끝 UV 점, 면 모드 = 면의 모든 코너 UV 점. 이 노드에 컴포넌트 선택이 없으면 빈 집합.
+    /// </remarks>
+    /// <param name="node">대상 메시 노드.</param>
+    /// <param name="topo">그 메시로 만든(또는 캔버스가 캐시한) UV 토폴로지. 반환 ID는 topo.Points 인덱스.</param>
     public HashSet<int> UvPointSelection(SceneNode node, UvTopology topo)
     {
         var sel = Document.Selection; var m = node.Mesh!;
@@ -37,6 +44,7 @@ public partial class Shell
                 foreach (int f in comps.Faces)
                 {
                     if (f >= m.FaceCount || !m.Faces[f].Alive) continue;
+                    // 면의 하프에지 고리를 한 바퀴 돌며 코너마다 UV 점을 추가
                     int start = m.Faces[f].HalfEdge, he = start;
                     do { set.Add(topo.HeToPoint[he]); he = m.Hes[he].Next; } while (he != start);
                 }
@@ -54,12 +62,16 @@ public partial class Shell
         if (ed.He1 >= 0) { set.Add(topo.HeToPoint[ed.He1]); set.Add(topo.HeToPoint[m.Hes[ed.He1].Next]); }
     }
 
+    /// <summary>
+    /// 선택에서 UV 점이 하나라도 나오는지(UV 점 연산의 canExecute). 캔버스가 캐시한 토폴로지가 있으면 재사용해 비용을 줄인다.
+    /// </summary>
     private bool HasUvPoints()
     {
         foreach (var n in UvNodes()) { var topo = UvEditorWindow?.Canvas.Topo(n) ?? UvTopology.Build(n.Mesh!); if (UvPointSelection(n, topo).Count > 0) return true; }
         return false;
     }
 
+    /// <summary>UV 작업 후보 노드: 선택 오브젝트 ∪ 컴포넌트가 선택된 노드 중 메시가 있는 것.</summary>
     private IEnumerable<SceneNode> UvNodes()
     {
         var sel = Document.Selection;
@@ -71,6 +83,8 @@ public partial class Shell
     /// <summary>노드마다 (메시, 위상, 선택 UV 점)으로 UV 편집 명령을 만든다. 한 Undo 스텝.</summary>
     private void ForEachUvPoints(string name, Action<PolyMesh, UvTopology, HashSet<int>> op, bool requirePoints = true)
     {
+        // ① 실행 전에 대상 노드를 고른다(requirePoints면 선택 UV 점이 없는 노드 제외).
+        // ② 명령 람다 안에서는 토폴로지와 선택 UV 점을 다시 계산한다 — Redo 때도 같은 규칙으로 현재 메시에 적용되도록.
         var targets = new List<(SceneNode node, HashSet<int> pts)>();
         foreach (var n in UvNodes())
         {
@@ -86,12 +100,21 @@ public partial class Shell
         UvEditorWindow?.Canvas.Invalidate();
     }
 
+    /// <summary>ForEachUvPoints의 셸 버전: 선택 UV 점이 속한 셸(섬) 번호 목록을 op에 넘긴다(Unfold/Layout/Stack 등 셸 단위 연산).</summary>
     private void ForEachUvShells(string name, Action<PolyMesh, UvTopology, List<int>> op)
         => ForEachUvPoints(name, (m, topo, pts) => op(m, topo, UvOps.ShellsOf(topo, pts).ToList()));
 
+    /// <summary>
+    /// Maya UV 메뉴 / UV Editor 메뉴 액션 등록(그룹 순서): Create(자동·카메라·최적 평면·Contour Stretch 투영),
+    /// Cut/Sew(셸 만들기·Split·Merge·Move and Sew·Delete·3D Cut/Sew 툴), Modify(정렬·분배·회전·정규화·Unitize·Cycle·그리드 맞춤·대칭,
+    /// 곧게 펴기·경계 매핑·Optimize, 셸 Layout·방향·랜덤·Stack·Distribute·Gather·Snap·Flip Reversed),
+    /// Edit(복사/붙여넣기, 핀), Select(반전·앞/뒷면·겹침·미매핑·텍스처 경계·최단 경로·루프 Grow/Shrink·포함/연결 면),
+    /// View/Image/Textures(캔버스 표시 토글), Tools(캔버스 툴·브러시 옵션), UV Sets(세트 편집기·생성·복사·삭제·전환).
+    /// </summary>
     private void RegisterUvActions2()
     {
         var doc = Document; var sel = doc.Selection;
+        // HasTargets = 면 기반 대상 존재, EditorOpen = UV 편집기가 열려 있음(캔버스 표시/툴 액션의 조건)
         bool HasTargets() => UvTargetNodes().Any();
         bool EditorOpen() => UvEditorWindow?.IsOpen ?? false;
 
@@ -101,11 +124,14 @@ public partial class Shell
             new[] { OptionField.E("planes", "Planes", "3", "4", "5", "6", "8", "12"), OptionField.B("fewer", "Optimize for fewer pieces"), OptionField.F("spacing", "Shell spacing", 0, 0.2, 0.001) }, "Project"), () =>
         {
             var o = Options("uv.automatic");
+            // 옵션 값(0~5)은 평면 수 목록의 인덱스
             int planes = new[] { 3, 4, 5, 6, 8, 12 }[Math.Clamp(o.Int("planes"), 0, 5)];
             Project("Automatic", (m, f) => UvOps.AutomaticProject(m, f, planes, o.Bool("fewer"), o.Float("spacing")));
         }, HasTargets);
         Actions.Register("uv.cameraBased", "Camera-Based Mapping", () =>
         {
+            // 활성 뷰포트 카메라의 오른쪽/위쪽 벡터(월드)를 노드 로컬 축으로 바꿔 화면 평면에 투영한다.
+            // 방향 벡터는 월드 행렬의 전치로 변환한다(회전 성분의 역 = 전치이므로 월드 방향 → 로컬 방향; 스케일 영향은 정규화로 제거).
             var proj = Viewport.Picker.Projection();
             var right = proj.Right; var up = NVec3Cross(right, proj.Forward);
             var targets = UvTargetNodes().ToList();
@@ -125,6 +151,7 @@ public partial class Shell
             using (Document.Undo.BeginGroup("Best Plane"))
                 foreach (var (node, faces) in targets)
                 {
+                    // 선택 정점이 있으면 그 정점들이 정의하는 평면으로, 없으면 면들의 최적 평면으로 투영
                     var verts = sel.Components.TryGetValue(node.Id, out var c) ? c.Verts.ToArray() : Array.Empty<int>();
                     Document.Undo.Push(new UvEditCommand("Best Plane", node.Id, m => UvOps.BestPlaneProject(m, faces, verts)));
                 }
@@ -145,6 +172,7 @@ public partial class Shell
         // ---------------------------------------------------------------- Modify: align / distribute / rotate
         foreach (var (id, label, mode) in new[] { ("uv.alignMinU", "Align Min U", UvOps.AlignMode.MinU), ("uv.alignMaxU", "Align Max U", UvOps.AlignMode.MaxU), ("uv.alignMinV", "Align Min V", UvOps.AlignMode.MinV), ("uv.alignMaxV", "Align Max V", UvOps.AlignMode.MaxV), ("uv.alignCenterU", "Align Center U", UvOps.AlignMode.CenterU), ("uv.alignCenterV", "Align Center V", UvOps.AlignMode.CenterV) })
         {
+            // 루프 변수를 지역 변수로 복사해 람다 캡처 문제를 피한다
             var am = mode; string lb = label;
             Actions.Register(id, label, () => ForEachUvPoints(lb, (m, t, p) => UvOps.Align(m, t, p, am)), canExecute: HasUvPoints, repeatable: true);
         }
@@ -169,6 +197,7 @@ public partial class Shell
         RegisterOptionPair("uv.straighten", "Straighten UVs", new OptionSpec("Straighten UVs Options", v => { v.Set("angle", 30f); v.Set("u", 1f); v.Set("v", 1f); }, new[] { OptionField.F("angle", "Max angle (deg)", 0, 90, 1), OptionField.B("u", "Along U"), OptionField.B("v", "Along V") }, "Straighten"),
             () => { var o = Options("uv.straighten"); ForEachUvPoints("Straighten UVs", (m, t, p) => UvOps.StraightenUvs(m, t, p, o.Float("angle"), o.Bool("u"), o.Bool("v"), 30)); }, HasUvPoints);
         Actions.Register("uv.straightenBorder", "Straighten Border", () => ForEachUvShells("Straighten Border", (m, t, shells) => { foreach (int s in shells) UvOps.StraightenBorder(m, t, s); }), canExecute: HasUvPoints, repeatable: true);
+        // 선택 엣지(노드별)를 기준으로 셸을 곧게 편다(엣지 모드 전용)
         Actions.Register("uv.straightenShell", "Straighten Shell (selected edges)", () =>
         {
             using (Document.Undo.BeginGroup("Straighten Shell"))
@@ -190,6 +219,7 @@ public partial class Shell
             ForEachUvShells("Layout", (m, t, shells) => UvOps.Layout(m, t, shells, o.Float("spacing"), o.Bool("rotate"), new NVec2(o.Int("tileU"), o.Int("tileV")), 1f));
         }, HasUvPoints);
         Actions.Register("uv.orientShells", "Orient Shells", () => ForEachUvShells("Orient Shells", (m, t, shells) => UvOps.OrientShells(m, t, shells)), canExecute: HasUvPoints, repeatable: true);
+        // 노드마다 첫 선택 엣지가 U 또는 V 축에 맞도록 그 셸을 회전
         Actions.Register("uv.orientToEdge", "Orient Shell to Edges", () =>
         {
             using (Document.Undo.BeginGroup("Orient Shell to Edges"))
@@ -213,6 +243,7 @@ public partial class Shell
         Actions.Register("uv.flipReversed", "Flip Reversed UV Shells", () => ForEachUvShells("Flip Reversed", (m, t, s) => UvOps.FlipReversedShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
 
         // ---------------------------------------------------------------- Edit: copy/paste, pins
+        // 첫 번째로 찾은 선택 면의 UV만 클립보드에 복사(Maya Copy UVs와 같이 한 면 단위)
         Actions.Register("uv.copy", "Copy UVs (face)", () =>
         {
             foreach (var id in sel.NodesWithComponents(SelectMode.Face))
@@ -224,6 +255,7 @@ public partial class Shell
         Actions.Register("uv.paste", "Paste UVs (face)", () =>
         {
             if (_uvClipboard == null) return;
+            // 클립보드를 캡처해(이후 복사로 바뀌어도 Redo 결과 유지) 선택 면마다 붙인다. 변 수가 다르면 건너뛰고 성공 면 수를 센다.
             var clip = _uvClipboard;
             int ok = 0;
             using (Document.Undo.BeginGroup("Paste UVs"))
@@ -241,6 +273,7 @@ public partial class Shell
         Actions.Register("uv.unpinAll", "Unpin All", () => ForEachUvPoints("Unpin All", (m, _, _) => UvOps.UnpinAll(m), requirePoints: false), canExecute: () => UvNodes().Any(), repeatable: true);
 
         // ---------------------------------------------------------------- Select
+        // 현재 모드의 컴포넌트 선택을 노드별로 반전(살아 있는 요소 중 선택되지 않은 것만 남김)
         Actions.Register("uv.selectInverse", "Select Inverse", () => RecordSelection(s =>
         {
             foreach (var n in UvNodes().ToList())
@@ -265,6 +298,7 @@ public partial class Shell
             s.Mode = SelectMode.Uv; bool first = true;
             foreach (var n in UvNodes().ToList()) { var topo = UvTopology.Build(n.Mesh!); s.SelectComponents(n.Id, SelectMode.Uv, UvOps.TextureBorderPoints(n.Mesh!, topo), replace: first); first = false; }
         }), canExecute: () => UvNodes().Any());
+        // 첫 대상 노드에서 선택한 정점(또는 UV 점의 정점) 중 처음과 마지막 사이의 최단 엣지 경로를 엣지로 선택
         Actions.Register("uv.shortestPath", "Shortest Edge Path (two vertices/UVs)", () =>
         {
             var node = UvNodes().FirstOrDefault(); if (node == null) return;
@@ -281,6 +315,7 @@ public partial class Shell
         Actions.Register("uv.connectedFaces", "Connected Faces", () => SelectFacesOfPoints(all: false), canExecute: () => sel.IsComponentMode && HasUvPoints());
 
         // ---------------------------------------------------------------- View / Image / Textures (UV Editor 표시)
+        // 캔버스 표시 토글: UvCanvas의 표시 속성을 뒤집는다(편집기가 열려 있을 때만; 체크 = 현재 값, 기본값은 ?? 오른쪽)
         Actions.Register("uv.viewShaded", "Shaded Shells (front blue / back red)", () => { if (UvEditorWindow != null) { UvEditorWindow.Canvas.Shaded = !UvEditorWindow.Canvas.Shaded; } }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.Shaded ?? false);
         Actions.Register("uv.viewDistortion", "UV Distortion (red stretched / blue compressed)", () => { if (UvEditorWindow != null) UvEditorWindow.Canvas.Distortion = !UvEditorWindow.Canvas.Distortion; }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.Distortion ?? false);
         Actions.Register("uv.viewTextureBorders", "Texture Borders (bold)", () => { if (UvEditorWindow != null) UvEditorWindow.Canvas.TextureBorders = !UvEditorWindow.Canvas.TextureBorders; }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.TextureBorders ?? true);
@@ -299,14 +334,17 @@ public partial class Shell
         // ---------------------------------------------------------------- Tools (UV Editor)
         foreach (var (id, label, tool) in new[] { ("uv.toolTweak", "Tweak UV Tool", UvEditor.UvCanvasTool.Tweak), ("uv.toolGrab", "Grab UV Tool", UvEditor.UvCanvasTool.Grab), ("uv.toolSmooth", "Smooth UV Tool (relax brush)", UvEditor.UvCanvasTool.Smooth), ("uv.toolPinch", "Pinch UV Tool", UvEditor.UvCanvasTool.Pinch), ("uv.toolSmear", "Smear UV Tool", UvEditor.UvCanvasTool.Smear), ("uv.toolPinBrush", "Pin UV Tool (brush)", UvEditor.UvCanvasTool.PinBrush), ("uv.toolCutSew", "Cut / Sew UV Tool (click edge, Ctrl = sew)", UvEditor.UvCanvasTool.CutSew), ("uv.toolMoveShell", "Move UV Shell Tool", UvEditor.UvCanvasTool.MoveShell) })
         {
+            // 같은 툴을 다시 고르면 None(선택/변형 조작기)으로 돌아간다
             var t = tool;
             Actions.Register(id, label, () => { if (UvEditorWindow != null) UvEditorWindow.Canvas.Tool = UvEditorWindow.Canvas.Tool == t ? UvEditor.UvCanvasTool.None : t; }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.Tool == t);
         }
         Actions.Register("uv.toolNone", "UV Select/Transform (manipulator)", () => { if (UvEditorWindow != null) UvEditorWindow.Canvas.Tool = UvEditor.UvCanvasTool.None; }, canExecute: EditorOpen, isChecked: () => UvEditorWindow?.Canvas.Tool == UvEditor.UvCanvasTool.None);
+        // 브러시 옵션은 실행 액션이 없는 옵션 창(OK만): 값은 BrushOptions로 브러시 툴이 직접 읽는다
         _optionSpecs["uv.brush"] = new OptionSpec("UV Brush Options", v => { v.Set("radius", 60f); v.Set("strength", 0.5f); }, new[] { OptionField.F("radius", "Radius (px)", 5, 500, 1), OptionField.F("strength", "Strength", 0.01, 1, 0.01) }, "OK");
         Actions.Register("uv.brushOptions", "Brush Options...", () => ShowOptions("uv.brush", () => { }), canExecute: EditorOpen);
 
         // ---------------------------------------------------------------- UV Sets
+        // UV 세트: 편집기 창, 빈 세트 생성(이름 uvSet<n>), 현재 세트 복사, 현재 세트 삭제(2개 이상일 때), 다음 세트로 전환
         Actions.Register("uv.setEditor", "UV Set Editor", ToggleUvSetEditor, isChecked: () => UvSetEditor?.IsOpen ?? false);
         _optionSpecs["uv.setCreate"] = new OptionSpec("Create Empty UV Set", v => v.Set("n", 1), new[] { OptionField.I("n", "Name suffix (uvSet<n>)", 1, 99) }, "Create");
         Actions.Register("uv.setCreate", "Create Empty UV Set...", () => ShowOptions("uv.setCreate", () => UvSetOp("Create UV Set", m => m.SwitchUvSet(m.AddUvSet("uvSet" + Options("uv.setCreate").Int("n"), false)))), canExecute: () => UvNodes().Any());
@@ -315,8 +353,12 @@ public partial class Shell
         Actions.Register("uv.setNext", "Switch to Next UV Set", () => UvSetOp("Switch UV Set", m => { m.EnsureUvSets(); m.SwitchUvSet((m.CurrentUvSet + 1) % m.UvSets.Count); }), canExecute: () => UvNodes().Any(n => n.Mesh!.UvSets.Count > 1));
     }
 
+    /// <summary>System.Numerics 외적 헬퍼(이 파일은 Vector3가 Godot/Numerics로 모호해 정규화된 이름을 쓴다).</summary>
     private static System.Numerics.Vector3 NVec3Cross(System.Numerics.Vector3 a, System.Numerics.Vector3 b) => System.Numerics.Vector3.Cross(a, b);
 
+    /// <summary>
+    /// Move and Sew: 선택을 엣지로 바꾼 뒤 심(Seam) 엣지만 골라, 작은 셸을 강체 변환으로 상대 셸에 맞춘 다음 꿰맨다(UvOps.MoveAndSew).
+    /// </summary>
     private void MoveAndSew()
     {
         var sel = Document.Selection; var mode = sel.Mode;
@@ -331,6 +373,10 @@ public partial class Shell
         UvEditorWindow?.Canvas.Invalidate();
     }
 
+    /// <summary>
+    /// Map Border: 선택 UV 점이 속한 셸마다 경계를 정사각형(square) 또는 원으로 펼치고 내부를 Optimize(80회)로 이완한다.
+    /// UV 모드에서 점 하나만 선택했으면 그 점을 경계 매핑의 시작점(사각형 모서리)으로 쓴다.
+    /// </summary>
     private void MapBorder(bool square)
     {
         ForEachUvPoints(square ? "Map Border (Square)" : "Map Border (Circle)", (m, t, pts) =>
@@ -344,6 +390,7 @@ public partial class Shell
         });
     }
 
+    /// <summary>노드마다 pick(메시)이 고른 면을 면 모드로 선택한다(첫 노드 교체, 이후 추가; Undo 가능).</summary>
     private void SelectFaces(Func<PolyMesh, List<int>> pick)
     {
         RecordSelection(s =>
@@ -353,6 +400,10 @@ public partial class Shell
         });
     }
 
+    /// <summary>
+    /// Contained Faces(all = true: 모든 코너 UV 점이 선택된 면) / Connected Faces(all = false: 하나라도 선택된 면)를 면 모드로 선택한다.
+    /// 모드를 바꾸기 전에 현재 선택으로 결과를 먼저 계산한다.
+    /// </summary>
     private void SelectFacesOfPoints(bool all)
     {
         var picks = new List<(NodeId, List<int>)>();
@@ -360,6 +411,7 @@ public partial class Shell
         RecordSelection(s => { s.Mode = SelectMode.Face; bool first = true; foreach (var (id, faces) in picks) { s.SelectComponents(id, SelectMode.Face, faces, replace: first); first = false; } });
     }
 
+    /// <summary>UV 세트 구조 변경 op를 대상 노드마다 UvSetsCommand로 실행하고(한 Undo 그룹) 캔버스와 UV Set Editor를 갱신한다.</summary>
     private void UvSetOp(string name, Action<PolyMesh> op)
     {
         using (Document.Undo.BeginGroup(name))
@@ -368,8 +420,10 @@ public partial class Shell
         UvSetEditor?.Refresh();
     }
 
+    /// <summary>UV Set Editor 패널(세트 목록·이름 변경·전환). 처음 열 때 만든다.</summary>
     public UvEditor.UvSetEditorWindow? UvSetEditor { get; private set; }
 
+    /// <summary>UV Set Editor 패널을 지연 생성하고 DockManager에 등록한다(레이아웃 복원 "uvSetEditor"에서도 호출).</summary>
     private UvEditor.UvSetEditorWindow EnsureUvSetEditor()
     {
         if (UvSetEditor == null)
@@ -383,5 +437,6 @@ public partial class Shell
         return UvSetEditor;
     }
 
+    /// <summary>UV Set Editor 열기/닫기 토글.</summary>
     private void ToggleUvSetEditor() => EnsureUvSetEditor().Toggle();
 }

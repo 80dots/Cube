@@ -5,8 +5,16 @@ using Cube.Core.Scene;
 
 namespace Cube.Core.Tests.IO;
 
+/// <summary>
+/// 자체 바이너리 FBX 7.4 writer(M4)를 검증한다: <c>FbxBinaryWriter</c>의 모든 속성 타입·배열 압축 왕복(<c>FbxBinaryReader</c>로 다시 읽기),
+/// <c>FbxSceneBuilder</c>가 만드는 Geometry/Model/Material/Texture/연결/정의/전역 설정, 피벗 베이크, PBR 텍스처 슬롯 매핑, 스킨 클러스터·바인드 포즈.
+/// </summary>
 public class FbxWriterTests
 {
+    /// <summary>
+    /// short/bool/int/float/double/long/string/raw 바이트와 float/double/long/int/bool 배열, 속성 없는 노드, 식별자 문자열(name\0\x01class),
+    /// 중첩 자식을 써서 다시 읽으면 값이 모두 같아야 한다. 헤더 버전 7400과 Blender와 같은 푸터 바이트도 확인한다.
+    /// </summary>
     [Fact]
     public void Writer_RoundTrips_AllPropertyTypes_ThroughReader()
     {
@@ -16,6 +24,7 @@ public class FbxWriterTests
         var leaf = root.Add("Leaf", FbxNode.Id("Model", "cube"));
         leaf.Add("Deep", 1);
 
+        // 실행: 최상위 노드 두 개를 바이너리로 쓰고 리더로 다시 파싱한다.
         var bytes = FbxBinaryWriter.Write(new[] { root, new FbxNode("Second", 9) });
         Assert.True(FbxBinaryReader.IsBinaryFbx(bytes));
         Assert.Equal(7400u, BitConverter.ToUInt32(bytes, 23));
@@ -48,6 +57,9 @@ public class FbxWriterTests
         Assert.Equal(0xf8, bytes[^16]);
     }
 
+    /// <summary>
+    /// 큰 double 배열을 zlib 압축/비압축으로 각각 써서 압축본이 더 작고, 두 경우 모두 원래 값으로 정확히 복원되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Writer_CompressedArrays_DecodeToSameValues()
     {
@@ -60,6 +72,12 @@ public class FbxWriterTests
         Assert.Equal(data, FbxBinaryReader.Read(raw).nodes[0].Prop<double[]>(0));
     }
 
+    /// <summary>
+    /// 트랜스폼(피벗 포함)과 텍스처가 있는 Phong 머티리얼이 할당된 큐브를 내보낸다.
+    /// BakePivots=false: 정점 cm 단위(0.5m → 50), PolygonVertexIndex의 면 끝 ~i 표기, 노멀/UV 레이어 크기, Lcl T/R/S·RotationPivot/ScalingPivot 속성.
+    /// 기본(BakePivots): 피벗 속성 없이 정점 −P, Lcl Translation = P+T이며 월드 결과가 같아야 한다.
+    /// 이어서 Material/Texture/Video 노드, OO/OP 연결(Texture → DiffuseColor), Definitions 개수, GlobalSettings(Y-up, 단위 1)를 확인한다.
+    /// </summary>
     [Fact]
     public void SceneBuilder_Cube_WritesGeometryModelMaterialAndConnections()
     {
@@ -70,6 +88,7 @@ public class FbxWriterTests
         doc.Undo.Push(new AddMaterialCommand(mat));
         doc.Undo.Push(new AssignMaterialCommand(new[] { cube.Node.Id }, mat.Id));
 
+        // 1단계: 피벗을 베이크하지 않는 옵션으로 내보내 원래 피벗 속성이 기록되는지 본다.
         var builder = new FbxSceneBuilder(doc, FbxExportOptions.Default with { BakePivots = false });
         var top = builder.Build(new[] { cube.Node });
         Assert.Equal(1, builder.NodeCount);
@@ -115,6 +134,7 @@ public class FbxWriterTests
         var w2 = Vector3.Transform(p0 - tr.Pivot, bakedT.ToMatrix());
         Assert.True((w1 - w2).Length() < 1e-4f);
 
+        // 3단계: 머티리얼·텍스처 노드와 오브젝트 간 연결(Connections) 검증(1단계 결과 objects/nodes를 다시 사용).
         var material = objects.All("Material").Single();
         Assert.Equal("Material::wood", FbxNode.ReadableId(material.Prop<string>(1)));
         Assert.Equal("Phong", material.Child("ShadingModel")!.Prop<string>(0));
@@ -129,6 +149,7 @@ public class FbxWriterTests
         Assert.Contains(conns, c => c.Prop<string>(0) == "OO" && c.Prop<long>(1) == matId && c.Prop<long>(2) == modelId);
         Assert.Contains(conns, c => c.Prop<string>(0) == "OP" && c.Prop<long>(1) == texId && c.Prop<long>(2) == matId && c.Prop<string>(3) == "DiffuseColor");
 
+        // 4단계: Definitions의 타입별 개수와 GlobalSettings 축/단위.
         var defs = nodes.First(n => n.Name == "Definitions");
         var counts = defs.All("ObjectType").ToDictionary(o => o.Prop<string>(0), o => o.Child("Count")!.Prop<int>(0));
         Assert.Equal(1, counts["Model"]); Assert.Equal(1, counts["Geometry"]); Assert.Equal(1, counts["Material"]); Assert.Equal(1, counts["Texture"]); Assert.Equal(1, counts["Video"]);
@@ -138,6 +159,11 @@ public class FbxWriterTests
         Assert.Equal(1.0, gs["UnitScaleFactor"].Prop<double>(4));
     }
 
+    /// <summary>
+    /// PBR 파라미터 텍스처가 FBX 표준 슬롯에 연결되는지 확인한다: color → DiffuseColor, normal → NormalMap,
+    /// roughness → ShininessExponent, metallic → ReflectionFactor, emissive → EmissiveColor, occlusion → AmbientColor.
+    /// 같은 이미지(base.png)는 Texture 노드 하나를 공유하고, emissiveStrength는 EmissiveFactor 값으로 기록되어야 한다.
+    /// </summary>
     [Fact]
     public void SceneBuilder_MaterialParameterTextures_ConnectToStandardSlots()
     {
@@ -166,6 +192,11 @@ public class FbxWriterTests
         Assert.Equal(3.0, props.Prop<double>(4), 3);
     }
 
+    /// <summary>
+    /// 조인트 두 개에 스킨된 원기둥에서 메시만 골라 내보내도 스킨이 참조하는 조인트 체인이 자동 포함되어야 한다(Model 3, LimbNode 2).
+    /// Skin 디포머 1개·Cluster 2개(Indexes/Weights 길이 일치, TransformLink 4x4), joint2의 TransformLink 이동 성분 100cm,
+    /// BindPose 노드 수 3, Skeleton NodeAttribute 2개를 확인한다.
+    /// </summary>
     [Fact]
     public void SceneBuilder_SkinnedMesh_WritesSkinClustersAndBindPose()
     {
@@ -174,6 +205,7 @@ public class FbxWriterTests
         var j0 = new SceneNode { Name = "joint1", Shape = new JointShape(), Local = new Transform3(new Vector3(0, -1, 0), Vector3.Zero, Vector3.One) };
         var j1 = new SceneNode { Name = "joint2", Shape = new JointShape(), Local = new Transform3(new Vector3(0, 2, 0), Vector3.Zero, Vector3.One) };
         doc.AddNode(j0, doc.Root); doc.AddNode(j1, j0);
+        // 준비: 위쪽 정점은 joint2에 100%, 아래쪽은 joint1 0.75 + joint2 0.25로 묶은 스킨을 직접 구성한다.
         var mesh = cyl.Node.Mesh!;
         var skin = new SkinCluster { MeshBindWorld = cyl.Node.WorldMatrix };
         foreach (var j in new[] { j0, j1 }) { skin.Joints.Add(j.Id); Matrix4x4.Invert(j.WorldMatrix, out var inv); skin.BindInverse.Add(inv); }

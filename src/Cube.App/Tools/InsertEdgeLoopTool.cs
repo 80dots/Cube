@@ -12,18 +12,31 @@ namespace Cube.App.Tools;
 /// Maya Insert Edge Loop Tool: 엣지 위를 클릭하면 그 지점(엣지 위 비율)을 지나는 엣지 루프를 끼운다.
 /// 엣지 모드로 전환해 호버 프리셀렉션을 보여 주고, 빈 곳 클릭은 일반 선택으로 동작한다.
 /// </summary>
+/// <remarks>
+/// 위치 t는 클릭 점을 엣지의 화면 투영 선분에 사영한 비율(0.02~0.98로 제한, J 홀드면 0.5)이며,
+/// 'Insert Edge Loop' 히스토리 항목의 Position 파라미터로 기록되어 나중에 Properties/Action Popup에서 바꿀 수 있다.
+/// 새 루프 엣지들이 엣지 모드로 선택된다.
+/// </remarks>
 public sealed class InsertEdgeLoopTool : SelectTool
 {
+    /// <summary>툴 ID("insertLoop").</summary>
     public override string Id => "insertLoop";
+    /// <summary>표시 이름.</summary>
     public override string Label => "Insert Edge Loop";
+    /// <summary>헬프 라인 안내.</summary>
     public override string HelpText => "Insert Edge Loop Tool: click an edge to insert a loop through its ring at that position. Q returns to Select.";
 
+    /// <summary>활성화: 엣지 프리셀렉션을 보이도록 엣지 모드로 전환.</summary>
     public override void Activate(ToolContext ctx)
     {
         base.Activate(ctx);
         if (ctx.Sel.Mode != SelectMode.Edge) ctx.Sel.Mode = SelectMode.Edge;
     }
 
+    /// <summary>
+    /// 왼쪽 누름: 커서 아래 살아 있는 엣지가 있으면 비율 t를 계산해 InsertEdgeLoop 명령을 푸시하고 true.
+    /// 엣지가 없으면 false를 돌려 일반 선택(클릭/마키)으로 넘긴다.
+    /// </summary>
     protected override bool OnPrimaryPress(InputEventMouseButton mb)
     {
         var hit = Picker.Pick(mb.Position, SelectMode.Edge, Ctx.CameraBasedSelection);
@@ -49,6 +62,7 @@ public sealed class InsertEdgeLoopTool : SelectTool
         }
         if (Ctx.Viewport.IsSnapHeld) t = 0.5f; // J: 중앙 스냅
 
+        // 히스토리 파라미터(Position)를 가진 위상 명령: 재생 시 같은 시작 엣지에서 새 비율로 다시 끼운다
         var cmd = new MeshOpCommand("Insert Edge Loop", node.Id, new HistoryParams(HistoryParam.F("Position", t, 0.01f, 0.99f, 0.01f)), (m, p) =>
         {
             var newEdges = MeshOps.InsertEdgeLoop(m, edge, p.Float("Position"));

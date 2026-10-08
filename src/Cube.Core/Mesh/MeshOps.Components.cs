@@ -5,18 +5,26 @@ namespace Cube.Core.Mesh;
 /// <summary>Maya Edit Mesh 메뉴의 컴포넌트 연산들: Poke, Collapse, Merge to Center, Average, Detach, Duplicate, Chamfer, Connect, Flip/Spin Edge, Extrude Edges, Wedge, Circularize, Offset Loop, Slide, Flip/Symmetrize.</summary>
 public static partial class MeshOps
 {
+    /// <summary>살아 있고 범위 안인 면 ID만 중복 없이 거른다(선택에 죽은/잘못된 ID가 섞여도 안전하게).</summary>
     private static IEnumerable<int> AliveFaces(PolyMesh m, IEnumerable<int> ids) => ids.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive).Distinct();
+    /// <summary>살아 있고 범위 안인 엣지 ID만 중복 없이 거른다.</summary>
     private static IEnumerable<int> AliveEdges(PolyMesh m, IEnumerable<int> ids) => ids.Where(e => e >= 0 && e < m.EdgeCount && m.Edges[e].Alive).Distinct();
+    /// <summary>살아 있고 범위 안인 정점 ID만 중복 없이 거른다.</summary>
     private static IEnumerable<int> AliveVerts(PolyMesh m, IEnumerable<int> ids) => ids.Where(v => v >= 0 && v < m.VertexCount && m.Verts[v].Alive).Distinct();
 
     // ------------------------------------------------------------ Poke
 
     /// <summary>Poke: 면 중심에 정점을 추가하고 삼각형 부채꼴로 나눈다. offset은 면 법선 방향 이동. 반환값은 새 중심 정점들.</summary>
+    /// <remarks>
+    /// 각 면의 중심(FaceCentroid)에 법선 방향 offset을 더한 정점을 만들고, 면 둘레 엣지마다 (c[i], c[i+1], 중심) 삼각형을 만든다.
+    /// 중심 UV는 코너 UV 평균. 둘레 엣지 플래그는 FaceRebuilder가 복원한다.
+    /// </remarks>
     public static List<int> Poke(PolyMesh m, IEnumerable<int> faceIds, float offset)
     {
         var result = new List<int>();
         var faces = AliveFaces(m, faceIds).ToList();
         if (faces.Count == 0) return result;
+        // 면을 지우기 전에 법선/중심을 계산해야 하므로 캡처 → 중심 정점 생성 → 제거 순서
         var rb = new FaceRebuilder(m);
         foreach (int f in faces) rb.Capture(f);
         var centers = new Dictionary<int, int>();
@@ -42,6 +50,10 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Collapse / Merge to Center / Average
 
     /// <summary>정점 묶음들을 각각 하나로 합친다(위치 = 묶음 평균 또는 지정). 반환값은 대표 정점들.</summary>
+    /// <remarks>
+    /// 각 묶음의 첫 살아 있는 정점을 대표로 삼아 위치를 position(묶음) 또는 평균으로 옮기고, 나머지 정점을 대표로 치환하는 맵을 만들어
+    /// <see cref="RebuildFacesWithVertexMap"/>으로 면을 재구성한다(퇴화 면 제거). 이미 다른 묶음에 들어간 정점은 건너뛴다.
+    /// </remarks>
     private static List<int> MergeGroups(PolyMesh m, List<List<int>> groups, Func<List<int>, Vector3>? position)
     {
         var map = new Dictionary<int, int>();
@@ -66,15 +78,18 @@ public static partial class MeshOps
     {
         // union-find로 연결된 선택 엣지를 묶는다
         var parent = new Dictionary<int, int>();
+        // Find: 루트까지 따라감(경로 압축 없음), Union: 두 루트를 연결. 선택 엣지로 이어진 정점은 같은 묶음이 된다.
         int Find(int x) { while (parent.TryGetValue(x, out int p) && p != x) { x = p; } return x; }
         void Union(int a, int b) { a = Find(a); b = Find(b); if (a != b) parent[a] = b; }
         foreach (int e in AliveEdges(m, edgeIds)) { var (a, b) = m.EdgeVertices(e); parent.TryAdd(a, a); parent.TryAdd(b, b); Union(a, b); }
+        // 묶음마다 정점을 평균 위치 한 점으로 합친다
         var groups = parent.Keys.GroupBy(Find).Select(g => g.ToList()).ToList();
         return MergeGroups(m, groups, null);
     }
 
     /// <summary>Collapse(면): 각 면(연결된 면 묶음)을 중심 정점 하나로 접는다.</summary>
     public static List<int> CollapseFaces(PolyMesh m, IEnumerable<int> faceIds)
+    // 면들의 둘레 엣지를 모두 모아 엣지 Collapse로 처리(연결된 면 영역 = 한 묶음)
     {
         var edges = new HashSet<int>();
         var hes = new List<int>();
@@ -86,12 +101,15 @@ public static partial class MeshOps
     public static int MergeToCenter(PolyMesh m, IEnumerable<int> vertIds)
     {
         var verts = AliveVerts(m, vertIds).ToList();
+        // 1개면 그대로 그 정점, 0개면 -1
         if (verts.Count < 2) return verts.Count == 1 ? verts[0] : -1;
         var reps = MergeGroups(m, new List<List<int>> { verts }, null);
         return reps.Count > 0 ? reps[0] : -1;
     }
 
     /// <summary>Average Vertices: 선택 정점을 이웃 평균 쪽으로 옮긴다(라플라시안 평활, 위상 불변).</summary>
+    /// <param name="iterations">반복 횟수(1..100).</param>
+    /// <param name="strength">한 번에 이웃 평균 쪽으로 옮길 비율(0 = 그대로, 1 = 평균 위치).</param>
     public static void AverageVertices(PolyMesh m, IEnumerable<int> vertIds, int iterations, float strength = 0.5f)
     {
         var verts = AliveVerts(m, vertIds).ToList();
@@ -99,17 +117,20 @@ public static partial class MeshOps
         var edges = new List<int>();
         for (int it = 0; it < iterations; it++)
         {
+            // 이번 반복의 목표 위치를 모두 계산한 뒤 한꺼번에 적용(야코비 방식 — 순서 의존성 없음)
             var target = new Dictionary<int, Vector3>();
             foreach (int v in verts)
             {
                 m.GetVertexEdges(v, edges);
                 if (edges.Count == 0) continue;
                 var sum = Vector3.Zero;
+                // 엣지로 이어진 이웃 정점 위치 합
                 foreach (int e in edges) { var (a, b) = m.EdgeVertices(e); sum += m.Verts[a == v ? b : a].Position; }
                 target[v] = Vector3.Lerp(m.Verts[v].Position, sum / edges.Count, strength);
             }
             foreach (var (v, p) in target) { var vv = m.Verts[v]; vv.Position = p; m.Verts[v] = vv; }
         }
+        // 위치만 바뀌므로 BumpGeometry(위상 버전은 그대로)
         m.BumpGeometry();
     }
 
@@ -120,6 +141,7 @@ public static partial class MeshOps
     {
         var result = new List<int>();
         var verts = AliveVerts(m, vertIds).ToList();
+        // 선택 정점에 닿은 모든 면을 캡처하고 다시 만들면서, 같은 정점이 두 번째 면부터 등장할 때마다 새 정점으로 바꾼다
         var rb = new FaceRebuilder(m);
         var faces = new List<int>();
         var faceSet = new List<int>();
@@ -152,6 +174,7 @@ public static partial class MeshOps
         var result = new List<int>();
         var region = new HashSet<int>(AliveFaces(m, faceIds));
         if (region.Count == 0) return result;
+        // boundaryVerts: 영역 경계 엣지 중 반대편에 영역 밖 면이 있는 엣지의 정점(메시 테두리 엣지는 이미 떨어져 있으므로 제외)
         var boundaryVerts = new HashSet<int>();
         var hes = new List<int>();
         foreach (int f in region)
@@ -172,6 +195,7 @@ public static partial class MeshOps
         rb.RemoveCaptured();
         foreach (var (_, corners, material) in rb.Captured)
         {
+            // 영역 면의 경계 정점을 복제본으로 바꿔 재생성 → 영역 밖 면은 원래 정점을 계속 쓴다
             int nf = rb.AddFace(corners.Select(c => dup.TryGetValue(c.Vertex, out int d) ? c with { Vertex = d } : c).ToList(), material);
             if (nf >= 0) result.Add(nf);
         }
@@ -185,6 +209,7 @@ public static partial class MeshOps
     {
         var result = new List<int>();
         var faces = AliveFaces(m, faceIds).ToList();
+        // vmap: 원래 정점 → 복제 정점, flags: 원래 엣지 플래그(정점 쌍), captured: 원래 면 코너
         var vmap = new Dictionary<int, int>();
         var flags = new List<(int a, int b, EdgeFlags f)>();
         var captured = new List<(List<Corner> corners, int material)>();
@@ -200,6 +225,7 @@ public static partial class MeshOps
             int nf = AddFaceWithCorners(m, mapped, material);
             if (nf >= 0) result.Add(nf);
         }
+        // 복제된 엣지에 원래 플래그 복사
         foreach (var (a, b, f) in flags) if (vmap.TryGetValue(a, out int na) && vmap.TryGetValue(b, out int nb)) SetFlags(m, na, nb, f);
         m.BumpTopology();
         return result;
@@ -208,6 +234,10 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Chamfer Vertices
 
     /// <summary>Chamfer Vertices: 정점을 둘레 엣지 위 width 지점의 정점들로 바꾸고(removeFace가 아니면) 그 자리에 면을 채운다. 반환값은 새 캡 면들.</summary>
+    /// <remarks>
+    /// 각 엣지 위 거리 = min(width, 엣지 길이의 45%). 선택 정점 코너를 두 엣지 위 점으로 바꿔 면을 재구성하고,
+    /// 캡 엣지 조각(p2→p1)을 정점마다 모아 next 맵으로 이어 닫힌 고리가 되면 캡 면을 만든다(경계 정점 등 고리가 안 되면 생략).
+    /// </remarks>
     public static List<int> ChamferVertices(PolyMesh m, IEnumerable<int> vertIds, float width, bool removeFace)
     {
         var result = new List<int>();
@@ -217,10 +247,12 @@ public static partial class MeshOps
         var rb = new FaceRebuilder(m);
         var faces = new List<int>();
         foreach (int v in verts) { m.GetVertexFaces(v, faces); foreach (int f in faces) rb.Capture(f); }
+        // onEdge: (정점, 엣지 반대쪽 정점) → 새 점, uvOf: 새 점 UV, capEdges: 정점별 캡 엣지 조각
         var onEdge = new Dictionary<(int v, int other), int>();
         var uvOf = new Dictionary<int, Vector2>();
         var capEdges = new Dictionary<int, List<(int from, int to)>>();
         foreach (int v in verts) capEdges[v] = new List<(int, int)>();
+        // 정점 v에서 other 쪽으로 width(최대 45%)만큼 간 새 점(면 둘이 공유, 플래그는 원래 엣지에서 상속)
         int P(int v, int other)
         {
             if (onEdge.TryGetValue((v, other), out int id)) return id;
@@ -231,6 +263,7 @@ public static partial class MeshOps
             onEdge[(v, other)] = id; rb.SetParent(id, v, other);
             return id;
         }
+        // UV 보간 비율(P와 같은 거리 규칙)
         float Frac(int v, int other) { float len = Vector3.Distance(m.Verts[v].Position, m.Verts[other].Position); return len > 1e-9f ? MathF.Min(width, len * 0.45f) / len : 0f; }
         var loops = new List<(List<Corner> loop, int material)>();
         foreach (var (_, corners, material) in rb.Captured)
@@ -257,9 +290,11 @@ public static partial class MeshOps
             {
                 var edges = capEdges[v];
                 if (edges.Count < 3) continue;
+                // 조각들을 from → to 맵으로 연결. 시작점이 겹치거나 자기 루프면 불량
                 var next = new Dictionary<int, int>(); bool bad = false;
                 foreach (var (from, to) in edges) if (from == to || !next.TryAdd(from, to)) { bad = true; break; }
                 if (bad) continue;
+                // start부터 next를 따라 한 바퀴 돌아오고 모든 조각을 정확히 한 번씩 썼는지 확인
                 var loop = new List<int>(); int start = edges[0].from, cur = start;
                 while (loop.Count <= edges.Count) { loop.Add(cur); if (!next.TryGetValue(cur, out cur)) { bad = true; break; } if (cur == start) break; }
                 if (bad || cur != start || loop.Count != edges.Count) continue;
@@ -275,6 +310,10 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Connect
 
     /// <summary>Connect(정점): 같은 면에 속한 선택 정점들을 면 루프 순서대로 엣지로 잇는다. 반환값은 새 엣지들.</summary>
+    /// <remarks>
+    /// 면마다 루프 순서로 선택 정점을 모아 이웃끼리(마지막 → 처음 포함) 잇는다. 선택 정점이 2개면 한 쌍만.
+    /// 이미 엣지인 쌍은 건너뛴다. 분할이 면 ID를 바꾸므로 먼저 정점 쌍만 모으고 나중에 <see cref="SplitFaceBetween"/>으로 처리한다.
+    /// </remarks>
     public static List<int> ConnectVertices(PolyMesh m, IEnumerable<int> vertIds)
     {
         var result = new List<int>();
@@ -315,6 +354,7 @@ public static partial class MeshOps
         var mids = new List<int>();
         foreach (int e in AliveEdges(m, edgeIds).ToArray())
         {
+            // 앞선 분할로 엣지가 바뀌었을 수 있으므로 다시 확인
             if (e >= m.EdgeCount || !m.Edges[e].Alive) continue;
             int v = SplitEdge(m, e, 0.5f);
             if (v >= 0) mids.Add(v);
@@ -330,6 +370,7 @@ public static partial class MeshOps
         var result = new List<int>();
         foreach (int e in AliveEdges(m, edgeIds).ToArray())
         {
+            // 경계 엣지나 삼각형-삼각형이 아닌 엣지는 건너뜀
             if (e >= m.EdgeCount || !m.Edges[e].Alive || m.IsBoundaryEdge(e)) continue;
             var (f0, f1) = m.EdgeFaces(e);
             if (m.FaceDegree(f0) != 3 || m.FaceDegree(f1) != 3) continue;
@@ -340,6 +381,10 @@ public static partial class MeshOps
     }
 
     /// <summary>Spin Edge: 엣지를 양쪽 면을 합친 루프에서 한 칸 돌린 대각선으로 바꾼다. 반환값은 새 엣지(-1 = 실패).</summary>
+    /// <remarks>
+    /// 두 면을 합친 루프에서 원래 엣지 양끝(a, b)을 forward면 다음 정점으로, 아니면 이전 정점으로 한 칸씩 옮긴 대각선 na–nb를 만든다.
+    /// 구현: <see cref="MergeFacesAcrossEdgeReturning"/>으로 두 면을 합친 뒤 <see cref="SplitFace"/>로 새 대각선에서 나눈다.
+    /// </remarks>
     public static int SpinEdge(PolyMesh m, int e, bool forward)
     {
         if (e < 0 || e >= m.EdgeCount || !m.Edges[e].Alive || m.IsBoundaryEdge(e)) return -1;
@@ -349,6 +394,7 @@ public static partial class MeshOps
         // 합친 루프: [b, x1..xk, a, y1..yl]
         var loop = new List<int>();
         int cur = m.Hes[he0].Next; while (cur != he0) { loop.Add(m.Hes[cur].Vertex); cur = m.Hes[cur].Next; }
+        // ia = 루프에서 a의 인덱스(첫 면 구간 길이). ib = 0 = b의 인덱스
         int ia = loop.Count;
         cur = m.Hes[he1].Next; while (cur != he1) { loop.Add(m.Hes[cur].Vertex); cur = m.Hes[cur].Next; }
         int n = loop.Count;
@@ -365,6 +411,7 @@ public static partial class MeshOps
         return ne;
     }
 
+    /// <summary>여러 엣지에 <see cref="SpinEdge"/>를 차례로 적용한다. 반환값은 성공한 새 엣지들.</summary>
     public static List<int> SpinEdges(PolyMesh m, IEnumerable<int> edgeIds, bool forward)
     {
         var result = new List<int>();
@@ -372,6 +419,11 @@ public static partial class MeshOps
         return result;
     }
 
+    /// <summary>
+    /// 엣지 e의 양쪽 면을 하나로 합친다(엣지 제거). 합친 루프 = he0 다음부터 he0 직전까지 + he1 다음부터 he1 직전까지.
+    /// 같은 정점이 반복되면(두 엣지 이상 공유 등) 합치지 않는다. 새 면 추가에 실패하면 원래 두 면을 되살린다.
+    /// </summary>
+    /// <returns>(성공 여부, 새 면 ID 또는 -1).</returns>
     private static (bool ok, int face) MergeFacesAcrossEdgeReturning(PolyMesh m, int e)
     {
         var ed = m.Edges[e];
@@ -389,6 +441,7 @@ public static partial class MeshOps
         // 두 면이 엣지를 둘 이상 공유하거나 정점에서 맞닿으면 합친 루프에 같은 정점이 반복된다 → 합치지 않는다
         // (지운 뒤 새 면 추가가 실패하면 두 면이 사라져 구멍이 났다: 반복 라운드 Bevel의 D자 캡 병합)
         if (loop.Count < 3 || loop.Select(c => c.Vertex).Distinct().Count() != loop.Count) return (false, -1);
+        // 실패 시 복구용 원래 두 면 코너(rb.Captured와 같은 내용이지만 머티리얼을 각각 유지)
         List<Corner> Corners(int f)
         {
             var list = new List<Corner>();
@@ -411,15 +464,21 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Extrude edges
 
     /// <summary>Extrude(엣지): 경계 엣지마다 새 정점 쌍을 만들어 쿼드를 붙인다(이동 0, 이어진 엣지는 정점 공유). 반환값은 새 면들.</summary>
+    /// <remarks>새 엣지 목록이 필요 없을 때의 단축 오버로드.</remarks>
     public static List<int> ExtrudeEdges(PolyMesh m, IEnumerable<int> edgeIds) => ExtrudeEdges(m, edgeIds, out _);
 
     /// <summary>Extrude(엣지) + 새로 생긴 바깥쪽 엣지(a2-b2) 목록. 조작기로 바로 밀어낼 수 있도록 호출자가 이 엣지들을 선택한다.</summary>
+    /// <remarks>
+    /// 경계 엣지만 대상. 경계 엣지의 He0(면 쪽 하프에지) a→b에 대해 쿼드 (b, a, a', b')를 만들어 원래 면과 반대 방향으로 감기게 한다.
+    /// 이어진 엣지는 D()가 같은 복제 정점을 공유해 띠가 끊기지 않는다. 바깥 엣지 a'-b'에 원래 엣지 플래그를 복사한다.
+    /// </remarks>
     public static List<int> ExtrudeEdges(PolyMesh m, IEnumerable<int> edgeIds, out List<int> newEdges)
     {
         var result = new List<int>();
         newEdges = new List<int>();
         var edges = AliveEdges(m, edgeIds).Where(e => m.IsBoundaryEdge(e)).ToList();
         if (edges.Count == 0) return result;
+        // dup: 원래 정점 → 복제 정점(필요할 때 생성)
         var dup = new Dictionary<int, int>();
         int D(int v) { if (!dup.TryGetValue(v, out int d)) { d = m.AddVertex(m.Verts[v].Position); dup[v] = d; } return d; }
         foreach (int e in edges)
@@ -440,10 +499,15 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Wedge
 
     /// <summary>Wedge: 선택 면을 pivot 엣지를 축으로 arcAngle(도)만큼 divisions 단계로 돌려 가며 압출한다. 반환값은 마지막 캡 면들.</summary>
+    /// <remarks>
+    /// 매 단계 ExtrudeFaces(이동 0)로 캡을 만들고 캡 정점을 축 둘레로 step만큼 회전한다. 축 위(힌지) 정점의 복제본은 원래 축 정점과
+    /// MergeVertices로 합쳐 축 쪽 측면이 퇴화해 사라지게 한다. 병합으로 면 ID가 바뀌므로 회전된 정점들로만 이루어진 면을 다시 찾아 다음 단계 입력으로 쓴다.
+    /// </remarks>
     public static List<int> Wedge(PolyMesh m, IEnumerable<int> faceIds, int pivotEdge, float arcAngle, int divisions)
     {
         var faces = AliveFaces(m, faceIds).ToList();
         if (faces.Count == 0 || pivotEdge < 0 || pivotEdge >= m.EdgeCount || !m.Edges[pivotEdge].Alive) return new List<int>();
+        // 단계 수 1..64. 축 = pivot 엣지 방향(단위 벡터)
         divisions = Math.Clamp(divisions, 1, 64);
         var (pa, pb) = m.EdgeVertices(pivotEdge);
         var axisA = m.Verts[pa].Position; var axisB = m.Verts[pb].Position;
@@ -453,6 +517,7 @@ public static partial class MeshOps
         // 회전 방향: 면 법선이 축에서 멀어지는 쪽으로 돈다(양의 각 = 면 법선 방향으로 휨)
         var regionNormal = Vector3.Zero; foreach (int f in faces) regionNormal += MeshNormals.FaceNormalUnnormalized(m, f);
         var regionCenter = faces.Aggregate(Vector3.Zero, (s, f) => s + m.FaceCentroid(f)) / faces.Count;
+        // radial = 축에서 영역 중심으로 가는 수직 벡터. axis × radial이 영역 법선과 같은 쪽이면 양의 회전
         var radial = regionCenter - axisA; radial -= axis * Vector3.Dot(radial, axis);
         float sign = Vector3.Dot(Vector3.Cross(axis, radial), regionNormal) >= 0 ? 1f : -1f;
         float step = arcAngle * MathF.PI / 180f / divisions * sign;
@@ -461,6 +526,7 @@ public static partial class MeshOps
         {
             var caps = ExtrudeFaces(m, current);
             if (caps.Count == 0) break;
+            // 캡 정점 수집 후 회전 행렬 준비. merge = 축 정점 + 축 위에 놓인 복제 정점(회전하지 않고 병합)
             var capVerts = new HashSet<int>(); var tmp = new List<int>();
             foreach (int f in caps) { m.GetFaceVertices(f, tmp); capVerts.UnionWith(tmp); }
             var rot = Matrix4x4.CreateFromAxisAngle(axis, step);
@@ -498,6 +564,8 @@ public static partial class MeshOps
     /// 면 영역이면 안쪽 정점은 둘레의 평균 이동만큼 따라간다.
     /// </summary>
     public static void Circularize(PolyMesh m, IEnumerable<int> vertIds, float radialOffset, bool evenly)
+    /// <param name="radialOffset">반지름 보정 비율(radius = 평균 거리 × (1 + radialOffset)).</param>
+    /// <param name="evenly">true면 첫 정점 각도부터 2π/n 간격으로 재배치, false면 각자의 각도 유지.</param>
     {
         var verts = AliveVerts(m, vertIds).ToList();
         if (verts.Count < 3) return;
@@ -511,6 +579,7 @@ public static partial class MeshOps
         }
         if (normal.LengthSquared() < 1e-12f) normal = Vector3.UnitY;
         normal = Vector3.Normalize(normal);
+        // 평면 기저(u, w)에서 각 정점의 각도와 평면 투영 반지름을 구해 각도순으로 정렬
         EarClipping.PlaneBasis(normal, out var u, out var w);
         var items = verts.Select(v =>
         {
@@ -518,6 +587,7 @@ public static partial class MeshOps
             return (v, angle: MathF.Atan2(Vector3.Dot(d, w), Vector3.Dot(d, u)), r: d.Length());
         }).OrderBy(x => x.angle).ToList();
         float radius = items.Average(x => x.r) * (1f + radialOffset);
+        // 평균 반지름의 원 위로 옮긴다(평면 투영 위치)
         for (int i = 0; i < items.Count; i++)
         {
             float ang = evenly ? items[0].angle + MathF.Tau * i / items.Count : items[i].angle;
@@ -530,6 +600,10 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Offset Edge Loop / Slide Edge
 
     /// <summary>Offset Edge Loop: 선택 엣지(루프) 양옆 offset 거리에 엣지 루프를 하나씩 끼운다. 반환값은 새 루프 엣지들.</summary>
+    /// <remarks>
+    /// 선택 엣지의 양쪽 면이 쿼드면 공유 정점에서 나가는 옆 엣지 e2를 offset/길이 비율(0.02..0.98)에서 <see cref="InsertEdgeLoop"/>로 자른다.
+    /// 이미 만든 루프의 엣지(done)와 선택 엣지는 다시 처리하지 않는다.
+    /// </remarks>
     public static List<int> OffsetEdgeLoop(PolyMesh m, IEnumerable<int> edgeIds, float offset)
     {
         var result = new List<int>();
@@ -551,6 +625,7 @@ public static partial class MeshOps
                 if (e2 >= m.EdgeCount || !m.Edges[e2].Alive || selected.Contains(e2) || done.Contains(e2)) continue;
                 var (x, y) = m.EdgeVertices(e2);
                 float len = Vector3.Distance(m.Verts[x].Position, m.Verts[y].Position);
+                // t는 e2의 EdgeVertices 첫 정점 기준이므로 공유 정점이 두 번째면 뒤집는다
                 float t = len > 1e-9f ? Math.Clamp(offset / len, 0.02f, 0.98f) : 0.5f;
                 if (x != shared) t = 1f - t;
                 var loop = InsertEdgeLoop(m, e2, t);
@@ -564,10 +639,15 @@ public static partial class MeshOps
 
     /// <summary>Slide Edge: 선택 엣지 루프의 정점을 옆 엣지를 따라 t(-1..1)만큼 민다(양수 = 루프 진행 방향 기준 왼쪽 면 쪽).</summary>
     public static void SlideEdges(PolyMesh m, IEnumerable<int> edgeIds, float t)
+    /// <remarks>
+    /// 각 선택 엣지 끝점마다 왼쪽 면(He0)과 오른쪽 면(He1) 쿼드의 옆 이웃 정점을 기록하고, t ≥ 0이면 왼쪽 이웃 쪽으로, 음수면 오른쪽으로 보간한다.
+    /// 옆 엣지가 선택 엣지(루프 진행 방향)면 이웃으로 쓰지 않는다(그 쪽은 제자리). t는 ±0.98로 클램프.
+    /// </remarks>
     {
         var selected = new HashSet<int>(AliveEdges(m, edgeIds));
         if (selected.Count == 0) return;
         t = Math.Clamp(t, -0.98f, 0.98f);
+        // target[v] = (왼쪽 목표 위치, 오른쪽 목표 위치). 정점마다 처음 기록한 값만 쓴다.
         var target = new Dictionary<int, (Vector3 left, Vector3 right)>();
         foreach (int e in selected)
         {
@@ -576,8 +656,10 @@ public static partial class MeshOps
             int a = m.Hes[heL].Vertex, b = m.Hes[m.Hes[heL].Next].Vertex;
             // 왼쪽 면(heL): a의 이웃 = Prev(heL).Vertex, b의 이웃 = Next(Next(heL)).Vertex
             int aL = m.Hes[m.Hes[heL].Prev].Vertex, bL = m.Hes[m.Hes[m.Hes[heL].Next].Next].Vertex;
+            // 오른쪽 면(heR): 방향이 반대라 b의 이웃이 Prev, a의 이웃이 Next.Next
             int aR = -1, bR = -1;
             if (heR >= 0) { bR = m.Hes[m.Hes[heR].Prev].Vertex; aR = m.Hes[m.Hes[m.Hes[heR].Next].Next].Vertex; }
+            // 이웃으로 가는 엣지가 선택 엣지면 그 쪽으로 밀지 않는다(-1 → 제자리)
             void Put(int v, int l, int r)
             {
                 if (selected.Contains(m.FindEdge(v, l)) ) l = -1;
@@ -599,9 +681,11 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Flip / Symmetrize components
 
     /// <summary>대칭 축(0=X,1=Y,2=Z, 오브젝트 공간 planeOffset 위치)의 반대편에서 가장 가까운 정점을 찾는다.</summary>
+    /// <remarks>단순 O(V) 전수 탐색. tolerance 거리 안에서 거울 위치에 가장 가까운 정점, 없으면 -1.</remarks>
     private static int MirrorPartner(PolyMesh m, int v, int axis, float planeOffset, float tolerance)
     {
         var p = m.Verts[v].Position;
+        // 거울 위치: 축 성분 x → 2·planeOffset − x
         var mp = p; SetAxis(ref mp, axis, 2f * planeOffset - GetAxis(p, axis));
         int best = -1; float bestD = tolerance * tolerance;
         for (int i = 0; i < m.VertexCount; i++)
@@ -613,10 +697,13 @@ public static partial class MeshOps
         return best;
     }
 
+    /// <summary>축 번호(0=X, 1=Y, 2=Z)에 해당하는 성분을 읽는다.</summary>
     private static float GetAxis(Vector3 p, int axis) => axis == 0 ? p.X : axis == 1 ? p.Y : p.Z;
+    /// <summary>축 번호(0=X, 1=Y, 2=Z)에 해당하는 성분을 쓴다.</summary>
     private static void SetAxis(ref Vector3 p, int axis, float v) { if (axis == 0) p.X = v; else if (axis == 1) p.Y = v; else p.Z = v; }
 
     /// <summary>Symmetrize(컴포넌트): 선택 정점의 거울 짝 정점을 선택 정점의 거울 위치로 옮긴다.</summary>
+    /// <returns>옮긴 짝 정점 수. 위상은 바꾸지 않는다.</returns>
     public static int SymmetrizeVertices(PolyMesh m, IEnumerable<int> vertIds, int axis, float planeOffset, float tolerance)
     {
         int n = 0;
@@ -632,6 +719,7 @@ public static partial class MeshOps
     }
 
     /// <summary>Flip(컴포넌트): 선택 정점과 거울 짝 정점의 위치를 서로 바꾼다(거울 반사해서).</summary>
+    /// <returns>바꾼 쌍의 수. 한 쌍은 한 번만 처리한다(done).</returns>
     public static int FlipVertices(PolyMesh m, IEnumerable<int> vertIds, int axis, float planeOffset, float tolerance)
     {
         int n = 0; var done = new HashSet<int>();

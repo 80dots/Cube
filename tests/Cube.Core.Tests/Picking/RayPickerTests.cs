@@ -6,10 +6,19 @@ using Cube.Core.Selection;
 
 namespace Cube.Core.Tests.Picking;
 
+/// <summary>
+/// 뷰포트 피킹(<c>CameraProjection</c> 투영/역투영, <c>RayPicker</c>)을 검증한다: 면 = 레이 교차, 정점/엣지 = 화면 거리 임계,
+/// camera-based 가림 판정, 바운드 기반 조기 거절, 마키 선택, 직교 카메라.
+/// </summary>
 public class RayPickerTests
 {
+    /// <summary>테스트 공용 뷰포트 크기(1000x800 픽셀).</summary>
     private static readonly Vector2 Vp = new(1000, 800);
 
+    /// <summary>
+    /// 원점의 단위 큐브 하나를 피킹 대상으로 만들고, 기본적으로 (0,0,5)에서 원점을 보는 45° 원근 카메라를 함께 돌려준다.
+    /// </summary>
+    /// <param name="eye">카메라 위치(생략 시 (0,0,5)).</param>
     private static (List<PickTarget> targets, PolyMesh mesh, CameraProjection cam) CubeScene(Vector3? eye = null)
     {
         var mesh = MeshBuilder.Cube();
@@ -19,6 +28,10 @@ public class RayPickerTests
         return (new List<PickTarget> { tg }, mesh, cam);
     }
 
+    /// <summary>
+    /// 월드 점을 화면에 투영한 픽셀로 레이를 역투영하면 그 레이가 원래 점을 지나야 한다.
+    /// 원점은 화면 중앙에, 카메라 뒤쪽 점은 투영 결과가 null이어야 한다.
+    /// </summary>
     [Fact]
     public void Project_Unproject_RoundTrip()
     {
@@ -36,6 +49,10 @@ public class RayPickerTests
         Assert.Null(cam.Project(new Vector3(0, 0, 10), out _));
     }
 
+    /// <summary>
+    /// 레이-AABB 교차(피킹 전 조기 거절용): 명중/빗나감, 박스 뒤쪽 방향, 박스 안에서 출발, 축 평행 레이(성분 0),
+    /// 두께 0인 평평한 박스(패딩으로 통과)를 모두 올바르게 처리하는지 확인한다.
+    /// </summary>
     [Fact]
     public void RayBox_RejectsMissAndAcceptsHit()
     {
@@ -51,6 +68,10 @@ public class RayPickerTests
         Assert.True(RayPicker.RayIntersectsBox(new Ray(new Vector3(0, 2, 0), new Vector3(0, -1, 0)), new Vector3(-1, 0, -1), new Vector3(1, 0, 1)));
     }
 
+    /// <summary>
+    /// 화면 바운드 필터: 큐브가 보이는 화면 중앙은 포함 가능, 먼 구석은 제외되어야 한다.
+    /// 카메라가 메시 안/가까이에 있어 바운드 코너가 카메라 뒤로 넘어가면 투영이 불가능하므로 보수적으로 true여야 한다.
+    /// </summary>
     [Fact]
     public void ScreenBounds_FilterTargets()
     {
@@ -62,6 +83,10 @@ public class RayPickerTests
         Assert.True(RayPicker.ScreenBoundsMayContain(targets[0], near, new Vector2(10, 10), 6f));
     }
 
+    /// <summary>
+    /// 스킨 변형 등으로 <c>UpdatePositions</c>가 위치를 바꾸면 피킹 바운드도 따라가야 한다.
+    /// X로 1.5 옮긴 뒤에는 원래 자리(화면 중앙)에서는 안 집히고 새 위치에서는 집혀야 한다.
+    /// </summary>
     [Fact]
     public void PickFace_UsesBounds_AfterDeformUpdate()
     {
@@ -75,6 +100,7 @@ public class RayPickerTests
         Assert.NotNull(RayPicker.PickFace(targets, cam, px));
     }
 
+    /// <summary>화면 중앙을 클릭하면 카메라를 향한 +Z 면이 깊이 4.5(=5-0.5)로 집히고, 빈 곳은 null이어야 한다.</summary>
     [Fact]
     public void PickFace_HitsFrontFace()
     {
@@ -86,6 +112,10 @@ public class RayPickerTests
         Assert.Null(RayPicker.PickFace(targets, cam, new Vector2(10, 10)));
     }
 
+    /// <summary>
+    /// 정점 피킹은 커서에서 몇 픽셀 떨어져도 화면상 가장 가까운 정점을 골라야 한다.
+    /// 앞면에 가려진 뒤쪽 정점은 camera-based 모드에서는 선택되지 않고, camera-based를 끄면 선택되어야 한다.
+    /// </summary>
     [Fact]
     public void PickVertex_NearestOnScreen_AndCameraBasedOcclusion()
     {
@@ -99,6 +129,7 @@ public class RayPickerTests
         Assert.Equal(v, hit.Value.Component);
 
         // 뒤쪽 정점 (0.5, 0.5, -0.5)은 앞면에 가려져 camera-based에서는 선택되지 않음
+        // 뒤쪽 정점: 앞면 뒤에 있어 camera-based에서는 가려진다. 임계를 2px로 좁혀 다른 정점이 대신 집히지 않게 한다.
         int back = -1;
         for (int i = 0; i < mesh.VertexCount; i++) if (mesh.Verts[i].Position == new Vector3(0.5f, 0.5f, -0.5f)) back = i;
         var bpx = cam.Project(mesh.Verts[back].Position, out _)!.Value;
@@ -108,6 +139,7 @@ public class RayPickerTests
         Assert.NotNull(bhit2);
     }
 
+    /// <summary>앞면 위쪽 엣지 중점 근처(2px 아래)를 클릭하면 바로 그 엣지(양 끝 (-0.5,0.5,0.5)~(0.5,0.5,0.5))가 집혀야 한다.</summary>
     [Fact]
     public void PickEdge_FindsTopFrontEdge()
     {
@@ -121,6 +153,10 @@ public class RayPickerTests
         Assert.True((pa == a && pb == b) || (pa == b && pb == a));
     }
 
+    /// <summary>
+    /// 화면 전체 마키: camera-based면 보이는 앞면 정점 4개만, 아니면 8개 모두가 선택되어야 한다.
+    /// 면 모드는 보이는 면 1개, 오브젝트 모드는 오브젝트 1개, 아무것도 없는 작은 영역은 빈 결과여야 한다.
+    /// </summary>
     [Fact]
     public void Marquee_SelectsFrontVerticesOnly_WhenCameraBased()
     {
@@ -137,6 +173,10 @@ public class RayPickerTests
         Assert.Empty(none);
     }
 
+    /// <summary>
+    /// 직교 카메라(Z=10에서 -Z를 봄)로 X=2에 놓인 큐브의 앞면 점을 투영하면 깊이가 9.5이고,
+    /// 그 픽셀에서 면 피킹이 오브젝트 월드 행렬을 반영해 +Z 면을 집어야 한다.
+    /// </summary>
     [Fact]
     public void Ortho_ProjectAndPick()
     {

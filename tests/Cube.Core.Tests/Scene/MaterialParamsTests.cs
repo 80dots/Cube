@@ -7,6 +7,10 @@ namespace Cube.Core.Tests.Scene;
 /// <summary>머티리얼 파라미터 표·텍스처 슬롯·glTF 확장 판정·.cube 왕복.</summary>
 public class MaterialParamsTests
 {
+    /// <summary>
+    /// 새 PBR 머티리얼의 기본값(색 0.5 회색, roughness 0.5, ior 1.5, alpha 1)과
+    /// 예전 속성 접근자(TexturePath ↔ "color" 텍스처 슬롯)가 파라미터 표와 연결되어 있는지, 기본 상태에서 glTF 확장이 필요 없는지 확인한다.
+    /// </summary>
     [Fact]
     public void Defaults_And_LegacyAccessors()
     {
@@ -22,6 +26,10 @@ public class MaterialParamsTests
         Assert.Empty(m.UsedExtensions());
     }
 
+    /// <summary>
+    /// Float/Color 값 파라미터는 glTF에 텍스처 슬롯이 없는 스칼라(<c>noSlot</c> 목록)를 제외하고 모두 텍스처 가능해야 한다.
+    /// 예전부터 있던 기본 파라미터도 텍스처 가능 여부가 유지되는지 확인한다.
+    /// </summary>
     [Fact]
     public void EveryValueParamIsTexturableExceptGltfScalars()
     {
@@ -33,6 +41,10 @@ public class MaterialParamsTests
         foreach (var k in new[] { "color", "specular", "shininess", "metallic", "roughness" }) Assert.True(MaterialParams.Get(k)!.Texturable);
     }
 
+    /// <summary>
+    /// 기본값이 아닌 값이나 텍스처가 지정된 파라미터만 해당 glTF 확장(KHR_materials_*, KHR_texture_transform)을 요구해야 한다.
+    /// 타입을 Lambert로 바꾸면 PBR 전용 확장은 빠지고 UV 변환 확장만 남는지 확인한다.
+    /// </summary>
     [Fact]
     public void UsedExtensions_FollowNonDefaultValuesAndTextures()
     {
@@ -48,6 +60,7 @@ public class MaterialParamsTests
         Assert.Equal(new HashSet<string> { "KHR_texture_transform" }, m.UsedExtensions().ToHashSet());
     }
 
+    /// <summary>Clone/ValuesEqual/CopyFrom이 값 사전뿐 아니라 텍스처 사전까지 복사·비교하는지 확인한다.</summary>
     [Fact]
     public void CloneCopyEquality_IncludeValuesAndTextures()
     {
@@ -61,6 +74,10 @@ public class MaterialParamsTests
         Assert.True(a.ValuesEqual(b));
     }
 
+    /// <summary>
+    /// 확장 파라미터 값(transmission, ior, attenuationColor, alphaMode 등)과 확장 텍스처 슬롯이
+    /// .cube 직렬화(<c>values</c>/<c>textures</c>)를 거쳐 그대로 복원되는지 확인한다.
+    /// </summary>
     [Fact]
     public void CubeFile_RoundTripsAllParameters()
     {
@@ -82,6 +99,10 @@ public class MaterialParamsTests
         Assert.Equal("C:/t/ccn.png", m2.Tex("clearcoatNormal"));
     }
 
+    /// <summary>
+    /// v0.0.35 이하 파일(색 + texture 필드)을 불러오면 텍스처 경로는 유지하고 색을 흰색으로 보정해야 한다.
+    /// 현재 규칙은 텍스처 × 색(곱셈)이므로, 보정하지 않으면 예전 파일이 어둡게 보이게 된다.
+    /// </summary>
     [Fact]
     public void LegacyFile_ColorTextureKeepsLook()
     {

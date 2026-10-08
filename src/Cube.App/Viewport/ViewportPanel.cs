@@ -9,24 +9,45 @@ namespace Cube.App.Viewport;
 /// 3D 뷰포트 위젯. SubViewport에 자체 World3D를 두고 카메라·헤드라이트·그리드·SceneView를 담는다.
 /// 입력은 이 컨테이너의 _GuiInput에서만 받아 내비게이션 → 파이 메뉴 → 툴 순으로 넘긴다.
 /// </summary>
+/// <remarks>
+/// ViewportLayout이 4개(top/persp/front/side)를 만든다. 각 패널은 자체 World3D라 SceneView(문서 미러)·그리드·조작기 루트를 따로 가진다.
+/// 노드 구성: SubViewport[Background(캔버스 그라디언트), WorldEnvironment, Camera(+HeadLight 자식), Grid, Scene, Gizmos] + Overlay(2D) + PieMenu + Hud.
+/// 입력 파이프라인(<see cref="_GuiInput"/>): 모달 툴(Alt 없는 마우스 버튼) → <see cref="NavigationHandler"/>(Alt+버튼/휠) → 파이 메뉴(RMB) → <see cref="ToolInput"/>(현재 툴).
+/// <c>_PropagateInputEvent</c>가 false라 SubViewport 안으로 입력이 전달되지 않는다(모든 피킹은 CPU에서 Picker가 한다).
+/// </remarks>
 public partial class ViewportPanel : SubViewportContainer
 {
+    /// <summary>처음 시작할 뷰 방향(_Ready 전에 ViewportLayout이 설정). Persp가 아니면 직교 프리셋으로 시작한다.</summary>
     public ViewKind InitialView = ViewKind.Persp;
 
+    /// <summary>3D 장면을 렌더링하는 SubViewport(OwnWorld3D, 입력은 로컬 처리 안 함).</summary>
     public SubViewport Viewport { get; private set; } = null!;
+    /// <summary>패널 카메라(Godot 노드).</summary>
     public Camera3D Camera { get; private set; } = null!;
+    /// <summary>궤도 카메라 상태·프리셋 애니메이션 컨트롤러.</summary>
     public ViewportCamera CameraController { get; private set; } = null!;
+    /// <summary>Maya Alt 내비게이션 입력 해석기.</summary>
     public NavigationHandler Navigation { get; private set; } = null!;
+    /// <summary>카메라에 붙은 방향광(헤드라이트, Maya Default Lighting). Lit 모드가 아닐 때만 켠다.</summary>
     public DirectionalLight3D HeadLight { get; private set; } = null!;
+    /// <summary>바닥 그리드(측면 프리셋 뷰에서는 뷰 평면으로 세운다).</summary>
     public GridView Grid { get; private set; } = null!;
+    /// <summary>문서 DAG 미러(메시·조인트·라이트 뷰).</summary>
     public SceneView Scene { get; private set; } = null!;
+    /// <summary>2D 오버레이(축 기즈모, 카메라 이름, 마키, 브러시, Poly Count).</summary>
     public ViewportOverlay Overlay { get; private set; } = null!;
+    /// <summary>우상단 HUD(뷰 큐브, 셰이딩 모드 버튼 등).</summary>
     public ViewportHud Hud { get; private set; } = null!;
+    /// <summary>조작기(Gizmo) 노드를 붙이는 루트. 툴이 활성 패널의 이 노드로 조작기를 옮긴다.</summary>
     public Node3D GizmoRoot { get; private set; } = null!;
+    /// <summary>셰이딩 모드·선택 상태를 MeshView 스타일로 바꾸는 표시 상태.</summary>
     public ViewportDisplay Display { get; private set; } = null!;
+    /// <summary>이 패널의 파이 메뉴 위젯.</summary>
     public UI.PieMenu Pie { get; private set; } = null!;
 
+    /// <summary><see cref="Picker"/> 지연 생성 캐시.</summary>
     private Picker? _picker;
+    /// <summary>이 패널의 피커(화면 좌표 → 오브젝트/컴포넌트). 처음 접근할 때 만든다.</summary>
     public Picker Picker => _picker ??= new Picker(this);
 
     /// <summary>내비게이션/파이가 소비하지 않은 이벤트를 받는다(툴 라우팅). true를 반환하면 소비.</summary>
@@ -34,21 +55,31 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>RMB 파이 메뉴 항목 공급자(shift 여부 → 항목). Shell이 설정한다.</summary>
     /// <summary>(shift, ctrl) → 파이 항목. RMB = 기본(모드), Shift+RMB = Edit, Ctrl+RMB = Select.</summary>
     public Func<bool, bool, IEnumerable<UI.PieItem>>? PieItems;
+    /// <summary>파이 메뉴에서 고른 항목을 실행하는 콜백(Shell이 설정; 보통 ActionRegistry 액션 또는 항목의 Run).</summary>
     public Action<UI.PieItem>? PieExecute;
     /// <summary>마우스가 들어오거나 버튼이 눌리면 발생(활성 패널 전환).</summary>
     public event Action? Activated;
 
+    /// <summary>바인드된 문서(_Ready 전에 Bind되면 _Ready에서 SceneView에 연결).</summary>
     private Document? _doc;
+    /// <summary>World 배경이 Canvas일 때 보이는 세로 그라디언트 배경.</summary>
     private TextureRect _background = null!;
 
+    /// <summary>배경 그라디언트 위쪽 색 순환 목록(<see cref="CycleBackground"/>). 첫 항목만 아래쪽이 더 어두운 그라디언트다.</summary>
     public static readonly Color[] BackgroundCycle =
     {
         MathConvert.Rgb(0x3a3a3a), MathConvert.Rgb(0x161616), MathConvert.Rgb(0x4a4a4a), MathConvert.Rgb(0x8a8a8a),
     };
+    /// <summary>현재 배경 색 인덱스.</summary>
     private int _bgIndex;
 
+    /// <summary>
+    /// 패널 자식 노드를 모두 코드로 만든다(SubViewport, 배경, 환경, 카메라·헤드라이트, 그리드, SceneView, 조작기 루트, 오버레이, 파이, HUD).
+    /// 이미 문서가 Bind되어 있으면 연결하고, 마지막에 렌더 설정을 적용한다.
+    /// </summary>
     public override void _Ready()
     {
+        // 컨테이너 설정: SubViewport를 패널 크기로 늘리고, 마우스/키보드 포커스를 받는다
         Stretch = true;
         MouseFilter = MouseFilterEnum.Stop;
         FocusMode = FocusModeEnum.All;
@@ -56,6 +87,7 @@ public partial class ViewportPanel : SubViewportContainer
         SizeFlagsVertical = SizeFlags.ExpandFill;
         CustomMinimumSize = new Vector2(200, 150);
 
+        // 자체 World3D를 가진 SubViewport(MSAA 4x, 항상 렌더)
         Viewport = new SubViewport
         {
             Name = "SubViewport",
@@ -66,6 +98,7 @@ public partial class ViewportPanel : SubViewportContainer
         };
         AddChild(Viewport);
 
+        // 기본 배경: 위 → 아래 세로 그라디언트 텍스처(Canvas 배경 모드에서 보임)
         var gradient = new Gradient();
         gradient.SetColor(0, BackgroundCycle[0]);
         gradient.SetColor(1, MathConvert.Rgb(0x2a2a2a));
@@ -74,6 +107,7 @@ public partial class ViewportPanel : SubViewportContainer
         _background.SetAnchorsPreset(LayoutPreset.FullRect);
         Viewport.AddChild(_background);
 
+        // 환경: 기본은 캔버스 배경 + 약한 흰색 앰비언트, 선형 톤 매핑(IBL·톤 매핑은 ApplyRenderSettings가 덮어씀)
         _env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Canvas,
@@ -84,14 +118,17 @@ public partial class ViewportPanel : SubViewportContainer
         };
         Viewport.AddChild(new WorldEnvironment { Name = "Env", Environment = _env });
 
+        // 카메라와 컨트롤러·내비게이션
         Camera = new Camera3D { Name = "Camera", Fov = 45, Near = 0.05f, Far = 10000f, Current = true };
         Viewport.AddChild(Camera);
         CameraController = new ViewportCamera(Camera, InitialView);
         Navigation = new NavigationHandler(this);
 
+        // 헤드라이트는 카메라 자식이라 항상 시선 방향으로 비춘다
         HeadLight = new DirectionalLight3D { Name = "HeadLight", LightEnergy = 1.0f, ShadowEnabled = false };
         Camera.AddChild(HeadLight);
 
+        // 3D 내용: 그리드, 문서 미러, 조작기 루트
         Grid = new GridView { Name = "Grid" };
         Viewport.AddChild(Grid);
         Scene = new SceneView { Name = "Scene" };
@@ -102,16 +139,19 @@ public partial class ViewportPanel : SubViewportContainer
         GizmoRoot = new Node3D { Name = "Gizmos" };
         Viewport.AddChild(GizmoRoot);
 
+        // 2D 위젯: 오버레이와 파이 메뉴(SubViewportContainer의 자식이라 3D 위에 그려짐)
         Overlay = new ViewportOverlay { Name = "Overlay", Camera = Camera };
         AddChild(Overlay);
         Pie = new UI.PieMenu { Name = "PieMenu" };
         AddChild(Pie);
 
+        // 표시 상태와 카메라 변경 연동(뷰 이름 라벨, 측면 뷰 그리드 방향)
         Display = new ViewportDisplay(this);
         CameraController.Changed += () => { Overlay.CameraLabel = CameraController.Label; UpdateGridOrientation(); };
         Overlay.CameraLabel = CameraController.Label;
         UpdateGridOrientation();
 
+        // 우상단 HUD(오른쪽 위 앵커, 왼쪽으로 자라게)
         float s = CubeApp.Instance.UiScale;
         Hud = new ViewportHud { Name = "Hud" };
         Hud.SetAnchorsPreset(LayoutPreset.TopRight);
@@ -126,13 +166,17 @@ public partial class ViewportPanel : SubViewportContainer
         ApplyRenderSettings();
     }
 
+    /// <summary>패널 WorldEnvironment의 환경(IBL·톤 매핑·포스트 이펙트 설정 대상).</summary>
     private Godot.Environment _env = null!;
+    /// <summary>IBL용 Sky(처음 IBL을 켤 때 만든다).</summary>
     private Sky? _sky;
+    /// <summary>HDRI 하늘 셰이더 머티리얼(<see cref="HdriBlur.SkyShader"/>).</summary>
     private ShaderMaterial? _skyMat;
 
     /// <summary>Settings.Render(IBL HDRI/세기/회전/배경, 톤 매핑/노출, SSAO, MSAA/FXAA, 헤드라이트/그림자)를 이 패널에 적용한다.</summary>
     public void ApplyRenderSettings()
     {
+        // HDRI 로드(IBL이 꺼졌거나 실패하면 null → 일반 앰비언트 색)
         var r = CubeApp.Instance.Settings.Render;
         var tex = r.IblEnabled ? HdriLibrary.Load(r) : null;
         bool ibl = tex != null;
@@ -148,30 +192,36 @@ public partial class ViewportPanel : SubViewportContainer
             _env.Sky = _sky;
         }
         else _env.Sky = null;
+        // 앰비언트·반사 조명 소스: IBL이면 하늘, 아니면 단색 앰비언트 + 반사 없음
         _env.AmbientLightSource = ibl ? Godot.Environment.AmbientSource.Sky : Godot.Environment.AmbientSource.Color;
         _env.AmbientLightSkyContribution = 1f;
         _env.AmbientLightEnergy = ibl ? r.IblIntensity : 0.18f;
         _env.ReflectedLightSource = ibl ? Godot.Environment.ReflectionSource.Sky : Godot.Environment.ReflectionSource.Disabled;
+        // 배경: IBL + Show Background면 하늘, 아니면 캔버스 그라디언트. 하늘 회전은 Y축(도 → 라디안)
         bool showSky = ibl && r.ShowBackground;
         _env.BackgroundMode = showSky ? Godot.Environment.BGMode.Sky : Godot.Environment.BGMode.Canvas;
         _env.BackgroundEnergyMultiplier = ibl ? MathF.Max(r.IblIntensity, 0.01f) : 1f;
         _env.SkyRotation = new Vector3(0, Mathf.DegToRad(r.IblRotation), 0);
         _background.Visible = !showSky;
+        // 톤 매핑·노출·SSAO·안티앨리어싱(MSAA 단계, SMAA > FXAA)
         _env.TonemapMode = (Godot.Environment.ToneMapper)Math.Clamp(r.Tonemap, 0, 4);
         _env.TonemapExposure = r.Exposure;
         _env.SsaoEnabled = r.Ssao;
         Viewport.Msaa3D = r.Msaa switch { 0 => Godot.Viewport.Msaa.Disabled, 1 => Godot.Viewport.Msaa.Msaa2X, 2 => Godot.Viewport.Msaa.Msaa4X, _ => Godot.Viewport.Msaa.Msaa8X };
         Viewport.ScreenSpaceAA = r.Smaa ? Godot.Viewport.ScreenSpaceAAEnum.Smaa : r.Fxaa ? Godot.Viewport.ScreenSpaceAAEnum.Fxaa : Godot.Viewport.ScreenSpaceAAEnum.Disabled;
         ApplyPostEffects(r);
+        // 헤드라이트·그림자, 씬 라이트(그림자 설정 반영)
         HeadLight.Visible = r.Headlight && Display.Mode != ShadingMode.Lit;
         HeadLight.ShadowEnabled = r.Shadows;
         foreach (var lv in Scene.LightViews.Values) lv.Refresh();
     }
 
+    /// <summary>DOF·자동 노출용 카메라 속성(필요할 때만 만들어 카메라에 연결).</summary>
     private CameraAttributesPractical? _camAttr;
 
     /// <summary>Post Effects(Render Settings → Post Effects, Render 메뉴/셸프): Godot Environment·CameraAttributes·Viewport 기능을 켠다.</summary>
     private void ApplyPostEffects(App.RenderSettings r)
+    /// <remarks>Glow/SSR/SSIL/SDFGI/Fog/Volumetric Fog/Adjustments는 Environment, DOF·자동 노출은 CameraAttributesPractical, TAA·디밴딩은 Viewport 속성이다.</remarks>
     {
         _env.GlowEnabled = r.Glow;
         _env.GlowIntensity = r.GlowIntensity;
@@ -193,6 +243,7 @@ public partial class ViewportPanel : SubViewportContainer
         _env.AdjustmentBrightness = r.Brightness;
         _env.AdjustmentContrast = r.Contrast;
         _env.AdjustmentSaturation = r.Saturation;
+        // 카메라 속성 효과가 하나라도 켜져 있을 때만 CameraAttributes를 연결(없으면 null로 기본 동작)
         bool camFx = r.DofFar || r.DofNear || r.AutoExposure;
         if (camFx)
         {
@@ -214,6 +265,7 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>front/side/back/left 같은 측면 프리셋 뷰에서는 그리드를 뷰 평면에 세운다(Maya와 동일). 텀블하면 바닥으로 돌아간다.</summary>
     private void UpdateGridOrientation()
     {
+        // Front/Back = X축 90° 회전(XY 평면), Side/Left = Z축 90° 회전(YZ 평면), 나머지 = 바닥(XZ)
         Grid.Transform = CameraController.Kind switch
         {
             ViewKind.Front or ViewKind.Back => new Transform3D(Basis.FromEuler(new Vector3(Mathf.Pi / 2, 0, 0)), Vector3.Zero),
@@ -222,17 +274,22 @@ public partial class ViewportPanel : SubViewportContainer
         };
     }
 
+    /// <summary>매 프레임 카메라 프리셋 애니메이션을 진행한다.</summary>
     public override void _Process(double delta) => CameraController?.Update((float)delta);
 
+    /// <summary>문서를 연결한다. _Ready 전이면 저장만 해 두고 _Ready에서 SceneView/Display에 연결한다.</summary>
     public void Bind(Document doc)
     {
         _doc = doc;
         if (Scene != null) { Scene.Bind(doc); Display.Bind(doc); }
     }
 
+    /// <summary>바인드된 문서.</summary>
     public Document? Document => _doc;
+    /// <summary>패널 종횡비(가로/세로, 높이 0이면 1). 프레임 계산에 쓴다.</summary>
     public float Aspect => Size.Y > 0 ? Size.X / Size.Y : 1f;
 
+    /// <summary>뷰 프리셋으로 전환하고 HUD를 갱신한다(뷰 큐브·Space 파이·메뉴에서 호출).</summary>
     public void SetView(ViewKind kind)
     {
         CameraController.SetView(kind);
@@ -240,6 +297,7 @@ public partial class ViewportPanel : SubViewportContainer
     }
 
     /// <summary>F: 선택을 프레임, 선택이 없으면 전체(A).</summary>
+    /// <remarks>오브젝트 선택 + 컴포넌트를 가진 노드의 월드 AABB(컴포넌트 모드면 선택 컴포넌트 정점만)를 합쳐 카메라를 맞춘다.</remarks>
     public void FrameSelected()
     {
         if (_doc == null) return;
@@ -257,6 +315,7 @@ public partial class ViewportPanel : SubViewportContainer
         CameraController.Frame(total.Value, Aspect);
     }
 
+    /// <summary>A: 모든 메시 노드의 월드 AABB에 카메라를 맞춘다(메시가 없으면 원점 주변 12×12 영역).</summary>
     public void FrameAll()
     {
         if (_doc == null) return;
@@ -270,6 +329,7 @@ public partial class ViewportPanel : SubViewportContainer
         CameraController.Frame(total ?? new Aabb(new Vector3(-6, 0, -6), new Vector3(12, 0.01f, 12)), Aspect);
     }
 
+    /// <summary>메시 뷰의 렌더 점(정점)들을 월드로 변환해 감싼 AABB(변형·스킨 표시 위치 반영). 메시가 없거나 비면 null.</summary>
     private Aabb? ObjectAabb(NodeId id)
     {
         var mv = Scene.GetMeshView(id);
@@ -284,6 +344,9 @@ public partial class ViewportPanel : SubViewportContainer
         return box;
     }
 
+    /// <summary>
+    /// 컴포넌트 모드에서 이 노드에 선택된 컴포넌트가 있으면 그 정점들(엣지 = 양끝, 면 = 모든 정점)의 월드 AABB, 아니면 오브젝트 AABB.
+    /// </summary>
     private Aabb? ComponentOrObjectAabb(NodeId id)
     {
         if (_doc == null) return null;
@@ -294,6 +357,7 @@ public partial class ViewportPanel : SubViewportContainer
         if (mv == null || node?.Mesh == null) return null;
         var mesh = node.Mesh;
         var xf = mv.GlobalTransform;
+        // 선택된 정점·엣지 양끝·면 정점을 하나의 정점 집합으로 모은다
         var verts = new HashSet<int>();
         var tmp = new List<int>();
         foreach (int v in comps.Verts) verts.Add(v);
@@ -309,6 +373,7 @@ public partial class ViewportPanel : SubViewportContainer
         return box;
     }
 
+    /// <summary>배경 색을 다음 프리셋으로 순환한다(첫 색만 그라디언트, 나머지는 단색).</summary>
     public void CycleBackground()
     {
         _bgIndex = (_bgIndex + 1) % BackgroundCycle.Length;
@@ -327,13 +392,16 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>현재 툴이 모달(대화형)인지. 셸이 설정한다.</summary>
     public Func<bool>? ModalTool;
 
+    /// <summary>패널 입력 진입점. 활성 패널 표시·포커스를 처리한 뒤 모달 툴 → 내비게이션 → 파이 → 툴 순으로 넘기고, 소비되면 AcceptEvent.</summary>
     public override void _GuiInput(InputEvent e)
     {
+        // 마우스 이벤트마다 마지막 위치 기록, 처음 들어오면 활성 패널로. 버튼을 누르면 키보드 포커스도 가져온다
         if (e is InputEventMouse me) { LastMouseLocal = me.Position; if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); } }
         if (e is InputEventMouseButton { Pressed: true }) { GrabFocus(); Activated?.Invoke(); }
         bool modal = ModalTool?.Invoke() == true;
         // 모달 툴: 휠과 Alt 없는 마우스 버튼은 줌/파이보다 먼저 툴로(Blender Bevel의 휠 = 세그먼트, RMB = 취소)
         if (modal && e is InputEventMouseButton { AltPressed: false } && ToolInput != null && ToolInput(e)) { AcceptEvent(); return; }
+        // 내비게이션이 처리했거나 내비게이션 드래그 중이면 다른 처리 없이 소비
         if (Navigation.Handle(e)) { AcceptEvent(); return; }
         if (Navigation.IsDragging) { AcceptEvent(); return; }
         if (!modal && HandlePie(e)) { AcceptEvent(); return; }
@@ -344,6 +412,7 @@ public partial class ViewportPanel : SubViewportContainer
     private bool HandlePie(InputEvent e)
     {
         if (Pie == null) return false;
+        // RMB 누름: 열린 sticky 서브 파이는 닫고, 아니면 (Shift, Ctrl) 조합에 맞는 파이를 연다. RMB 뗌: 하이라이트 항목 실행
         switch (e)
         {
             case InputEventMouseButton { ButtonIndex: MouseButton.Right } mb:
@@ -361,6 +430,7 @@ public partial class ViewportPanel : SubViewportContainer
                     return true;
                 }
                 return false;
+            // 파이가 열린 동안: 이동 = 하이라이트 갱신, sticky면 LMB 클릭 = 선택, 그 밖의 버튼은 삼킨다
             case InputEventMouseMotion mm when Pie.IsOpen:
                 Pie.UpdatePointer(mm.Position);
                 return true;
@@ -384,10 +454,13 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>키보드(Space)로 여는 파이: 현재 마우스 위치에 연다.</summary>
     public void OpenPieAtMouse(IEnumerable<UI.PieItem> items) => Pie.Open(items, LastMouseLocal);
 
+    /// <summary>열린 파이를 닫고 하이라이트된 항목을 돌려준다(Space 파이를 키를 뗄 때 실행하기 위해). 닫혀 있으면 null.</summary>
     public UI.PieItem? ReleasePie() => Pie.IsOpen ? Pie.Release() : null;
 
+    /// <summary>마우스가 이 패널 위에 있는지(MouseEnter/Exit 알림과 마우스 이벤트로 갱신).</summary>
     public bool IsMouseOver { get; private set; }
 
+    /// <summary>크기 변경 계측, 앱 포커스 상실 시 내비게이션·파이 취소, 마우스 진입/이탈 추적.</summary>
     public override void _Notification(int what)
     {
         if (what == NotificationResized) UiPerf.Count("vpResize");
@@ -406,5 +479,6 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>Maya V 홀드(또는 상태 라인 Snap to Points 토글): 점(정점) 스냅. 점 스냅이 그리드 스냅보다 우선한다.</summary>
     public bool IsPointSnapHeld => (UI.Shell.Instance?.Hotkeys.HeldKeys.Contains(Key.V) ?? false) || CubeApp.Instance.Settings.SnapToPoints;
 
+    /// <summary>입력을 SubViewport 안으로 전파하지 않는다(3D 노드는 입력을 받지 않고 모든 처리는 <see cref="_GuiInput"/>에서).</summary>
     public override bool _PropagateInputEvent(InputEvent @event) => false;
 }

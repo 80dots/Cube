@@ -4,6 +4,11 @@ using Cube.Core.Mesh;
 
 namespace Cube.Core.Tests.IO;
 
+/// <summary>
+/// 가져오기 경로의 <c>TriangleSoupToPolyMesh</c>(코너 분리 삼각형 배열 → 용접된 PolyMesh)를 검증한다:
+/// 위치 용접, 노멀 불연속으로 하드 엣지 추론, 공면 삼각형 쌍 → 쿼드 병합(UV 심이면 병합 안 함),
+/// 대형 메시 성능, 쌍 키 해시 분산, 부품 태그별 용접 분리, 정점 출처(스킨 가중치 매핑용) 보존.
+/// </summary>
 public class TriangleSoupTests
 {
     /// <summary>PolyMesh → 삼각형 배열(코너 언롤) → 다시 PolyMesh.</summary>
@@ -20,6 +25,10 @@ public class TriangleSoupTests
         return s;
     }
 
+    /// <summary>
+    /// 큐브를 삼각형 수프(코너 24개)로 풀었다가 변환하면 정점 8·면 6(쿼드 복원)·엣지 12로 돌아오고,
+    /// 모든 엣지가 하드로 추론되며 면 법선이 바깥을 향하는지 확인한다.
+    /// </summary>
     [Fact]
     public void Cube_RoundTrip_RestoresQuadsAndHardEdges()
     {
@@ -36,6 +45,9 @@ public class TriangleSoupTests
         for (int f = 0; f < m.FaceCount; f++) if (m.Faces[f].Alive) Assert.True(Vector3.Dot(m.Faces[f].Normal, m.FaceCentroid(f)) > 0);
     }
 
+    /// <summary>
+    /// 부드러운 구를 왕복하면 정점 수가 같고 하드 엣지가 하나도 없으며(노멀 연속), 쿼드가 복원되어 면 수도 같고 오일러 2인지 확인한다.
+    /// </summary>
     [Fact]
     public void Sphere_RoundTrip_IsSmooth()
     {
@@ -49,6 +61,9 @@ public class TriangleSoupTests
         Assert.Equal(2, m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount);
     }
 
+    /// <summary>
+    /// 공면 삼각형 두 개라도 공유 엣지에서 UV가 다르면(UV 심) 쿼드로 합치면 UV가 깨지므로 삼각형 2개로 남겨야 한다.
+    /// </summary>
     [Fact]
     public void Plane_WithUvSeam_KeepsSeamTriangles()
     {
@@ -95,6 +110,9 @@ public class TriangleSoupTests
         Assert.True(sw.ElapsedMilliseconds < 5000, $"80k tris took {sw.ElapsedMilliseconds} ms");
     }
 
+    /// <summary>
+    /// 정점 쌍을 long 키로 쓰는 사전의 비교자가 (a, a+1) 같은 이웃 쌍을 고르게 흩뜨리는지(1만 개 중 9900개 이상 서로 다른 해시) 확인한다.
+    /// </summary>
     [Fact]
     public void PairKeyComparer_SpreadsNeighbouringPairs()
     {
@@ -104,6 +122,10 @@ public class TriangleSoupTests
         Assert.True(hashes.Count > 9900);
     }
 
+    /// <summary>
+    /// 한 정점에서 맞닿은 두 삼각형도 WeldTag(부품 구분)가 다르면 용접하지 않아 정점 6개, 태그가 없으면 용접되어 5개가 되어야 한다.
+    /// 정점 출처 배열은 모든 정점을 덮고 원래 코너 인덱스 범위 안이어야 한다.
+    /// </summary>
     [Fact]
     public void WeldTag_KeepsTouchingPartsApart_AndVertexSourceCoversEveryVertex()
     {
@@ -119,6 +141,10 @@ public class TriangleSoupTests
         Assert.All(src, x => Assert.InRange(x.Index, 0, 5));
     }
 
+    /// <summary>
+    /// 같은 방향 엣지를 가진 세 번째 삼각형은 정점을 복제해 살리는데, 이렇게 복제된 정점도 출처 정보가 있어야
+    /// 스킨 가중치가 누락되지 않는다. 모든 정점의 출처 코너 위치가 실제 정점 위치와 같은지 확인한다.
+    /// </summary>
     [Fact]
     public void NonManifoldDuplicates_HaveVertexSource()
     {

@@ -3,10 +3,18 @@ using Cube.Core.Camera;
 
 namespace Cube.Core.Tests.Camera;
 
+/// <summary>
+/// Maya식 피벗 기반 카메라 <c>OrbitCamera</c>를 검증한다: 기본 시점, 텀블(Alt+LMB)/트랙(Alt+MMB)/돌리(Alt+RMB·휠),
+/// 프레임(F), 직교 프리셋 방향, 원근 ↔ 직교 전환 시 화면 크기 유지.
+/// </summary>
 public class OrbitCameraTests
 {
+    /// <summary>두 벡터 사이 거리가 <paramref name="eps"/>보다 작은지 판정하는 근사 비교 도우미.</summary>
     private static bool Near(Vector3 a, Vector3 b, float eps = 1e-3f) => Vector3.Distance(a, b) < eps;
 
+    /// <summary>
+    /// 기본 카메라가 (2.8, 2.1, 2.8)에서 원점(피벗)을 바라보고, 위쪽 벡터가 대체로 +Y이며, 거리가 약 4.49인지 확인한다.
+    /// </summary>
     [Fact]
     public void MayaDefault_LooksAtOriginFrom28_21_28()
     {
@@ -18,6 +26,7 @@ public class OrbitCameraTests
         Assert.True(MathF.Abs(c.Distance - 4.49f) < 0.02f);
     }
 
+    /// <summary>텀블은 피벗을 중심으로 궤도 회전만 하므로 거리·피벗이 그대로이고 여전히 피벗을 바라봐야 한다.</summary>
     [Fact]
     public void Tumble_KeepsDistanceAndPivot()
     {
@@ -30,6 +39,7 @@ public class OrbitCameraTests
         Assert.True(Vector3.Dot(c.Forward, Vector3.Normalize(c.Pivot - c.Eye)) > 0.9999f);
     }
 
+    /// <summary>아주 큰 세로 드래그에도 피치가 ±MaxPitch로 제한되어 극점에서 뒤집히지 않는지 확인한다.</summary>
     [Fact]
     public void Tumble_ClampsPitch()
     {
@@ -38,6 +48,9 @@ public class OrbitCameraTests
         Assert.True(c.Pitch >= -OrbitCamera.MaxPitch - 1e-6f && c.Pitch <= OrbitCamera.MaxPitch + 1e-6f);
     }
 
+    /// <summary>
+    /// 트랙(팬)은 피벗을 시선에 수직인 평면 안에서만 옮겨야 하고, 오른쪽 드래그는 장면을 오른쪽으로 끌므로 피벗은 왼쪽(-Right)으로 가야 한다.
+    /// </summary>
     [Fact]
     public void Track_MovesPivotInViewPlane()
     {
@@ -48,6 +61,10 @@ public class OrbitCameraTests
         Assert.True(Vector3.Dot(c.Pivot, c.Right) < 0);           // 오른쪽 드래그 → 장면이 오른쪽으로 → 피벗은 왼쪽
     }
 
+    /// <summary>
+    /// 돌리는 지수적(같은 드래그량이면 같은 비율로 거리 변화)이어야 하고, 반대 방향이면 멀어지며,
+    /// 아무리 당겨도 MinDistance 아래로 내려가지 않는지 확인한다.
+    /// </summary>
     [Fact]
     public void Dolly_IsExponential_AndMovesTowardPivot()
     {
@@ -64,6 +81,9 @@ public class OrbitCameraTests
         Assert.Equal(OrbitCamera.MinDistance, c.Distance);
     }
 
+    /// <summary>
+    /// (-1..1) 바운드를 프레임하면 피벗이 중심으로 오고, 거리 = 외접구 반지름 / sin(FOV/2) × 여유 1.05가 되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Frame_FitsBounds()
     {
@@ -75,6 +95,9 @@ public class OrbitCameraTests
         Assert.True(MathF.Abs(c.Distance - r / MathF.Sin(fov / 2) * 1.05f) < 1e-3f);
     }
 
+    /// <summary>
+    /// 직교 프리셋(Front/Top/Side/Back/Left/Bottom)의 시선 방향이 Maya 규약과 같은지, 직교 프리셋에서는 텀블이 무시되는지 확인한다.
+    /// </summary>
     [Fact]
     public void OrthoPresets_FaceTheRightWay()
     {
@@ -91,6 +114,10 @@ public class OrbitCameraTests
         Assert.True(Near(OrbitCamera.Preset(ViewKind.Bottom).Forward, Vector3.UnitY));
     }
 
+    /// <summary>
+    /// 원근 → 직교 전환 시 OrthoSize = 2·거리·tan(FOV/2)로 같은 화면 크기를 유지하고, AllowOrthoTumble이면 직교에서도 텀블이 되며,
+    /// 다시 원근으로 돌아오면 원래 거리가 복원되는지 확인한다.
+    /// </summary>
     [Fact]
     public void ToggleOrtho_KeepsFraming_AndPerspCanTumbleInOrtho()
     {

@@ -5,8 +5,13 @@ using Cube.Core.Scene;
 
 namespace Cube.Core.Tests.IO;
 
+/// <summary>
+/// <c>UvTransfer.ApplyByFaceOrder</c>(RizomUV 등 외부 UV 툴 왕복)를 검증한다.
+/// 같은 토폴로지의 소스 메시에서 면 순서·코너 순서대로 UV만 복사하고, UV가 불연속인 엣지를 심으로 표시해야 한다.
+/// </summary>
 public class UvTransferTests
 {
+    /// <summary>면 <paramref name="f"/>의 코너(하프에지 루프 순서)에 주어진 UV를 차례로 써 넣는 도우미. 개수가 코너 수와 같아야 한다.</summary>
     private static void SetFaceUvsInOrder(PolyMesh m, int f, params Vector2[] uvs)
     {
         var loop = new List<int>();
@@ -15,6 +20,11 @@ public class UvTransferTests
         for (int i = 0; i < n; i++) { var h = m.Hes[loop[i]]; h.Uv0 = uvs[i]; m.Hes[loop[i]] = h; }
     }
 
+    /// <summary>
+    /// 트랜스폼이 있는 큐브를 월드 베이크 OBJ로 쓰고 다시 읽어(외부 툴 왕복 흉내) 소스로 삼는다.
+    /// 소스에서 두 면을 공유 엣지 v1-v2로 이어 붙이고 한 면을 평행이동한 뒤 전송하면, 6면 모두 UV가 복사되고
+    /// 연속인 v1-v2만 심이 아니며 나머지 11개 엣지는 모두 심으로 표시되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Cube_ObjRoundTrip_ModifyUvs_ApplyByFaceOrder_CopiesUvsAndMarksSeams()
     {
@@ -60,6 +70,10 @@ public class UvTransferTests
         Assert.Empty(MeshValidator.Check(target));
     }
 
+    /// <summary>
+    /// 코너 수가 다른 면(소스 삼각형 vs 대상 쿼드)은 건너뛰고(skipped 1) 맞는 면만 전송해야 한다.
+    /// 또한 처음에 모두 심이었던 대상에서 경계 엣지는 심이 해제되고, UV가 불연속인 내부 엣지만 심으로 남는지 확인한다.
+    /// </summary>
     [Fact]
     public void ApplyByFaceOrder_SkipsFacesWithDifferentCornerCount_AndClearsBoundarySeams()
     {
@@ -93,6 +107,7 @@ public class UvTransferTests
         }
     }
 
+    /// <summary>소스 면 수가 대상보다 적으면(평면 1면 vs 큐브 6면) 짝이 없는 대상 면 5개를 skipped로 세어야 한다.</summary>
     [Fact]
     public void ApplyByFaceOrder_SourceWithFewerFaces_CountsMissingAsSkipped()
     {

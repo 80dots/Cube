@@ -12,17 +12,30 @@ namespace Cube.App.UI;
 /// </summary>
 public partial class MaterialEditorWindow : FloatingPanel
 {
+    /// <summary>문서·Undo·선택 할당에 쓰는 셸.</summary>
     private Shell _shell = null!;
+    /// <summary>머티리얼 목록(항목 메타데이터 = 머티리얼 ID).</summary>
     private ItemList _list = null!;
+    /// <summary>New 버튼으로 만들 머티리얼 타입 선택(MaterialType 열거 순서).</summary>
     private OptionButton _newType = null!;
+    /// <summary>선택 머티리얼의 속성 편집기(오른쪽).</summary>
     private MaterialPropsEditor _props = null!;
+    /// <summary>목록 아이콘으로 쓰는 구 썸네일 렌더러(이 패널의 자식 노드).</summary>
     private MaterialThumbnails _thumbs = null!;
+    /// <summary>List / Thumbnails 보기 전환 토글 버튼.</summary>
     private Button _viewList = null!, _viewThumbs = null!;
+    /// <summary>선택 머티리얼이 할당된 노드 이름 목록을 보여 주는 라벨.</summary>
     private Label _assigned = null!;
+    /// <summary>현재 선택된 머티리얼 ID(0 = 없음 또는 기본 lambert1).</summary>
     private int _selectedId;
 
+    /// <summary>현재 선택된 머티리얼 ID(파이 메뉴 등 외부에서 읽음).</summary>
     public int SelectedId => _selectedId;
 
+    /// <summary>
+    /// 패널을 만든다: 왼쪽(목록, 보기 전환, New/Delete/Assign 버튼)과 오른쪽(스크롤되는 속성 편집기, 할당 대상 라벨).
+    /// 문서의 머티리얼/노드 변경과 선택 변경을 구독해 목록·라벨을 갱신하고, 저장된 보기 모드를 적용한다.
+    /// </summary>
     public void Setup(Shell shell)
     {
         _shell = shell;
@@ -50,8 +63,10 @@ public partial class MaterialEditorWindow : FloatingPanel
         head.AddChild(_viewList); head.AddChild(_viewThumbs);
         left.AddChild(head);
         _list = new ItemList { SizeFlagsVertical = Control.SizeFlags.ExpandFill, FocusMode = Control.FocusModeEnum.Click };
+        // 목록에서 고르면 그 머티리얼을 속성 편집기에 띄우고 할당 대상 라벨을 갱신한다.
         _list.ItemSelected += i => { _selectedId = (int)_list.GetItemMetadata((int)i); _props.SetMaterial(_selectedId); RefreshAssignedLabel(); };
         left.AddChild(_list);
+        // 새 머티리얼: 타입 드롭다운 + New.
         var newRow = new HBoxContainer();
         _newType = new OptionButton { FocusMode = Control.FocusModeEnum.None, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         foreach (var t in Enum.GetNames<MaterialType>()) _newType.AddItem(t);
@@ -60,6 +75,7 @@ public partial class MaterialEditorWindow : FloatingPanel
         btnNew.Pressed += NewMaterial;
         newRow.AddChild(btnNew);
         left.AddChild(newRow);
+        // 삭제(DeleteMaterialCommand, Undo 가능)와 선택 오브젝트에 할당.
         var row2 = new HFlowContainer(); // 좁아지면 줄바꿈
         var btnDel = new Button { Text = "Delete", FocusMode = Control.FocusModeEnum.None };
         btnDel.Pressed += () => { if (_selectedId > 0) _shell.Document.Undo.Push(new DeleteMaterialCommand(_selectedId)); };
@@ -68,6 +84,7 @@ public partial class MaterialEditorWindow : FloatingPanel
         btnAssign.Pressed += () => { if (_selectedId > 0) _shell.AssignMaterialToSelection(_selectedId); };
         row2.AddChild(btnAssign);
         left.AddChild(row2);
+        // 기본 머티리얼(ID 0 = lambert1)로 되돌리기.
         var btnDefault = new Button { Text = "Assign Default (lambert1)", FocusMode = Control.FocusModeEnum.None };
         btnDefault.Pressed += () => _shell.AssignMaterialToSelection(0);
         left.AddChild(btnDefault);
@@ -87,11 +104,16 @@ public partial class MaterialEditorWindow : FloatingPanel
         right.AddChild(_assigned);
         root.AddChild(right);
 
+        // 머티리얼 추가/삭제/변경, 문서 리셋, 노드 추가/삭제(할당 라벨에 영향) 때 목록을 다시 만든다.
         shell.Document.Changed += c => { if (c.Kind is ChangeKind.MaterialChanged or ChangeKind.Reset or ChangeKind.NodeRemoved or ChangeKind.NodeAdded) RefreshList(); };
         shell.Document.Selection.Changed += () => RefreshAssignedLabel();
         SetThumbnails(CubeApp.Instance.Settings.MaterialThumbnails, save: false);
     }
 
+    /// <remarks>
+    /// Thumbnails: 아이콘 위·글자 아래, 여러 열(MaxColumns 0 = 폭에 맞춰 자동), 아이콘 = 썸네일 크기.
+    /// List: 아이콘 왼쪽 20px, 한 열. save가 true면 설정에 보기 모드를 저장한다. 마지막에 목록을 다시 채운다.
+    /// </remarks>
     /// <summary>List ↔ Thumbnails 보기.</summary>
     public void SetThumbnails(bool thumbs, bool save = true)
     {
@@ -111,8 +133,13 @@ public partial class MaterialEditorWindow : FloatingPanel
         RefreshList();
     }
 
+    /// <summary>현재 썸네일 보기인지(토글 버튼 상태).</summary>
     public bool ThumbnailsShown => _viewThumbs.ButtonPressed;
 
+    /// <summary>
+    /// 선택한 타입으로 고유 이름의 새 머티리얼을 만들어 AddMaterialCommand로 추가(Undo 가능)하고 선택한다.
+    /// PBR은 금속성 0·거칠기 0.5, Matcap은 흰색을 기본값으로 둔다.
+    /// </summary>
     private void NewMaterial()
     {
         var type = (MaterialType)_newType.Selected;
@@ -125,6 +152,10 @@ public partial class MaterialEditorWindow : FloatingPanel
         RefreshList();
     }
 
+    /// <summary>
+    /// 문서 머티리얼로 목록을 다시 채운다(각 항목에 썸네일 아이콘, 메타데이터 = ID). 사라진 머티리얼의 썸네일은 정리한다.
+    /// 이전 선택 ID가 없으면 첫 머티리얼을 고르고, 속성 편집기와 할당 라벨도 그 선택에 맞춘다.
+    /// </summary>
     public void RefreshList()
     {
         var doc = _shell.Document;
@@ -146,6 +177,7 @@ public partial class MaterialEditorWindow : FloatingPanel
         RefreshAssignedLabel();
     }
 
+    /// <summary>선택 머티리얼을 MaterialId로 가진 노드 이름들을 "Assigned to:" 라벨에 표시한다.</summary>
     private void RefreshAssignedLabel()
     {
         var doc = _shell.Document;
@@ -155,6 +187,7 @@ public partial class MaterialEditorWindow : FloatingPanel
         _assigned.Text = users.Count == 0 ? "Assigned to: (none)" : "Assigned to: " + string.Join(", ", users);
     }
 
+    /// <summary>보이면 닫고, 숨겨져 있으면 열면서 목록을 새로 채운다(Windows → Material Editor).</summary>
     public void Toggle()
     {
         if (Visible) { Close(); return; }

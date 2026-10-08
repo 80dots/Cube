@@ -5,10 +5,16 @@ using Cube.Core.Uv;
 
 namespace Cube.Core.Tests.Uv;
 
+/// <summary>
+/// UV 기본 연산(<c>UvTopology</c>, 투영, Cut/Sew, Layout, Unfold, <c>UvEditCommand</c>)을 검증한다.
+/// UV 점·셸은 심이 아닌 엣지에서 UV가 같은 코너를 합쳐 만들어진다.
+/// </summary>
 public class UvOpsTests
 {
+    /// <summary>살아 있는 모든 면 ID를 나열한다(투영 대상 = 메시 전체).</summary>
     private static IEnumerable<int> AllFaces(PolyMesh m) => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive);
 
+    /// <summary>기본 큐브는 면마다 독립된 0..1 UV를 가지므로 UV 점 24개(코너마다 하나), 셸 6개여야 한다.</summary>
     [Fact]
     public void Cube_DefaultUvs_AreSixShells()
     {
@@ -19,6 +25,10 @@ public class UvOpsTests
         Assert.Equal(6, t.ShellCount);
     }
 
+    /// <summary>
+    /// 2x1 평면을 위(+Y)에서 평면 투영하면 연결된 셸 1개(UV 점 6개)가 0..1 안에 들어가고,
+    /// 종횡비를 유지해 u 범위 1, v 범위 0.5가 되어야 한다.
+    /// </summary>
     [Fact]
     public void PlanarProject_MakesOneShell_InUnitSquare()
     {
@@ -33,6 +43,10 @@ public class UvOpsTests
         Assert.True(MathF.Abs((vmax - vmin) - 0.5f) < 1e-4f);
     }
 
+    /// <summary>
+    /// 원기둥 옆면에 원통 투영을 하면 랩 이음매 한 곳만 심이 되어 셸 1개이고,
+    /// 어떤 면도 u가 0↔1로 튀는(면 내부 u 범위 &gt;= 0.5) 불연속을 갖지 않아야 한다.
+    /// </summary>
     [Fact]
     public void Cylindrical_OnCylinderSides_IsContinuous()
     {
@@ -50,6 +64,9 @@ public class UvOpsTests
         }
     }
 
+    /// <summary>
+    /// 평면 투영한 2x2 평면에서 가운데 세로선의 내부 엣지 2개를 Cut하면 셸이 2개로 나뉘고, 같은 엣지를 Sew하면 다시 1개가 되어야 한다.
+    /// </summary>
     [Fact]
     public void CutAndSew_ChangeShellCount()
     {
@@ -66,6 +83,9 @@ public class UvOpsTests
         Assert.Equal(1, UvTopology.Build(m).ShellCount);
     }
 
+    /// <summary>
+    /// 큐브 셸 6개를 Layout하면 모든 셸 바운딩 박스가 0..1 안에 있고 서로 겹치지 않아야 한다.
+    /// </summary>
     [Fact]
     public void Layout_PacksShellsIntoUnitSquare_WithoutOverlap()
     {
@@ -89,6 +109,10 @@ public class UvOpsTests
             }
     }
 
+    /// <summary>
+    /// 2x1 평면의 UV를 세로로 2배 늘려 1:1로 찌그러뜨린 뒤 UnfoldRelax(핀 0번)를 돌리면
+    /// 실제 3D 비율인 2:1로 돌아와야 한다(회전 자유도 때문에 긴 변/짧은 변 비율로 비교).
+    /// </summary>
     [Fact]
     public void UnfoldRelax_RestoresProportions()
     {
@@ -107,6 +131,9 @@ public class UvOpsTests
         Assert.True(MathF.Abs(ratio - 2f) < 0.15f, $"ratio {ratio}");
     }
 
+    /// <summary>
+    /// <c>UvEditCommand</c>로 큐브를 평면 투영(셸 1개)한 뒤 Undo하면 원래 코너 UV와 셸 6개로, Redo하면 다시 셸 1개로 돌아와야 한다.
+    /// </summary>
     [Fact]
     public void UvEditCommand_UndoRedo()
     {
@@ -124,10 +151,16 @@ public class UvOpsTests
     }
 }
 
+/// <summary>원통 투영 결과에 대한 Layout 회귀 테스트(경계를 넘는 u 값이 있는 셸도 단위 사각형 안으로 배치되는지).</summary>
 public class UvLayoutCylinderTests
 {
+    /// <summary>살아 있는 모든 면 ID를 나열한다.</summary>
     private static IEnumerable<int> AllFaces(PolyMesh m) => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive);
 
+    /// <summary>
+    /// 캡 있는 16분할 원기둥에 원통 투영 후 Layout하면 UV가 실제로 바뀌어야 하고(아무것도 안 하는 회귀 방지),
+    /// 모든 UV 점이 0..1 범위 안에 들어가야 한다.
+    /// </summary>
     [Fact]
     public void Cylinder_Cylindrical_Then_Layout_FitsUnitSquare()
     {

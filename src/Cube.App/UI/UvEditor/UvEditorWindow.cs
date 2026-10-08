@@ -6,17 +6,30 @@ namespace Cube.App.UI.UvEditor;
 /// <summary>
 /// UV 편집기(플로팅 패널): 메뉴 바(Edit / Create / Select / Cut-Sew / Modify / Tools / View / Image / Textures / UV Sets, Maya UV Editor 구성)
 /// + 아이콘 툴바(모드/투영/편집/Auto Seam·Wrap/Frame/배경) + UvCanvas.
+/// 동작: 메뉴·툴바 버튼은 모두 ActionRegistry의 액션 ID만 호출한다(<c>uv.*</c>는 ShellUvActions/ShellUvActions2에 등록).
+/// 메뉴 줄과 툴바는 HFlowContainer라서 패널이 좁아지면 여러 줄로 넘어간다(v0.0.35). 모드 버튼은 선택 모드/Island 모드 변경에,
+/// 액션 버튼은 Undo·선택 변경에 맞춰 눌림/활성 상태를 다시 계산한다. 도크에 붙거나 뗄 때 캔버스를 다시 프레임한다.
 /// </summary>
 public partial class UvEditorWindow : FloatingPanel
 {
+    /// <summary>소유 셸(액션 레지스트리·메뉴 빌더·문서·헬프 라인 접근).</summary>
     private Shell _shell = null!;
+    /// <summary>UV를 그리고 편집하는 캔버스. 셸의 UV 액션들이 이 속성으로 캔버스에 접근한다.</summary>
     public UvCanvas Canvas { get; private set; } = null!;
+    /// <summary>모드 토글 버튼(키: object/uv/edge/face/island). <see cref="RefreshModes"/>가 눌림 상태를 맞춘다.</summary>
     private readonly Dictionary<string, Button> _modeButtons = new();
+    /// <summary>툴바의 액션 버튼과 액션 ID 쌍. <see cref="RefreshEnabled"/>가 활성/체크 상태를 갱신한다.</summary>
     private readonly List<(Button b, string action)> _actionButtons = new();
+    /// <summary>배경 선택 드롭다운(항목 순서 = <see cref="UvBackground"/> 값 순서).</summary>
     private OptionButton _background = null!;
     /// <summary>메뉴 줄: 패널이 좁으면 다음 줄로 넘어가도록 MenuBar 대신 메뉴 버튼들을 흐름 컨테이너에 둔다.</summary>
     private HFlowContainer _menuBar = null!;
 
+    /// <summary>
+    /// 패널을 구성한다: 크기·최소 크기, 캔버스 생성, 메뉴 줄, 아이콘 툴바(모드 | 투영 | 편집 | Auto Seam/Wrap | 캔버스 툴 | Frame | 배경), 캔버스 순서로 Content에 추가.
+    /// 이후 선택 모드·Island 모드·Undo·선택 변경 이벤트를 구독해 버튼 상태를 맞춘다.
+    /// </summary>
+    /// <param name="shell">소유 셸.</param>
     public void Setup(Shell shell)
     {
         _shell = shell;
@@ -24,24 +37,29 @@ public partial class UvEditorWindow : FloatingPanel
         Title = "UV Editor";
         // 도크에 붙거나 떨어지면 캔버스 크기가 바뀌므로 레이아웃이 끝난 뒤 다시 맞춘다
         DockChanged += () => Canvas.FrameOnResize(); // 자리 잡는 동안 크기가 바뀔 때마다 바로 프레임(타이머 없음)
+        // 초기 크기는 기본값과 화면의 80%×85% 중 작은 값.
         var host = shell.GetViewport().GetVisibleRect().Size;
         Size = new Vector2(MathF.Min(860 * s, host.X * 0.8f), MathF.Min(720 * s, host.Y * 0.85f));
         MinPanelSize = new Vector2(260 * s, 300 * s); // 툴바·메뉴가 줄바꿈되므로 좁게 줄일 수 있다
 
+        // 캔버스는 메뉴 빌드 전에 만든다(메뉴/액션이 Canvas를 참조할 수 있음).
         Canvas = new UvCanvas();
         Canvas.Setup(shell);
 
+        // 메뉴 줄(간격 0).
         _menuBar = new HFlowContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         _menuBar.AddThemeConstantOverride("h_separation", 0);
         _menuBar.AddThemeConstantOverride("v_separation", 0);
         BuildMenus();
         Content.AddChild(_menuBar);
 
+        // 아이콘 크기(px, 배율 적용).
         int icon = (int)(18 * s);
         // 툴바: 패널 폭이 모자라면 버튼이 다음 줄(2줄, 3줄…)로 넘어가 모두 보인다
         var bar = new HFlowContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         bar.AddThemeConstantOverride("h_separation", (int)(2 * s));
         bar.AddThemeConstantOverride("v_separation", (int)(2 * s));
+        // 선택 모드 버튼(토글). 누르면 모드 액션을 호출하고, 실제 눌림 상태는 RefreshModes가 결정한다.
         foreach (var (key, iconName, action, tip) in new[] {
             ("object", "mode_object", "mode.object", "Object Mode"), ("uv", "mode_uv", "mode.uv", "UV Mode (F12)"),
             ("edge", "mode_edge", "mode.edge", "Edge Mode (F10)"), ("face", "mode_face", "mode.face", "Face Mode (F11)"),
@@ -51,22 +69,28 @@ public partial class UvEditorWindow : FloatingPanel
             string a = action; b.Pressed += () => shell.Actions.Invoke(a);
             _modeButtons[key] = b; bar.AddChild(b);
         }
+        // 투영 버튼들.
         bar.AddChild(new VSeparator());
         foreach (var (action, iconName) in new[] { ("uv.automaticApply", "uv_automatic"), ("uv.planarBest", "uv_planar"), ("uv.planarX", "uv_planar_x"), ("uv.planarY", "uv_planar_y"), ("uv.planarZ", "uv_planar_z"), ("uv.cylindrical", "uv_cylindrical"), ("uv.spherical", "uv_spherical") })
             bar.AddChild(ActionButton(action, iconName, icon));
+        // 편집 버튼들(Unfold/Optimize/Layout/Straighten/Cut/Sew/Flip/Pin).
         bar.AddChild(new VSeparator());
         foreach (var (action, iconName) in new[] { ("uv.unfold", "uv_unfold"), ("uv.optimize", "uv_optimize"), ("uv.layoutApply", "uv_layout"), ("uv.straightenApply", "uv_straighten"), ("uv.cut", "uv_cut"), ("uv.sew", "uv_sew"), ("uv.flipU", "uv_flip_u"), ("uv.flipV", "uv_flip_v"), ("uv.pin", "uv_pin") })
             bar.AddChild(ActionButton(action, iconName, icon));
+        // 자동 심/자동 랩.
         bar.AddChild(new VSeparator());
         foreach (var (action, iconName) in new[] { ("uv.autoSeams", "uv_autoseam"), ("uv.autoWrap", "uv_autowrap") })
             bar.AddChild(ActionButton(action, iconName, icon));
+        // 캔버스 툴(토글 — IsChecked로 현재 툴 표시).
         bar.AddChild(new VSeparator());
         foreach (var (action, iconName) in new[] { ("uv.toolTweak", "uv_tweak"), ("uv.toolGrab", "uv_brush"), ("uv.toolCutSew", "uv_cutsew") })
             bar.AddChild(ActionButton(action, iconName, icon, toggle: true));
+        // 프레임 버튼(선택 영역 프레임).
         bar.AddChild(new VSeparator());
         var frame = Icons.IconButton("uv_frame", "Frame selection (F) / all (A)", icon);
         frame.Pressed += () => Canvas.FrameSelected();
         bar.AddChild(frame);
+        // 배경 드롭다운: 기본은 UV Texture.
         bar.AddChild(new VSeparator());
         _background = new OptionButton { FocusMode = Control.FocusModeEnum.None, TooltipText = "Background" };
         foreach (var name in new[] { "No Background", "Grid", "UV Texture", "Mapped Texture", "Checker Map" }) _background.AddItem(name);
@@ -76,6 +100,7 @@ public partial class UvEditorWindow : FloatingPanel
         Content.AddChild(bar);
         Content.AddChild(Canvas);
 
+        // 버튼 상태 동기화 구독.
         shell.Document.Selection.ModeChanged += RefreshModes;
         Canvas.IslandModeChanged += RefreshModes;
         shell.Document.Undo.Changed += RefreshEnabled;
@@ -83,8 +108,13 @@ public partial class UvEditorWindow : FloatingPanel
         RefreshModes(); RefreshEnabled();
     }
 
+    /// <summary>
+    /// Maya UV Editor 구성의 메뉴들을 만든다. 각 메뉴는 <c>MenuButton</c>(SwitchOnHover로 메뉴 사이 이동)의 팝업에
+    /// <c>MenuBuilder</c>로 액션 항목을 채운다. <c>Op(id)</c>는 실행 항목과 "Options..." 항목을 함께 넣는다.
+    /// </summary>
     private void BuildMenus()
     {
+        // 메뉴 버튼 하나를 메뉴 줄에 추가하고 그 팝업을 돌려주는 로컬 함수(노드 이름은 "Uv" + 공백/슬래시 제거한 제목).
         PopupMenu Add(string title)
         {
             var mb = new MenuButton { Text = title, Flat = true, FocusMode = Control.FocusModeEnum.None, SwitchOnHover = true, Name = "Uv" + title.Replace(" ", "").Replace("/", "") };
@@ -118,10 +148,20 @@ public partial class UvEditorWindow : FloatingPanel
     }
 
     /// <summary>배경 옵션 순환(파이 메뉴용): None → Grid → UV Texture → Mapped → Checker → ...</summary>
+    /// <remarks>배경 종류는 5개이므로 (현재 + 1) mod 5. 드롭다운 표시도 함께 맞춘다.</remarks>
     public void CycleBackground() => SetBackground((UvBackground)(((int)Canvas.Background + 1) % 5));
 
+    /// <summary>캔버스 배경을 설정하고 드롭다운 선택을 같은 값으로 맞춘다(액션/파이에서 호출).</summary>
     public void SetBackground(UvBackground bg) { Canvas.Background = bg; _background.Selected = (int)bg; }
 
+    /// <summary>
+    /// 액션을 실행하는 아이콘 버튼을 만들고 상태 갱신 목록에 등록한다. 툴팁은 액션 라벨(없으면 ID).
+    /// </summary>
+    /// <param name="action">액션 ID.</param>
+    /// <param name="iconName">내장 아이콘 이름.</param>
+    /// <param name="icon">아이콘 크기(px).</param>
+    /// <param name="toggle">토글 버튼 여부(IsChecked 표시).</param>
+    /// <returns>만든 버튼.</returns>
     private Button ActionButton(string action, string iconName, int icon, bool toggle = false)
     {
         var a = _shell.Actions.Get(action);
@@ -131,6 +171,10 @@ public partial class UvEditorWindow : FloatingPanel
         return b;
     }
 
+    /// <summary>
+    /// 모드 버튼의 눌림 상태를 현재 선택 모드에 맞춘다. Island는 UV 모드 + 캔버스 IslandMode인 경우이며 이때 UV 버튼은 눌리지 않는다.
+    /// SetPressedNoSignal로 Pressed 이벤트(=액션 재호출)를 일으키지 않는다.
+    /// </summary>
     private void RefreshModes()
     {
         var mode = _shell.Document.Selection.Mode;
@@ -142,6 +186,7 @@ public partial class UvEditorWindow : FloatingPanel
         _modeButtons["island"].SetPressedNoSignal(island);
     }
 
+    /// <summary>툴바 액션 버튼을 액션의 Enabled(CanExecute)로 활성화하고, 토글 버튼은 IsChecked로 눌림 상태를 맞춘다.</summary>
     private void RefreshEnabled()
     {
         foreach (var (b, action) in _actionButtons)
@@ -155,6 +200,7 @@ public partial class UvEditorWindow : FloatingPanel
     /// <summary>UV Snapshot: 저장 다이얼로그 → 캔버스 영역 PNG.</summary>
     public void SaveSnapshot()
     {
+        // 네이티브 저장 다이얼로그(파일 시스템 전체 접근). 결과는 헬프 라인에 표시하고 다이얼로그는 닫힐 때 해제한다.
         var fd = new FileDialog { FileMode = FileDialog.FileModeEnum.SaveFile, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Title = "UV Snapshot" };
         fd.AddFilter("*.png", "PNG");
         fd.CurrentFile = "uv_snapshot.png";
@@ -164,6 +210,9 @@ public partial class UvEditorWindow : FloatingPanel
         fd.PopupCentered();
     }
 
+    /// <summary>
+    /// 패널 열기/닫기 토글. 열 때 캔버스 캐시를 무효화하고, 레이아웃이 잡힌 다음 프레임에 전체 프레임(FrameAll)을 지연 호출한다.
+    /// </summary>
     public void Toggle()
     {
         if (Visible) { Close(); return; }

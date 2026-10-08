@@ -5,10 +5,17 @@ using Cube.Core.Scene;
 
 namespace Cube.Core.Tests.IO;
 
+/// <summary>
+/// FBX 애니메이션 내보내기(<c>FbxSceneBuilder.Animation</c>)와 애니메이션의 .cube 왕복을 검증한다.
+/// 클립마다 AnimationStack + BaseLayer + AnimationCurveNode(T/R/S) + 축별 AnimationCurve가 올바르게 연결되고,
+/// 시간은 KTime(초당 46186158000), 이동은 cm, 회전은 오일러 언랩, 피벗 노드는 베이크 공식으로 기록되어야 한다.
+/// </summary>
 public class FbxAnimationTests
 {
+    /// <summary>FBX KTime 단위로 1초에 해당하는 틱 수.</summary>
     private const long Tick = 46186158000L;
 
+    /// <summary>축과 각도(도)로 쿼터니언을 만드는 도우미.</summary>
     private static Quaternion Deg(Vector3 axis, float deg) => Quaternion.CreateFromAxisAngle(axis, deg * MathF.PI / 180f);
 
     /// <summary>조인트 체인 3개 + 피벗이 있는 일반 노드, 클립 하나.</summary>
@@ -40,12 +47,20 @@ public class FbxAnimationTests
         return (doc, j0, j1, j2, plain);
     }
 
+    /// <summary>
+    /// 내보낸 FBX를 다시 읽은 결과와 조회 도우미 묶음: 최상위 노드, Objects 노드, (자식, 부모, 속성) 연결 목록.
+    /// </summary>
     private sealed class Parsed
     {
+        /// <summary>파일의 최상위 노드 목록(GlobalSettings, Definitions, Takes 등).</summary>
         public required List<FbxNode> Top;
+        /// <summary>모든 오브젝트(Model/Geometry/Animation* 등)를 담은 Objects 노드.</summary>
         public required FbxNode Objects;
+        /// <summary>Connections의 C 레코드를 (자식 ID, 부모 ID, OP 연결의 속성 이름 또는 null)로 풀어 둔 목록.</summary>
         public required List<(long child, long parent, string? prop)> Conns;
+        /// <summary>첫 속성(오브젝트 ID)이 <paramref name="id"/>인 Objects 자식을 찾는다.</summary>
         public FbxNode Obj(long id) => Objects.Children.First(o => o.Props.Count > 0 && o.Props[0] is long l && l == id);
+        /// <summary>"Model::이름" 식별자를 가진 Model 노드의 ID를 돌려준다.</summary>
         public long ModelId(string name) => Objects.All("Model").First(m => FbxNode.ReadableId(m.Prop<string>(1)) == "Model::" + name).Prop<long>(0);
         /// <summary>모델에 연결된 커브 노드(속성 이름 → 노드).</summary>
         public Dictionary<string, FbxNode> CurveNodes(string model)
@@ -53,14 +68,20 @@ public class FbxAnimationTests
             long mid = ModelId(model);
             return Conns.Where(c => c.parent == mid && c.prop != null && c.prop.StartsWith("Lcl ")).ToDictionary(c => c.prop!, c => Obj(c.child));
         }
+        /// <summary>커브 노드에 축 속성(<c>d|X</c>/<c>d|Y</c>/<c>d|Z</c>)으로 연결된 AnimationCurve 노드를 찾는다.</summary>
         public FbxNode Curve(FbxNode curveNode, string axis)
         {
             long cn = curveNode.Prop<long>(0);
             return Obj(Conns.Single(c => c.parent == cn && c.prop == axis).child);
         }
+        /// <summary>커브 노드의 지정 축 커브에서 키 값 배열(KeyValueFloat)을 꺼낸다.</summary>
         public float[] Values(FbxNode curveNode, string axis) => Curve(curveNode, axis).Child("KeyValueFloat")!.Prop<float[]>(0);
     }
 
+    /// <summary>
+    /// 지정 루트들을 FbxSceneBuilder로 빌드해 바이너리로 쓰고 다시 읽어 <see cref="Parsed"/>로 돌려준다(실제 파일 왕복과 같은 경로).
+    /// </summary>
+    /// <param name="opt">내보내기 옵션(null이면 기본값).</param>
     private static Parsed BuildAndRead(Document doc, IReadOnlyList<SceneNode> roots, FbxExportOptions? opt = null)
     {
         var top = new FbxSceneBuilder(doc, opt).Build(roots);
@@ -70,6 +91,12 @@ public class FbxAnimationTests
         return new Parsed { Top = nodes, Objects = nodes.First(n => n.Name == "Objects"), Conns = conns };
     }
 
+    /// <summary>
+    /// 클립 "walk"를 내보내 구조 전체를 검증한다: AnimStack 시작/끝 시간(1초), BaseLayer ↔ 스택 연결,
+    /// hip의 T/S 커브 노드(회전 키가 없으면 R 노드 없음)와 키 시간·cm 값·키 속성 플래그·Default 값,
+    /// knee 회전 170 → 179 → -179가 181로 언랩되는지, 키 없는 ankle엔 커브 노드가 없는지,
+    /// Takes·GlobalSettings(30fps → TimeMode 6)·Definitions 개수(커브 = 커브 노드 × 3)까지 확인한다.
+    /// </summary>
     [Fact]
     public void Export_WritesStackLayerCurveNodesAndCurves()
     {
@@ -140,6 +167,10 @@ public class FbxAnimationTests
         Assert.Equal(3 * defs["AnimationCurveNode"], defs["AnimationCurve"]);
     }
 
+    /// <summary>
+    /// 피벗이 있는 노드의 이동 커브: 기본(BakePivots)은 T = P·R + p 공식으로 베이크되어 (0,200,-100)cm가 되어야 하고,
+    /// 베이크하지 않으면 Rotation/ScalingPivot 모델에 맞춘 T = p + P·R − P가 기록되어야 한다.
+    /// </summary>
     [Fact]
     public void Export_PivotNode_BakesTranslationFormula()
     {
@@ -160,6 +191,9 @@ public class FbxAnimationTests
         Assert.Equal(-100f, p2.Values(t2, "d|Z")[0], 3);
     }
 
+    /// <summary>
+    /// 피벗 베이크로 부모 정점이 −P만큼 옮겨졌으므로, 그 자식의 이동 키에서는 부모 피벗만큼(−1m → −100cm) 빼야 월드 위치가 유지된다.
+    /// </summary>
     [Fact]
     public void Export_ChildOfPivotedParent_SubtractsParentShift()
     {
@@ -178,6 +212,9 @@ public class FbxAnimationTests
         Assert.Equal(-100f, p.Values(t, "d|Y")[0], 3);
     }
 
+    /// <summary>
+    /// 부모 없이 자식만 내보내면 자식이 루트가 되므로 이동 키에 부모 월드 변환(Y +5m)이 베이크되어 (100, 500)cm가 되어야 한다.
+    /// </summary>
     [Fact]
     public void Export_ChildExportedAlone_BakesParentWorld()
     {
@@ -196,6 +233,10 @@ public class FbxAnimationTests
         Assert.Equal(500f, p.Values(t, "d|Y")[0], 3);
     }
 
+    /// <summary>
+    /// 내보내는 모델의 트랙만 커브가 된다(prop만 내보내면 T+R 커브 노드 2개).
+    /// <c>ExportAnimations = false</c>면 AnimationStack과 Take가 전혀 기록되지 않아야 한다.
+    /// </summary>
     [Fact]
     public void Export_OnlyExportedModelsGetCurves_AndOptionDisables()
     {
@@ -207,6 +248,9 @@ public class FbxAnimationTests
         Assert.Empty(off.Top.First(n => n.Name == "Takes").All("Take"));
     }
 
+    /// <summary>
+    /// 오일러 언랩: 각 성분을 이전 키에 가장 가까운 ±360° 등가각으로 바꿔야 한다(-179 → 181, 350 → -10). 보간 시 반대로 한 바퀴 도는 것을 막는다.
+    /// </summary>
     [Fact]
     public void UnwrapEuler_PicksClosestEquivalent()
     {
@@ -214,6 +258,10 @@ public class FbxAnimationTests
         Assert.Equal(181f, u.X, 3); Assert.Equal(10f, u.Y, 3); Assert.Equal(-10f, u.Z, 3);
     }
 
+    /// <summary>
+    /// 클립(이름·루프·프레임레이트·길이)과 트랙(노드 참조·이름·위치/회전/스케일 키)이 .cube 왕복 후 그대로인지 확인한다.
+    /// 애니메이션이 없는 문서는 animations 필드를 쓰지 않고, 그런 파일을 불러오면 기존 클립이 지워져야 한다.
+    /// </summary>
     [Fact]
     public void CubeFile_RoundTripsAnimations()
     {

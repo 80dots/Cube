@@ -10,13 +10,25 @@ using NVec2 = System.Numerics.Vector2;
 namespace Cube.App.Viewport;
 
 /// <summary>Godot 카메라/뷰에서 CameraProjection과 PickTarget 목록을 만들어 RayPicker를 호출한다.</summary>
+/// <remarks>
+/// 패널마다 하나 있으며 툴(SelectTool, 변형 툴, 모델링 툴)과 조작기가 화면 좌표 → 컴포넌트/오브젝트 변환에 쓴다.
+/// 실제 판정(레이-삼각형, 화면 거리 임계, 가림 처리, 마키)은 코어 <c>RayPicker</c>가 하고, 여기서는 Godot 카메라·뷰 노드에서 입력을 모으고
+/// 조인트/라이트처럼 메시가 아닌 대상을 화면 거리로 직접 판정한다. 모든 픽셀 임계값은 UI 배율(<see cref="Scale"/>)을 곱한다.
+/// </remarks>
 public sealed class Picker
 {
+    /// <summary>피킹 대상 뷰(카메라·SceneView)를 가진 패널.</summary>
     private readonly ViewportPanel _panel;
+    /// <summary>패널을 받아 피커를 만든다.</summary>
     public Picker(ViewportPanel panel) { _panel = panel; }
 
+    /// <summary>픽셀 임계값에 곱할 UI 배율(Hi-DPI × 사용자 배율).</summary>
     public float Scale => CubeApp.Instance.UiScale;
 
+    /// <summary>
+    /// 현재 Godot 카메라 상태로 코어 <c>CameraProjection</c>(월드 행렬, 직교 여부, 수직 FOV 라디안, 직교 크기, near/far, 뷰포트 픽셀 크기)을 만든다.
+    /// 호출할 때마다 새로 만들므로 카메라가 움직인 직후에도 정확하다.
+    /// </summary>
     public CameraProjection Projection()
     {
         var cam = _panel.Camera;
@@ -30,6 +42,10 @@ public sealed class Picker
             new NVec2(size.X, size.Y));
     }
 
+    /// <summary>
+    /// 메시 피킹 대상 목록(노드 ID, 메시, 케이지 렌더 데이터, 월드 행렬)을 만든다. 숨긴 노드는 제외하고,
+    /// 컴포넌트 모드에서 편집 대상이 정해져 있으면 그 개체(또는 컴포넌트를 가진 노드)만 넣는다.
+    /// </summary>
     public List<PickTarget> Targets()
     {
         var list = new List<PickTarget>();
@@ -47,6 +63,7 @@ public sealed class Picker
     /// <summary>오브젝트 모드 조인트 피킹: 조인트 구(10px) 또는 본 선분(6px)에 가까우면 그 조인트.</summary>
     public PickHit? PickJoint(NVec2 p)
     {
+        // 조인트 구: 화면 중심과의 거리가 반지름 안이면 후보
         var proj = Projection();
         float best = float.MaxValue; PickHit? hit = null;
         float rJoint = 10f * Scale, rBone = 6f * Scale;
@@ -58,6 +75,7 @@ public sealed class Picker
             if (sp == null) continue;
             float d = NVec2.Distance(sp.Value, p);
             if (d <= rJoint && d < best) { best = d; hit = new PickHit(id, -1, depth, w); }
+            // 이 조인트에서 자식 조인트로 가는 본 선분: 선분 위 최근접점까지 거리(+2px 페널티)로 비교
             foreach (var c in jv.Node.Children)
             {
                 if (!c.IsJoint || !_panel.Scene.JointViews.TryGetValue(c.Id, out var cv)) continue;
@@ -73,6 +91,8 @@ public sealed class Picker
     }
 
     /// <summary>정점 항목을 그 정점의 모든 UV 점 항목으로 바꾼다(뷰포트 UV 모드 선택).</summary>
+    /// <param name="vertexItems">정점 컴포넌트 선택 항목들.</param>
+    /// <returns>각 정점을 공유하는 UV 점 ID(UvTopology 순서) 항목들.</returns>
     public List<SelItem> ExpandUv(IEnumerable<SelItem> vertexItems)
     {
         var result = new List<SelItem>();
@@ -86,6 +106,11 @@ public sealed class Picker
     }
 
     /// <summary>본 피킹: (parent, child, 본 위 비율 t). Insert Joint Tool용.</summary>
+    /// <param name="p">뷰포트 로컬 픽셀.</param>
+    /// <param name="parent">본의 부모(시작) 조인트.</param>
+    /// <param name="child">본의 자식(끝) 조인트.</param>
+    /// <param name="t">화면에서 본 선분 위 최근접점의 비율(0 = 부모, 1 = 자식).</param>
+    /// <returns>8px 안에 본이 있으면 true.</returns>
     public bool PickBone(NVec2 p, out NodeId parent, out NodeId child, out float t)
     {
         parent = child = NodeId.None; t = 0.5f;
@@ -110,6 +135,7 @@ public sealed class Picker
     }
 
     /// <summary>라이트 아이콘 피킹(아이콘 중심 12px).</summary>
+    /// <returns>가장 가까운 보이는 라이트 노드 히트(컴포넌트 -1), 없으면 null.</returns>
     public PickHit? PickLight(NVec2 p)
     {
         var proj = Projection();
@@ -126,13 +152,23 @@ public sealed class Picker
         return hit;
     }
 
+    /// <summary>
+    /// 클릭 한 번의 피킹. 오브젝트 모드는 조인트 → 라이트 → 메시 면 순으로 우선한다.
+    /// 정점/UV 모드는 정점 화면 거리, 엣지 모드는 엣지 화면 거리, 면/오브젝트는 레이-삼각형으로 판정한다.
+    /// </summary>
+    /// <param name="px">뷰포트 로컬 픽셀.</param>
+    /// <param name="mode">현재 선택 모드.</param>
+    /// <param name="cameraBased">true면 가려진 요소를 제외(보이는 요소 우선).</param>
+    /// <returns>히트(노드, 컴포넌트 ID, 깊이, 월드 점) 또는 null. UV 모드는 정점 ID를 돌려주며 호출자가 <see cref="ExpandUv"/>로 바꾼다.</returns>
     public PickHit? Pick(GVec2 px, SelectMode mode, bool cameraBased)
     {
         var p = new NVec2(px.X, px.Y);
         long t0 = AnimPerf.Begin();
         var targets = Targets();
+        // 오브젝트 모드: 메시가 아닌 대상(조인트, 라이트)을 먼저 본다
         if (mode == SelectMode.Object && PickJoint(p) is { } jh) { AnimPerf.End("pick", t0); return jh; }
         if (mode == SelectMode.Object && PickLight(p) is { } lh) { AnimPerf.End("pick", t0); return lh; }
+        // 모드별 코어 피커 호출(픽셀 임계값은 UI 배율 반영)
         var hit = mode switch
         {
             SelectMode.Vertex or SelectMode.Uv => RayPicker.PickVertex(targets, Projection(), p, cameraBased, RayPicker.VertexThresholdPx * Scale),
@@ -143,12 +179,20 @@ public sealed class Picker
         return hit;
     }
 
+    /// <summary>
+    /// 마키(박스) 선택. 코어 RayPicker.Marquee로 메시 요소를 모으고(UV 모드는 정점으로 모은 뒤 UV 점으로 확장),
+    /// 오브젝트 모드에서는 화면 중심이 상자 안에 든 조인트·라이트도 더한다.
+    /// </summary>
+    /// <param name="rect">뷰포트 로컬 픽셀 사각형.</param>
+    /// <param name="mode">선택 모드.</param>
+    /// <param name="cameraBased">true면 가려진 요소 제외(Settings.MarqueeSelectThrough가 꺼졌을 때).</param>
     public List<SelItem> Marquee(Rect2 rect, SelectMode mode, bool cameraBased)
     {
         var min = new NVec2(rect.Position.X, rect.Position.Y);
         var max = new NVec2(rect.End.X, rect.End.Y);
         var items = RayPicker.Marquee(Targets(), Projection(), min, max, mode == SelectMode.Uv ? SelectMode.Vertex : mode, cameraBased);
         if (mode == SelectMode.Uv) items = ExpandUv(items);
+        // 오브젝트 모드: 조인트와 라이트 아이콘의 화면 위치로 판정
         if (mode == SelectMode.Object)
         {
             var proj = Projection();

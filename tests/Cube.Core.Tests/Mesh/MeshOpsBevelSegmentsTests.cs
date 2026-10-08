@@ -6,6 +6,7 @@ namespace Cube.Core.Tests.Mesh;
 /// <summary>BevelEdges의 segments(둥근 프로파일) 검사.</summary>
 public class MeshOpsBevelSegmentsTests
 {
+    /// <summary>오일러 특성 V - E + F(닫힌 구 위상 = 2).</summary>
     private static int Euler(PolyMesh m) => m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount;
 
     /// <summary>Newell 법선 크기의 절반 = 다각형(비평면 포함) 면적.</summary>
@@ -24,6 +25,10 @@ public class MeshOpsBevelSegmentsTests
     /// <summary>정점 v에 모이는 엣지 ID(큐브 코너 = 3개).</summary>
     private static List<int> EdgesAt(PolyMesh m, int v) { var l = new List<int>(); m.GetVertexEdges(v, l); return l; }
 
+    /// <summary>
+    /// 베벨 결과 공통 검사: 메시 유효성, 오일러 2, 새 면 수·전체 면 수·정점 수가 기대값과 같고,
+    /// 새 면에 넓이 0(퇴화) 면이 없으며 경계 엣지가 없어 메시가 닫혀 있는지 확인한다.
+    /// </summary>
     private static void AssertSound(PolyMesh m, List<int> newFaces, int expectedNewFaces, int expectedFaces, int expectedVerts)
     {
         Assert.Empty(MeshValidator.Check(m));
@@ -39,6 +44,11 @@ public class MeshOpsBevelSegmentsTests
     //   베벨 엣지 1개가 닿는 큐브 코너(비베벨 면 1개 + s개 프로파일 엣지) → s ≥ 2에서 (s+1)각 캡, s = 1이면 없음
     //   베벨 엣지 3개가 모이는 코너 → 항상 3s각 캡.
 
+    /// <summary>
+    /// 큐브 엣지 하나를 세그먼트 s로 둥글게 베벨하면 띠 쿼드 s개가 생기고, 양끝 D자 캡은 같은 평면의 끝 면에 흡수되어
+    /// 면 6+s, 정점 8+2s가 되어야 한다. 둥근 띠 사이 엣지는 부드러운 음영을 위해 소프트여야 한다.
+    /// </summary>
+    /// <param name="s">프로파일 세그먼트 수.</param>
     [Theory]
     [InlineData(2)]
     [InlineData(3)]
@@ -54,6 +64,11 @@ public class MeshOpsBevelSegmentsTests
         Assert.True(soft >= 2 * (s - 1), "strip edges should be soft");
     }
 
+    /// <summary>
+    /// 한 코너에 모이는 엣지 3개를 세그먼트 s로 베벨하면 띠 3s개 + 코너의 3s각 캡 1개가 생기고(먼 끝 캡 3개는 끝 면에 흡수),
+    /// 정점은 7+6s개가 되어야 한다.
+    /// </summary>
+    /// <param name="s">프로파일 세그먼트 수.</param>
     [Theory]
     [InlineData(2)]
     [InlineData(3)]
@@ -67,6 +82,11 @@ public class MeshOpsBevelSegmentsTests
         AssertSound(m, newFaces, 3 * s + 1, 6 + 3 * s + 1, 7 + 6 * s);
     }
 
+    /// <summary>
+    /// 큐브의 모든 엣지를 세그먼트 s로 베벨하면 띠 12s개 + 코너 3s각 캡 8개, 정점 24s개가 되어야 하고,
+    /// 새 면은 모두 쿼드(띠) 아니면 3s각(캡)이며 캡은 정확히 8개여야 한다.
+    /// </summary>
+    /// <param name="s">프로파일 세그먼트 수.</param>
     [Theory]
     [InlineData(2)]
     [InlineData(3)]
@@ -83,6 +103,10 @@ public class MeshOpsBevelSegmentsTests
         Assert.Equal(8, newFaces.Count(f => { m.GetFaceVertices(f, ids); return ids.Count == 3 * s; }));
     }
 
+    /// <summary>
+    /// 세그먼트 2 둥근 베벨의 중간 점이 직선 챔퍼 중점이 아니라 두 면에 접하는 원호 위(중심 0.4, 반지름 0.1)에 놓이는지 확인한다.
+    /// 24개 띠 중간 점이 모두 좌표 (0.4+0.1/√2, 0.4+0.1/√2, 0.4) 패턴을 가져야 한다.
+    /// </summary>
     [Fact]
     public void Bevel_Segments2_MidpointLiesOnTangentArc()
     {
@@ -103,6 +127,10 @@ public class MeshOpsBevelSegmentsTests
         Assert.Equal(24, mids);
     }
 
+    /// <summary>
+    /// 양쪽 면이 공면인 평면 내부 엣지는 둥글게 할 각이 없으므로 선형 보간으로 처리해야 한다.
+    /// 띠 3개 + 4가 중심 정점의 5각 캡 1개가 생기고, 퇴화 면이 없으며 모든 정점이 평면(Y=0)에 남아야 한다.
+    /// </summary>
     [Fact]
     public void Bevel_CoplanarFaces_FallsBackToLinear()
     {
@@ -118,6 +146,10 @@ public class MeshOpsBevelSegmentsTests
         for (int v = 0; v < m.Verts.Count; v++) if (m.Verts[v].Alive) Assert.True(MathF.Abs(m.Verts[v].Position.Y) < 1e-5f);
     }
 
+    /// <summary>
+    /// segments = 1은 기존(세그먼트 인자 없는) 챔퍼와 완전히 같은 결과여야 한다: 엣지 1개/코너 3개/전체 세 경우 모두
+    /// 새 면·면·정점·엣지 수가 같고, 예전 수치(7면/10정점, 10면/13정점, 26면/24정점)도 그대로인지 회귀 검사한다.
+    /// </summary>
     [Fact]
     public void Bevel_Segments1_MatchesDefaultChamfer()
     {
@@ -140,6 +172,11 @@ public class MeshOpsBevelSegmentsTests
         var cAll = MeshBuilder.Cube(); Assert.Equal(20, MeshOps.BevelEdges(cAll, Enumerable.Range(0, cAll.EdgeCount).ToList(), 0.1f, 1).Count); Assert.Equal(26, cAll.AliveFaceCount); Assert.Equal(24, cAll.AliveVertexCount);
     }
 
+    /// <summary>
+    /// 원기둥 옆면 가운데에 넣은 엣지 루프(12엣지)를 베벨하면 이웃 베벨 엣지가 만나는 정점마다 프로파일을 공유해야 한다.
+    /// 캡(틈 면) 없이 띠 12s개만 생기고, 루프 정점 12개가 각각 (s+1)개 프로파일 정점으로 바뀌며, 얇은 조각 면이 없어야 한다.
+    /// </summary>
+    /// <param name="s">프로파일 세그먼트 수.</param>
     [Theory]
     [InlineData(2)]
     [InlineData(4)]
@@ -156,6 +193,7 @@ public class MeshOpsBevelSegmentsTests
             if (MathF.Abs(d.Y) > 0.9f) { vertical = e; break; }
         }
         Assert.True(vertical >= 0);
+        // 세로 엣지에서 t=0.5로 루프를 넣으면 옆면을 한 바퀴 도는 가로 엣지 12개가 반환된다.
         var loop = MeshOps.InsertEdgeLoop(m, vertical, 0.5f);
         Assert.Equal(12, loop.Count);
         int facesBefore = m.AliveFaceCount, vertsBefore = m.AliveVertexCount;

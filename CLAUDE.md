@@ -118,7 +118,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - GUI 동작: 위 DebugDriver 스크립트 + 스크린샷. Unity 확인은 `tools/unity-check.md` 체크리스트(수동).
 
 ## 버전 및 릴리즈 워크플로
-- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.50`). v0.0.1~v0.0.50은 공개 릴리즈됨.
+- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.51`). v0.0.1~v0.0.51은 공개 릴리즈됨.
 - **수정 작업을 완료할 때마다** 패치 버전을 하나 올리고(공개된 태그는 재사용 불가) 커밋 → `origin/main` 푸시 → `dist/release-notes-v<ver>.md` 작성 → `gh release create v<ver> --target main --title v<ver> --latest --notes-file <file>`로 **바로 public 릴리즈**(2026-10-07 사용자 지시: 드래프트 아님) → `.	oolsuild-release.ps1 -Upload`로 빌드 산출물 첨부. 마이너/메이저 버전은 사용자가 올리라고 할 때만.
 - 푸시: `gh auth setup-git`으로 github.com 자격 증명이 gh(80dots)로 고정되어 있어 `git push origin main`이 팝업 없이 동작한다. 그래도 자동 세션에서는 `GIT_TERMINAL_PROMPT=0`과 `timeout 90`으로 감싼다.
 - 릴리즈 노트는 **UTF-8 파일**(Write 도구로 작성, 이전 버전 노트를 아래에 이어 붙임)을 `--notes-file`로 넘긴다. Python/PowerShell 표준 출력을 파이프로 넘기면 Windows 콘솔 인코딩(cp949) 때문에 한글이 깨진다.

@@ -5,10 +5,20 @@ using Cube.Core.Scene;
 
 namespace Cube.Core.Tests.IO;
 
+/// <summary>
+/// Wavefront OBJ 읽기/쓰기(<c>ObjFormat</c>, <c>ObjExporter</c>/<c>ObjImporter</c>)를 검증한다:
+/// 요소 수·위치·UV·코너 노멀 보존, 노멀 분리로 하드 엣지 복원, 노드별 o 그룹과 월드 베이크, 로컬 공간 쓰기,
+/// 음수 인덱스·vt/vn 생략·뒤집힌 면 처리, 비매니폴드 면 건너뛰기, 익스포터/임포터 결과 보고.
+/// </summary>
 public class ObjFormatTests
 {
+    /// <summary>테스트마다 겹치지 않는 임시 파일 경로(GUID 포함)를 만든다.</summary>
     private static string TempPath(string name) => Path.Combine(Path.GetTempPath(), $"cube-objtest-{Guid.NewGuid():N}-{name}");
 
+    /// <summary>
+    /// <paramref name="expected"/>의 모든 살아 있는 정점을 <paramref name="world"/>로 변환한 위치가
+    /// <paramref name="actual"/> 정점 중 어딘가에 허용 오차 안으로 존재하는지 단언한다(정점 순서 무관).
+    /// </summary>
     private static void AssertSamePositions(PolyMesh expected, Matrix4x4 world, PolyMesh actual, float tol = 1e-5f)
     {
         var got = new List<Vector3>();
@@ -21,6 +31,9 @@ public class ObjFormatTests
         }
     }
 
+    /// <summary>
+    /// 두 메시의 살아 있는 면을 순서대로 짝지어 코너 수와 코너별 UV가 같은지 단언한다(면·코너 순서가 보존된다는 가정).
+    /// </summary>
     private static void AssertSameFaceUvs(PolyMesh expected, PolyMesh actual)
     {
         var le = new List<int>(); var la = new List<int>();
@@ -38,6 +51,10 @@ public class ObjFormatTests
         }
     }
 
+    /// <summary>
+    /// 큐브를 OBJ 파일로 쓰고 읽으면 오브젝트 이름·요소 수·위치·면별 UV·면 방향(CCW)·코너 노멀이 그대로여야 하고,
+    /// 건너뛴 면이 없으며 HadNormals가 true여야 한다.
+    /// </summary>
     [Fact]
     public void Cube_RoundTrip_PreservesCountsPositionsAndUvs()
     {
@@ -67,6 +84,10 @@ public class ObjFormatTests
         finally { File.Delete(path); }
     }
 
+    /// <summary>
+    /// OBJ에는 하드 엣지 정보가 없으므로 읽을 때 코너 노멀이 갈라진 엣지를 하드로 추론해야 한다.
+    /// 큐브는 12엣지 모두 하드로 복원되고, 부드러운 구는 원래와 같은 수(0)의 하드 엣지를 가져야 한다.
+    /// </summary>
     [Fact]
     public void Read_InfersHardEdgesFromSplitCornerNormals()
     {
@@ -92,6 +113,10 @@ public class ObjFormatTests
         finally { File.Delete(path); }
     }
 
+    /// <summary>
+    /// 부모(피벗·비균등 스케일 포함)와 자식 노드를 함께 쓰면 각자 o 그룹(공백은 _로 치환)으로 나뉘고 월드 공간으로 베이크되어야 한다.
+    /// 읽은 두 메시의 요소 수·월드 위치·UV가 원본과 같고, 원기둥 캡 8각형 n-gon이 삼각분할되지 않고 유지되는지 확인한다.
+    /// </summary>
     [Fact]
     public void TwoTransformedNodes_RoundTrip_BakesWorldSpace()
     {
@@ -138,6 +163,7 @@ public class ObjFormatTests
         finally { File.Delete(path); }
     }
 
+    /// <summary>worldSpace: false로 쓰면 노드 트랜스폼을 무시하고 로컬 정점 위치 그대로 기록되어야 한다.</summary>
     [Fact]
     public void LocalSpace_Write_IgnoresTransform()
     {
@@ -147,6 +173,10 @@ public class ObjFormatTests
         AssertSamePositions(node.Mesh!, Matrix4x4.Identity, objs[0].Mesh);
     }
 
+    /// <summary>
+    /// 음수(상대) 인덱스와 vt/vn이 없는 면을 읽을 수 있어야 하고, 노멀이 없으면 다시 계산해야 한다.
+    /// 이웃 면과 같은 방향으로 엣지를 공유하는 뒤집힌 면은 거부하지 않고 뒤집어서 추가해 건너뛴 면이 없어야 한다.
+    /// </summary>
     [Fact]
     public void Read_HandlesNegativeIndices_MissingVtVn_AndReversedFaces()
     {
@@ -163,6 +193,7 @@ public class ObjFormatTests
         Assert.False(objs[0].HadNormals);
         Assert.True(m.Faces[0].Normal.Z > 0.99f); // Recompute로 노멀 계산
 
+        // 두 번째 경우: 두 번째 면이 첫 면과 반대 감김이라 뒤집어 재시도해야 하는 입력.
         string flipped = "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n" +
                          "f 1 2 3\n" +
                          "f 1 4 3\n";   // (0,3,2): 엣지 0-2 가 첫 면과 같은 방향 → -1 → 뒤집어 (2,3,0) 으로 추가
@@ -173,6 +204,10 @@ public class ObjFormatTests
         Assert.Equal(0, objs2[0].SkippedFaces);
     }
 
+    /// <summary>
+    /// "o" 줄마다 별도 오브젝트로 나뉘고(UV 포함 a, UV 없는 b), 뒤집어도 비매니폴드인 세 번째 면은 건너뛰어 SkippedFaces로 세며
+    /// 나머지 메시는 유효해야 한다.
+    /// </summary>
     [Fact]
     public void Read_GroupsByObjectAndSkipsNonManifold()
     {
@@ -191,6 +226,10 @@ public class ObjFormatTests
         Assert.Empty(MeshValidator.Check(objs[1].Mesh));
     }
 
+    /// <summary>
+    /// <c>ObjExporter</c>가 .obj 확장자를 지원하고 파일을 써서 노드 1·삼각형 12를 보고하며,
+    /// <c>ObjImporter</c>로 다시 가져오면 노드 하나·면 6개가 되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Exporter_WritesFileAndReportsCounts()
     {

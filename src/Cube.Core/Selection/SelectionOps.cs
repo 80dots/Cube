@@ -3,16 +3,21 @@ using Cube.Core.Mesh;
 namespace Cube.Core.Selection;
 
 /// <summary>Maya의 Grow(&gt;)/Shrink(&lt;)/Convert Selection에 해당하는 컴포넌트 집합 연산.</summary>
+/// <remarks>모두 한 노드의 메시 ID 집합(HashSet)을 직접 다룬다. Grow/Shrink는 집합을 제자리에서 바꾸고, 나머지는 새 집합을 돌려준다.</remarks>
 public static class SelectionOps
 {
+    /// <summary>선택을 한 고리 넓힌다(Maya Grow Selection). 집합을 제자리에서 바꾼다.</summary>
+    /// <remarks>정점 = 이웃 정점(같은 면에서 앞뒤 코너), 엣지 = 양 끝 정점에 닿는 모든 엣지, 면 = 면의 정점을 공유하는 모든 면.</remarks>
     public static void Grow(PolyMesh m, SelectMode mode, HashSet<int> set)
     {
+        // 반복 중 집합을 바꾸지 않도록 추가분을 따로 모았다가 마지막에 합친다.
         var add = new HashSet<int>();
         var tmp = new List<int>();
         switch (mode)
         {
             case SelectMode.Vertex:
                 foreach (int v in set)
+                    // 정점에서 나가는 하프에지마다 그 면에서의 다음/이전 코너 정점을 추가.
                     foreach (int he in m.VertexOutgoing(v)) { add.Add(m.Hes[m.Hes[he].Next].Vertex); add.Add(m.Hes[m.Hes[he].Prev].Vertex); }
                 break;
             case SelectMode.Edge:
@@ -27,6 +32,7 @@ public static class SelectionOps
                 foreach (int f in set)
                 {
                     m.GetFaceVertices(f, tmp);
+                    // tmp를 GetVertexFaces가 덮어쓰므로 정점 목록은 배열로 복사해 순회한다.
                     foreach (int v in tmp.ToArray()) { m.GetVertexFaces(v, tmp); add.UnionWith(tmp); }
                 }
                 break;
@@ -34,8 +40,11 @@ public static class SelectionOps
         set.UnionWith(add);
     }
 
+    /// <summary>선택의 가장자리 한 고리를 깎는다(Maya Shrink Selection). 집합을 제자리에서 바꾼다.</summary>
+    /// <remarks>정점 = 이웃 정점 중 하나라도 비선택이면 제거, 엣지 = 양 끝 정점에 닿는 엣지 중 비선택이 있으면 제거, 면 = 정점을 공유하는 면 중 비선택이 있으면 제거.</remarks>
     public static void Shrink(PolyMesh m, SelectMode mode, HashSet<int> set)
     {
+        // 판정은 원래 집합 기준으로 하고 제거는 마지막에 한 번에.
         var remove = new HashSet<int>();
         var tmp = new List<int>();
         switch (mode)
@@ -76,6 +85,7 @@ public static class SelectionOps
     }
 
     /// <summary>면 집합의 바깥 경계 엣지(인접 면 중 하나만 집합에 속하거나 메시 경계인 엣지).</summary>
+    /// <remarks>죽었거나 범위 밖 면 ID는 무시한다. 트윈이 없는 하프에지(메시 경계) 또는 트윈 면이 집합 밖이면 경계.</remarks>
     public static HashSet<int> BoundaryEdgesOfFaces(PolyMesh m, IEnumerable<int> faces)
     {
         var set = new HashSet<int>(faces);
@@ -95,6 +105,7 @@ public static class SelectionOps
     }
 
     /// <summary>정점 집합과 관련된 엣지: 양 끝이 모두 집합에 있는 엣지. 하나도 없으면 집합 정점에 닿는 모든 엣지.</summary>
+    /// <remarks>both = 양 끝이 선택된 엣지, any = 선택 정점에 닿는 모든 엣지. 정점 하나만 선택한 경우에도 결과가 비지 않도록 any로 대체한다.</remarks>
     public static HashSet<int> EdgesOfVertices(PolyMesh m, IEnumerable<int> vertIds)
     {
         var verts = new HashSet<int>(vertIds);
@@ -110,6 +121,8 @@ public static class SelectionOps
     }
 
     /// <summary>현재 컴포넌트 선택(모든 타입)을 대상 모드의 집합으로 변환한다.</summary>
+    /// <remarks>출발 선택을 먼저 정점 집합으로 바꾼 뒤 대상 모드 규칙을 적용한다(면 → 엣지만 예외로 면의 엣지를 직접 쓴다). UV 모드는 다루지 않는다.</remarks>
+    /// <returns>대상 모드의 ID 집합.</returns>
     public static HashSet<int> Convert(PolyMesh m, ComponentSet comps, SelectMode from, SelectMode to)
     {
         var verts = new HashSet<int>();
@@ -121,6 +134,7 @@ public static class SelectionOps
             case SelectMode.Edge: foreach (int e in comps.Edges) { var (a, b) = m.EdgeVertices(e); verts.Add(a); verts.Add(b); } break;
             case SelectMode.Face: foreach (int f in comps.Faces) { m.GetFaceVertices(f, tmp); verts.UnionWith(tmp); } break;
         }
+        // 2) 정점 집합(또는 원래 면)을 대상 모드로
         var result = new HashSet<int>();
         switch (to)
         {

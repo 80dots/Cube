@@ -7,8 +7,15 @@ using Cube.Core.Scene;
 
 namespace Cube.Core.Tests.Rig;
 
+/// <summary>
+/// 리깅/스키닝 코어(<c>SkinOps</c>, <c>SkinCluster</c>)를 검증한다: 스무스 바인드 가중치, LBS 변형, 가중치 페인트 모드,
+/// 바인드/페인트 명령의 Undo/Redo, 조인트·스킨의 .cube 왕복.
+/// </summary>
 public class SkinOpsTests
 {
+    /// <summary>
+    /// 공용 장면을 만든다: x -2..2의 4x1 평면(가로 8분할), 월드 x=-1의 조인트 A, 그 자식으로 로컬 +2(월드 x=+1)의 조인트 B.
+    /// </summary>
     private static (Document doc, SceneNode mesh, SceneNode jA, SceneNode jB) MakeScene()
     {
         var doc = new Document();
@@ -20,9 +27,16 @@ public class SkinOpsTests
         return (doc, mesh, jA, jB);
     }
 
+    /// <summary>
+    /// 조인트 노드들을 SmoothBind 입력(<c>JointInfo</c>: ID, 월드 행렬, 자식 조인트 월드 위치 = 본 끝점)으로 바꾼다.
+    /// </summary>
     private static List<JointInfo> Infos(params SceneNode[] joints)
         => joints.Select(j => new JointInfo(j.Id, j.WorldMatrix, j.Children.Where(c => c.IsJoint).Select(c => c.WorldMatrix.Translation).ToList())).ToList();
 
+    /// <summary>
+    /// 스무스 바인드 결과 모든 정점 가중치 합이 1이고, 왼쪽 끝 정점은 조인트 A가 지배(&gt;0.8)하며,
+    /// 오른쪽 끝은 본 A→B의 끝점과 B까지 거리가 같아 대략 절반씩(0.45~0.55) 나뉘는지 확인한다.
+    /// </summary>
     [Fact]
     public void SmoothBind_WeightsNormalized_And_FollowDistance()
     {
@@ -42,6 +56,10 @@ public class SkinOpsTests
         }
     }
 
+    /// <summary>
+    /// LBS 변형: B에 100% 묶인 정점은 B를 위로 1 옮기면 정확히 +Y 1만큼 따라가고,
+    /// 움직이지 않은 A에 100% 묶인 정점은 제자리에 있어야 한다.
+    /// </summary>
     [Fact]
     public void Deform_TranslatingJoint_MovesFullyWeightedVertices()
     {
@@ -63,6 +81,10 @@ public class SkinOpsTests
         Assert.True(Vector3.Distance(outPos[va], m.Verts[va].Position) < 1e-3f);
     }
 
+    /// <summary>
+    /// Replace 모드로 조인트 0을 0.8로 칠하면 나머지 0.2를 다른 조인트가 원래 비율(0.3:0.2 → 0.12:0.08)로 나눠 가져야 한다.
+    /// Add 모드(값 0.5 × 강도 0.5)는 0.12 + 0.25 = 0.37이 되고 합은 계속 1이어야 한다.
+    /// </summary>
     [Fact]
     public void Paint_Replace_KeepsOthersProportional()
     {
@@ -78,6 +100,10 @@ public class SkinOpsTests
         Assert.True(MathF.Abs(skin.Weights[0]!.Sum(w => w.weight) - 1f) < 1e-5f);
     }
 
+    /// <summary>
+    /// SetSkinCommand로 스킨을 바인드한 뒤 WeightPaintCommand(정점별 before/after 가중치 스냅샷)를 푸시하고,
+    /// Undo/Redo가 가중치를 오가며, 두 번 Undo하면 바인드까지 풀려 Skin이 null이 되는지 확인한다.
+    /// </summary>
     [Fact]
     public void WeightPaintCommand_UndoRedo_And_SetSkinCommand()
     {
@@ -98,6 +124,10 @@ public class SkinOpsTests
         Assert.Null(mesh.Skin);
     }
 
+    /// <summary>
+    /// 조인트 계층과 스킨(조인트 목록·가중치·바인드 역행렬)이 .cube 직렬화를 거쳐 보존되는지 확인한다.
+    /// 조인트 A가 x=-1이므로 바인드 역행렬의 이동 성분은 +1이어야 한다.
+    /// </summary>
     [Fact]
     public void CubeFile_RoundTrips_JointsAndSkin()
     {

@@ -3,24 +3,41 @@ using Godot;
 
 namespace Cube.App.UI;
 
+/// <remarks>
+/// 컨트롤 → 설정 방향: 각 컨트롤의 변경 콜백이 <c>Settings.Render</c>(<see cref="R"/>)의 필드를 바꾸고 <see cref="Apply"/>(저장 + 모든 패널 적용)를 부른다.
+/// 설정 → 컨트롤 방향: 메뉴/셸프 토글처럼 바깥에서 값이 바뀌면 셸이 <see cref="Rebuild"/>를 불러 다시 읽는다.
+/// 두 방향이 서로를 다시 부르지 않도록 <c>_building</c> 동안에는 콜백이 아무것도 하지 않는다.
+/// </remarks>
 /// <summary>
 /// Render → Render Settings...: IBL(내장 HDRI 10개 또는 파일, 세기/회전/배경 표시), 톤 매핑/노출, 헤드라이트/그림자/SSAO/MSAA/FXAA.
 /// 값을 바꾸면 바로 Settings에 저장하고 모든 뷰포트 패널에 적용한다(<see cref="ViewportPanel.ApplyRenderSettings"/>).
 /// </summary>
 public partial class RenderSettingsWindow : FloatingPanel
 {
+    /// <summary>설정 적용·파일 다이얼로그 부모로 쓰는 셸.</summary>
     private Shell _shell = null!;
+    /// <summary>Rebuild에서 직접 다시 읽는 체크박스들(IBL, 배경 표시, 헤드라이트, 그림자, SSAO, FXAA).</summary>
     private CheckBox _ibl = null!, _showBg = null!, _headlight = null!, _shadows = null!, _ssao = null!, _fxaa = null!;
+    /// <summary>HDRI 선택(내장 목록 + 마지막 "Custom file..."), 톤 매핑, MSAA 드롭다운.</summary>
     private OptionButton _hdri = null!, _tonemap = null!, _msaa = null!;
+    /// <summary>IBL 세기·회전(°), 노출, 배경 흐림 단계 숫자 칸.</summary>
     private SpinBox _intensity = null!, _rotation = null!, _exposure = null!, _blurSpin = null!;
+    /// <summary>배경 흐림 단계 슬라이더(숫자 칸과 연동).</summary>
     private HSlider _blurSlider = null!;
+    /// <summary>사용자 HDRI 파일 이름 표시.</summary>
     private Label _custom = null!;
+    /// <summary>true인 동안은 컨트롤 변경 콜백이 설정을 바꾸지 않는다(초기 구성·Rebuild·프로그램적 값 설정 중).</summary>
     private bool _building;
 
+    /// <summary>현재 렌더 설정 객체(Reset 시 새 인스턴스로 바뀌므로 매번 Settings에서 읽는다).</summary>
     private static RenderSettings R => CubeApp.Instance.Settings.Render;
     /// <summary>Post Effects 컨트롤: Rebuild에서 Settings 값을 다시 읽는 함수들.</summary>
     private readonly List<Action> _refreshers = new();
 
+    /// <summary>
+    /// 패널을 구성한다: 스크롤 안의 그룹들(IBL, Lighting, Color Management, Post Effects 5개 그룹, Anti-aliasing)과 Reset 버튼.
+    /// 구성 중에는 <c>_building</c>을 켜 두어 초기값 설정이 Apply를 부르지 않게 한다.
+    /// </summary>
     public void Setup(Shell shell)
     {
         _shell = shell;
@@ -36,6 +53,7 @@ public partial class RenderSettingsWindow : FloatingPanel
         box.AddThemeConstantOverride("separation", (int)(6 * s));
         scroll.AddChild(box);
 
+        // 그룹 헬퍼: 흐린 제목 + 구분선 + 2열(라벨/컨트롤) 그리드를 만들어 돌려준다.
         GridContainer Group(string title)
         {
             var header = new Label { Text = title };
@@ -48,6 +66,7 @@ public partial class RenderSettingsWindow : FloatingPanel
             box.AddChild(g);
             return g;
         }
+        // 체크박스 행 헬퍼: 토글되면 set → Apply.
         CheckBox Check(GridContainer g, string label, bool value, Action<bool> set)
         {
             g.AddChild(new Label { Text = label });
@@ -56,6 +75,7 @@ public partial class RenderSettingsWindow : FloatingPanel
             g.AddChild(c);
             return c;
         }
+        // 숫자 칸 행 헬퍼: 값이 바뀌면 set → Apply.
         SpinBox Spin(GridContainer g, string label, double min, double max, double step, double value, Action<float> set, string suffix = "")
         {
             g.AddChild(new Label { Text = label });
@@ -64,6 +84,7 @@ public partial class RenderSettingsWindow : FloatingPanel
             g.AddChild(sb);
             return sb;
         }
+        // 드롭다운 행 헬퍼: 선택 인덱스를 범위로 자르고, 고르면 set → Apply.
         OptionButton Option(GridContainer g, string label, string[] items, int selected, Action<int> set)
         {
             g.AddChild(new Label { Text = label });
@@ -78,13 +99,16 @@ public partial class RenderSettingsWindow : FloatingPanel
         // ---- IBL
         var ibl = Group("Image Based Lighting (IBL)");
         _ibl = Check(ibl, "Enable IBL", R.IblEnabled, v => R.IblEnabled = v);
+        // HDRI 목록 = 내장 HDRI 라벨들 + "Custom file...". 현재 선택은 Custom이면 마지막, 아니면 내장 ID 위치.
         var names = HdriLibrary.BuiltIn.Select(b => b.label).Append("Custom file...").ToArray();
         int cur = R.Hdri == HdriLibrary.Custom ? names.Length - 1 : Math.Max(0, Array.FindIndex(HdriLibrary.BuiltIn, b => b.id == R.Hdri));
         _hdri = Option(ibl, "HDRI", names, cur, i =>
         {
+            // Custom을 골랐는데 아직 파일이 없으면 파일 고르기 창을 띄우고, 있으면 그 파일로 전환한다.
             if (i == names.Length - 1) { if (string.IsNullOrEmpty(R.HdriPath)) BrowseHdr(); else R.Hdri = HdriLibrary.Custom; }
             else R.Hdri = HdriLibrary.BuiltIn[i].id;
         });
+        // 사용자 파일 이름 + Browse 버튼.
         ibl.AddChild(new Label { Text = "Custom file" });
         var fileRow = new HBoxContainer();
         _custom = new Label { Text = System.IO.Path.GetFileName(R.HdriPath ?? "") , SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, ClipText = true, CustomMinimumSize = new Vector2(120 * s, 0) };
@@ -101,6 +125,7 @@ public partial class RenderSettingsWindow : FloatingPanel
         var blurRow = new HBoxContainer { CustomMinimumSize = new Vector2(200 * s, 0) };
         _blurSlider = new HSlider { MinValue = 0, MaxValue = Core.IO.PanoramaBlur.MaxLevel, Step = 1, Value = R.BackgroundBlur, TickCount = Core.IO.PanoramaBlur.MaxLevel + 1, TicksOnBorders = true, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ShrinkCenter, FocusMode = Control.FocusModeEnum.None };
         _blurSpin = new SpinBox { MinValue = 0, MaxValue = Core.IO.PanoramaBlur.MaxLevel, Step = 1, Value = R.BackgroundBlur, Rounded = true };
+        // 슬라이더와 숫자 칸 공용 핸들러: 정수 단계로 반올림해 두 컨트롤을 맞춘 뒤(재귀 방지로 _building), 값이 바뀌었을 때만 적용.
         void SetBlur(double v)
         {
             if (_building) return;
@@ -128,6 +153,7 @@ public partial class RenderSettingsWindow : FloatingPanel
         _exposure = Spin(color, "Exposure", 0.05, 8, 0.05, R.Exposure, v => R.Exposure = v);
 
         // ---- Post Effects(Godot Environment / CameraAttributes): 메뉴·셸프 토글과 같은 값
+        // Post Effects 전용 헬퍼: 값을 함수로 읽어 Rebuild 때 다시 반영할 수 있도록 refresher를 등록한다.
         void CheckG(GridContainer g, string label, Func<bool> get, Action<bool> set, string? tip = null)
         {
             var c = Check(g, label, get(), set);
@@ -189,6 +215,7 @@ public partial class RenderSettingsWindow : FloatingPanel
         CheckG(q, "TAA (temporal)", () => R.Taa, v => R.Taa = v);
         CheckG(q, "Debanding", () => R.Debanding, v => R.Debanding = v, "Dither to hide color banding in gradients");
 
+        // Reset: 렌더 설정을 기본값 인스턴스로 바꾸고 적용한 뒤 컨트롤을 다시 읽는다.
         var buttons = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
         var reset = new Button { Text = "Reset to Defaults", FocusMode = Control.FocusModeEnum.None };
         reset.Pressed += () => { CubeApp.Instance.Settings.Render = new RenderSettings(); Apply(); Rebuild(); };
@@ -197,6 +224,10 @@ public partial class RenderSettingsWindow : FloatingPanel
         _building = false;
     }
 
+    /// <summary>
+    /// HDRI/이미지 파일을 고르는 네이티브 다이얼로그를 띄운다. 고르면 디코딩 캐시에서 그 경로를 지우고(같은 파일 재로드),
+    /// 사용자 HDRI로 설정·드롭다운을 Custom으로 맞춘 뒤 적용한다. 취소하면 드롭다운을 원래 값으로 되돌린다.
+    /// </summary>
     private void BrowseHdr()
     {
         var fd = new FileDialog { FileMode = FileDialog.FileModeEnum.OpenFile, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Title = "Choose HDRI" };
@@ -229,5 +260,6 @@ public partial class RenderSettingsWindow : FloatingPanel
         _building = false;
     }
 
+    /// <summary>렌더 설정을 저장하고 모든 뷰포트 패널에 반영한다(Shell.ApplyRenderSettings).</summary>
     private void Apply() => _shell.ApplyRenderSettings();
 }

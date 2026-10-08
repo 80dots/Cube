@@ -13,8 +13,16 @@ namespace Cube.Core.Tests.Mesh;
 /// </summary>
 public class ExtrudeBevelRegressionTests
 {
+    /// <summary>오일러 특성 V - E + F(닫힌 구 위상 = 2).</summary>
     private static int Euler(PolyMesh m) => m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount;
 
+    /// <summary>
+    /// 단계별 메시 건전성 검사: 검증기 오류 없음, 모든 면이 3각 이상이고 살아 있는 정점만 참조, 면의 각 변이 <c>FindEdge</c>로
+    /// 찾아지는지(엣지 맵 캐시 일치), 살아 있는 정점은 고립되지 않았는지. 옵션으로 닫힘(경계 없음)과 오일러 값도 검사한다.
+    /// </summary>
+    /// <param name="ctx">실패 메시지에 붙일 상황 설명(대상/옵션/단계).</param>
+    /// <param name="closed">true면 경계 엣지가 없어야 한다.</param>
+    /// <param name="euler">지정하면 오일러 특성이 이 값이어야 한다.</param>
     private static void AssertSound(PolyMesh m, string ctx, bool closed = false, int? euler = null)
     {
         var problems = MeshValidator.Check(m);
@@ -39,10 +47,14 @@ public class ExtrudeBevelRegressionTests
         if (euler != null) Assert.True(Euler(m) == euler, $"{ctx}: euler {Euler(m)} != {euler}");
     }
 
+    /// <summary>살아 있는 면 ID 배열.</summary>
     private static int[] AliveFaces(PolyMesh m) => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive).ToArray();
+    /// <summary>살아 있는 엣지 ID 배열.</summary>
     private static int[] AliveEdges(PolyMesh m) => Enumerable.Range(0, m.EdgeCount).Where(e => m.Edges[e].Alive).ToArray();
+    /// <summary>살아 있는 정점 ID 배열.</summary>
     private static int[] AliveVerts(PolyMesh m) => Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive).ToArray();
 
+    /// <summary>메시를 테셀레이션해 가져오기 입력과 같은 코너 분리 삼각형 수프로 만든다.</summary>
     private static TriangleSoupToPolyMesh.Surface ToSoup(PolyMesh m)
     {
         var r = MeshTessellator.Build(m);
@@ -55,6 +67,9 @@ public class ExtrudeBevelRegressionTests
         };
     }
 
+    /// <summary>
+    /// 메시를 삼각형 수프로 풀었다가 가져오기 변환으로 다시 만든다(glTF/FBX로 가져온 메시와 같은 ID 배치·위상 상태를 재현).
+    /// </summary>
     private static PolyMesh Imported(PolyMesh src)
     {
         var m = TriangleSoupToPolyMesh.Convert(new[] { ToSoup(src) }, ImportOptions.Default, out _);
@@ -64,6 +79,10 @@ public class ExtrudeBevelRegressionTests
 
     // ---------------------------------------------------------------- 순서 조합
 
+    /// <summary>
+    /// 큐브에서 Extrude(기존 함수) → Extrude(옵션) → 전체 엣지 Bevel(세그먼트 2) → 베벨 면 Extrude(FaceNormals) 순으로 이어 실행하고
+    /// 매 단계 닫힌 메시·오일러 2를 유지하는지 확인한다. 연산 순서 조합에서 생기는 위상 손상을 잡는 테스트다.
+    /// </summary>
     [Fact]
     public void Cube_ExtrudeTwice_ThenBevel_ThenExtrude()
     {
@@ -83,6 +102,10 @@ public class ExtrudeBevelRegressionTests
         Assert.NotEmpty(caps2);
     }
 
+    /// <summary>
+    /// 코너 엣지 3개 Bevel(세그먼트 3) → 베벨 띠 전체 Extrude → 엣지 ID 나머지로 나눈 세 묶음에 서로 다른 세그먼트로 반복 Bevel을 하며
+    /// 매 단계 닫힌 메시를 유지하는지 확인한다.
+    /// </summary>
     [Fact]
     public void Cube_BevelThenExtrudeCaps_RepeatedBevels()
     {
@@ -101,6 +124,7 @@ public class ExtrudeBevelRegressionTests
 
     // ---------------------------------------------------------------- Extrude 옵션 전수
 
+    /// <summary>Extrude 옵션 조합 전체(Type × Direction × Steps 1/3 × Flip)를 xUnit MemberData로 제공한다.</summary>
     public static IEnumerable<object[]> ExtrudeCombos()
     {
         foreach (var type in new[] { ExtrudeType.Region, ExtrudeType.IndividualFaces })
@@ -110,6 +134,10 @@ public class ExtrudeBevelRegressionTests
                         yield return new object[] { type, dir, steps, flip };
     }
 
+    /// <summary>
+    /// Extrude 대상 모음: 큐브(면 하나/인접 둘/마주보는 둘/전체 닫힌 볼륨), 3x3 평면(가운데/구석/전체 열린 판/정점만 공유하는 대각),
+    /// 원기둥(n각형 캡/옆면+캡), 가져온 큐브·원기둥. 각 항목은 (이름, 새 메시, 대상 면, 결과가 닫혀야 하는지)다.
+    /// </summary>
     private static IEnumerable<(string name, PolyMesh mesh, int[] faces, bool closed)> ExtrudeTargets()
     {
         var cube = MeshBuilder.Cube();
@@ -136,6 +164,14 @@ public class ExtrudeBevelRegressionTests
         yield return ("imported cylinder", icy, AliveFaces(icy).Take(3).ToArray(), true);
     }
 
+    /// <summary>
+    /// 모든 Extrude 옵션 조합을 모든 대상에 적용한 뒤, 같은 캡을 한 번 더 Extrude하고 그 캡 둘레를 Bevel까지 한다.
+    /// 매 단계 캡이 살아 있고 면 수가 늘며 메시가 건전해야 한다(Flip이면 연결 요소가 뒤집혀 닫힘 검사는 생략).
+    /// </summary>
+    /// <param name="type">Region 또는 IndividualFaces.</param>
+    /// <param name="dir">돌출 방향 옵션.</param>
+    /// <param name="steps">반복 단계 수.</param>
+    /// <param name="flip">결과 법선 뒤집기 여부.</param>
     [Theory]
     [MemberData(nameof(ExtrudeCombos))]
     public void Extrude_AllOptions_AllTargets(ExtrudeType type, ExtrudeDirection dir, int steps, bool flip)
@@ -163,6 +199,10 @@ public class ExtrudeBevelRegressionTests
         }
     }
 
+    /// <summary>
+    /// 평면 테두리 엣지 Extrude를 방향·단계·뒤집기 모든 조합으로 실행한다. 새 엣지는 항상 경계여야 하고,
+    /// 새 테두리를 다시 Extrude한 뒤 그 정점들을 정점 Bevel해도 메시가 건전해야 한다.
+    /// </summary>
     [Fact]
     public void ExtrudeEdges_AllOptions_OnPlaneBorder()
     {
@@ -192,8 +232,14 @@ public class ExtrudeBevelRegressionTests
 
     // ---------------------------------------------------------------- Bevel 변형
 
+    /// <summary>Bevel 세그먼트 수 1, 2, 4를 MemberData로 제공한다.</summary>
     public static IEnumerable<object[]> BevelSegments() => new[] { 1, 2, 4 }.Select(s => new object[] { s });
 
+    /// <summary>
+    /// 여러 메시(큐브/원기둥/평면/가져온 큐브·구/Extrude된 큐브)에서 엣지 하나·루프·링·전체를 베벨하고 그 결과 위에 다시 Bevel한다.
+    /// 경계 엣지만 베벨하면 아무 일도 하지 않고 메시를 망가뜨리지 않아야 하며, 정점 Bevel 뒤 IndividualFaces Extrude까지 건전해야 한다.
+    /// </summary>
+    /// <param name="segments">세그먼트 수.</param>
     [Theory]
     [MemberData(nameof(BevelSegments))]
     public void Bevel_Edges_Loops_Rings_All_Vertices(int segments)
@@ -255,6 +301,10 @@ public class ExtrudeBevelRegressionTests
         }
     }
 
+    /// <summary>
+    /// 큐브 전체 엣지에 Bevel 옵션 행렬(Width Type × Outer Miter × Intersection × Harden × Clamp, 여기에 LoopSlide/MarkSeams/MarkSharp 연동)을
+    /// 모두 적용하고, 결과 면 하나를 Extrude해도 닫힌 메시·오일러 2가 유지되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Bevel_OptionMatrix_OnCube()
     {
@@ -277,20 +327,29 @@ public class ExtrudeBevelRegressionTests
 
     // ---------------------------------------------------------------- 명령 경로(Undo/Redo/히스토리 편집)
 
+    /// <summary>앱의 Bevel 이력 파라미터와 같은 형태(Width, Segments)를 만든다.</summary>
     private static HistoryParams BevelParams(float width, int segments) => new(
         HistoryParam.F("Width", width, 0f, 100f, 0.001f), HistoryParam.I("Segments", segments, 1, 100));
 
+    /// <summary>이력 파라미터에서 BevelOptions를 복원한다(Segments는 최소 1).</summary>
     private static BevelOptions BevelFrom(HistoryParams p) => new() { Width = p.Float("Width"), Segments = Math.Max(1, p.Int("Segments")) };
 
+    /// <summary>앱의 Extrude 이력 파라미터와 같은 형태(Offset, Steps, Type, Direction)를 만든다.</summary>
     private static HistoryParams ExtrudeParams(float offset, int steps, int type, int dir) => new(
         HistoryParam.F("Offset", offset, -100f, 100f, 0.01f), HistoryParam.I("Steps", steps, 1, 100),
         HistoryParam.I("Type", type, 0, 1), HistoryParam.I("Direction", dir, 0, 5));
 
+    /// <summary>이력 파라미터에서 ExtrudeOptions를 복원한다(Custom 방향은 +Y 고정).</summary>
     private static ExtrudeOptions ExtrudeFrom(HistoryParams p) => new()
     {
         Offset = p.Float("Offset"), Steps = p.Int("Steps"), Type = (ExtrudeType)p.Int("Type"), Direction = (ExtrudeDirection)p.Int("Direction"), CustomDirection = Vector3.UnitY,
     };
 
+    /// <summary>
+    /// 앱과 같은 명령 경로로 Extrude(MeshOpCommand) → 두께 드래그(MoveVerticesCommand + 이력) → 캡 둘레 Bevel을 쌓은 뒤,
+    /// Bevel 파라미터 편집과 첫 Extrude 파라미터 편집(뒤 항목 Replay)을 여러 번 하고, 전체 Undo/Redo, Undo 후 새 명령까지
+    /// 매 단계 메시가 건전한지 확인한다. 히스토리 Replay가 슬롯 ID 기반 참조를 깨뜨리지 않는지 보는 핵심 회귀 테스트다.
+    /// </summary>
     [Fact]
     public void CommandPath_ExtrudeBevel_UndoRedo_HistoryEdits()
     {
@@ -317,6 +376,7 @@ public class ExtrudeBevelRegressionTests
         AssertSound(mesh, "cmd thickness", closed: true, euler: 2);
 
         // 캡 둘레 Bevel(선택 → 엣지)
+        // 캡 면 선택을 엣지로 변환(앱의 Bevel 대상 수집과 같은 방식).
         var capEdges = SelectionOps.Convert(mesh, doc.Selection.GetComponents(node.Id), SelectMode.Face, SelectMode.Edge).ToArray();
         Assert.Equal(4, capEdges.Length);
         doc.Undo.Push(new MeshOpCommand("Bevel", node.Id, BevelParams(0.05f, 1),
@@ -342,6 +402,7 @@ public class ExtrudeBevelRegressionTests
             Assert.Equal(3, node.MeshShape.History.Count);
         }
         // Undo 전부 → Redo 전부, 매 단계 검증
+        // 쌓인 모든 단계를 끝까지 Undo했다가 다시 Redo하며 매번 검사한다.
         int n = doc.Undo.UndoCount;
         for (int i = 0; i < n; i++) { Assert.True(doc.Undo.Undo()); if (node.Mesh != null) AssertSound(mesh, $"undo {i}"); }
         for (int i = 0; i < n; i++) { Assert.True(doc.Undo.Redo()); AssertSound(mesh, $"redo {i}"); }
@@ -355,6 +416,10 @@ public class ExtrudeBevelRegressionTests
         AssertSound(mesh, "extrude after undo", closed: true, euler: 2);
     }
 
+    /// <summary>
+    /// 가져온(삼각형 수프 변환) 원기둥에서 가장 큰 n각형 캡을 Extrude → 전체 Bevel → Extrude 파라미터 편집 → Undo 2회 → Redo 2회를 하며
+    /// 매 단계 닫힌 메시를 유지하는지 확인한다(가져온 메시의 ID 배치에서도 이력 Replay가 안전한지).
+    /// </summary>
     [Fact]
     public void CommandPath_ImportedMesh_ExtrudeBevel_HistoryEdits()
     {
@@ -383,6 +448,12 @@ public class ExtrudeBevelRegressionTests
 
     // ---------------------------------------------------------------- 무작위 순서(캐시 검증 포함)
 
+    /// <summary>
+    /// 시드 고정 난수로 면 Extrude/엣지 Bevel/정점 Bevel/루프 삽입/테두리 Extrude/면 삭제/루프 Bevel을 14단계 무작위로 섞어 실행한다.
+    /// 매 단계 노멀 재계산 후 건전성(그리고 캐시 검증)을 확인해, 예상하지 못한 연산 순서에서 생기는 위상 손상을 찾는다.
+    /// 실패 메시지(ctx)에는 재현에 필요한 대상·시드·단계·선택·옵션이 담긴다.
+    /// </summary>
+    /// <param name="seed">난수 시드(재현용).</param>
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -394,10 +465,12 @@ public class ExtrudeBevelRegressionTests
         foreach (var (meshName, make) in new (string, Func<PolyMesh>)[] { ("cube", () => MeshBuilder.Cube()), ("plane", () => MeshBuilder.Plane(1, 1, 3, 3)), ("cylinder", () => MeshBuilder.Cylinder(0.5f, 1, 8, true)), ("imported cube", () => Imported(MeshBuilder.Cube())) })
         {
             var m = make();
+            // 시작 메시가 닫혀 있으면 면 삭제 전까지는 닫힘을 계속 검사한다.
             bool closed = AliveEdges(m).All(e => !m.IsBoundaryEdge(e));
             for (int step = 0; step < 14; step++)
             {
                 var faces = AliveFaces(m); var edges = AliveEdges(m); var verts = AliveVerts(m);
+                // 0~6 중 하나의 연산을 무작위로 고른다(4·5번은 조건이 안 맞으면 면 Extrude로 대체).
                 int op = rng.Next(7);
                 string ctx = $"{meshName} seed{seed} step{step} op{op} faces={faces.Length}";
                 switch (op)
@@ -460,6 +533,7 @@ public class ExtrudeBevelRegressionTests
     /// 회귀(v0.0.47): 끝점이 차수 2(엣지 중간에 끼운 정점, Multi-Cut/Split 뒤)인 엣지를 Bevel하면 그 끝에서 띠 쿼드의 두 옆 정점이 같아
     /// 중복 정점이 있는 면 추가가 거부되어 구멍이 났고, 일직선으로 이어진 엣지를 따라 거의 끝까지(98%) 미끄러졌다.
     /// </summary>
+    /// <param name="segments">세그먼트 수.</param>
     [Theory]
     [InlineData(1)]
     [InlineData(2)]

@@ -2,6 +2,7 @@ using System.Numerics;
 
 namespace Cube.Core.Mesh;
 
+// Edges = 선택 엣지를 깎아 띠를 만든다(Ctrl+B), Vertices = 선택 정점의 모서리를 깎는다(Shift+Ctrl+B).
 /// <summary>Bevel이 영향을 주는 요소(Blender Affect).</summary>
 public enum BevelAffect { Edges, Vertices }
 
@@ -20,52 +21,94 @@ public enum BevelWidthType
     Absolute,
 }
 
+/// <summary>
+/// 두 베벨 엣지가 한 면 코너에서 만날 때 그 코너 처리(Blender Miter).
+/// Sharp = 두 오프셋 선의 교점 하나, Patch = 교점을 사이에 둔 꺾인 점 3개, Arc = 두 점 사이를 프로파일 곡선으로 잇는다.
+/// </summary>
 public enum BevelMiter { Sharp, Patch, Arc }
 
+// GridFill = 가운데를 부풀린 쿼드/삼각 채움, Cutoff = 엣지별 막음 면 + 가운데 면, NGon = 둘레 전체를 다각형 하나로.
 /// <summary>베벨 엣지가 3개 이상 모이는 정점의 채움(Blender Intersection Type). NGon은 하나의 다각형(Maya식).</summary>
 public enum BevelIntersection { GridFill, Cutoff, NGon }
 
+/// <summary>
+/// 프로파일 종류. Superellipse = Shape 값으로 정한 초타원 곡선, Custom = <see cref="BevelProfilePreset"/> 꺾은선.
+/// </summary>
 public enum BevelProfileType { Superellipse, Custom }
 
+// Default = 원호 근사, SupportLoops = 양끝에 보조 루프가 몰리는 형태, CorniceMolding/CrownMolding = 몰딩 단면, Steps = 계단.
 /// <summary>Custom 프로파일 프리셋(Blender Profile Presets).</summary>
 public enum BevelProfilePreset { Default, SupportLoops, CorniceMolding, CrownMolding, Steps }
 
+// None = 노멀 고정 안 함, New = 새 면 기준, Affected = 새 면에 닿은 원래 면을 가장 세게, All = 원래 면 모두 가장 세게.
 /// <summary>Weighted Normal용 면 세기(Blender Face Strength). Cube에는 Weighted Normal 모디파이어가 없으므로 그 결과(가중 노멀)를 코너 노멀로 바로 고정한다.</summary>
 public enum BevelFaceStrength { None, New, Affected, All }
 
 /// <summary>Blender Bevel(Ctrl+B / Shift+Ctrl+B)의 모든 옵션.</summary>
+/// <remarks>
+/// 불변 record라 옵션 창/이력 파라미터에서 with 식으로 복사해 쓴다. 기본값은 Blender 기본값과 같다.
+/// </remarks>
 public sealed record BevelOptions
 {
+    /// <summary>무엇을 베벨할지(엣지/정점). 입력 ID의 의미도 이것에 따라 바뀐다.</summary>
     public BevelAffect Affect { get; init; } = BevelAffect.Edges;
+    /// <summary>Width 값을 어떻게 해석할지(<see cref="BevelWidthType"/>).</summary>
     public BevelWidthType WidthType { get; init; } = BevelWidthType.Offset;
+    /// <summary>폭(m, Percent면 %). 1e-6 미만은 1e-6으로 올려 쓴다.</summary>
     public float Width { get; init; } = 0.1f;
+    /// <summary>프로파일 세그먼트 수(1 = 평평한 면 하나, 내부에서 1..100으로 클램프).</summary>
     public int Segments { get; init; } = 1;
     /// <summary>프로파일 모양 0..1(0.5 = 원호, 0.25 = 직선, 1 = 각진 모서리, 0 = 오목).</summary>
     public float Shape { get; init; } = 0.5f;
     /// <summary>새 면의 머티리얼 슬롯(-1 = 이웃 면을 따름).</summary>
     public int MaterialIndex { get; init; } = -1;
+    /// <summary>true면 띠 코너 노멀을 두 이웃 면 법선 사이로 고정하고 원래 면과의 경계를 하드로(<see cref="ApplyHardenNormals"/>).</summary>
     public bool HardenNormals { get; init; }
+    /// <summary>true면 모든 이동 길이를 같은 비율로 줄여 이웃 엣지 끝을 넘지 않게 한다(겹침 방지).</summary>
     public bool ClampOverlap { get; init; } = true;
+    /// <summary>true면 새 점이 인접 엣지를 따라 미끄러진다. false면 베벨 엣지에 수직으로 오프셋한다(Offset/Width/Depth 종류에서만).</summary>
     public bool LoopSlide { get; init; } = true;
+    /// <summary>원래 심(UV seam)이었던 베벨 엣지의 표시를 띠 가장자리와 캡 둘레로 이어 준다.</summary>
     public bool MarkSeams { get; init; }
+    /// <summary>원래 하드였던 베벨 엣지의 표시를 띠 가장자리와 캡 둘레로 이어 준다.</summary>
     public bool MarkSharp { get; init; }
+    /// <summary>Outer Miter(반사각 코너, 면 바깥으로 꺾이는 쪽)의 처리.</summary>
     public BevelMiter MiterOuter { get; init; } = BevelMiter.Sharp;
     /// <summary>Inner Miter(Sharp/Arc; Patch는 Sharp로 취급).</summary>
     public BevelMiter MiterInner { get; init; } = BevelMiter.Sharp;
+    /// <summary>Arc/Patch Inner Miter에서 교점 양쪽으로 벌리는 거리(m, 인접 엣지 길이의 45% 이내).</summary>
     public float Spread { get; init; } = 0.1f;
+    /// <summary>베벨 엣지 3개 이상이 모이는 정점 캡의 채움 방식(세그먼트 2+에서만 의미).</summary>
     public BevelIntersection Intersection { get; init; } = BevelIntersection.GridFill;
+    /// <summary>Weighted Normal 방식의 코너 노멀 고정 범위(<see cref="ApplyFaceStrength"/>).</summary>
     public BevelFaceStrength FaceStrength { get; init; } = BevelFaceStrength.None;
+    /// <summary>프로파일 종류(초타원/Custom 프리셋).</summary>
     public BevelProfileType ProfileType { get; init; } = BevelProfileType.Superellipse;
+    /// <summary>ProfileType = Custom일 때 쓸 프리셋.</summary>
     public BevelProfilePreset Preset { get; init; } = BevelProfilePreset.Default;
+    /// <summary>Custom 프로파일 샘플링에서 남는 샘플을 구간마다 균등하게 배분(끄면 긴 구간부터).</summary>
     public bool SampleStraightEdges { get; init; }
+    /// <summary>Custom 프로파일을 제어점 무시하고 전체 길이 기준 균등 간격으로 샘플링.</summary>
     public bool SampleEvenLengths { get; init; }
     /// <summary>둥근 Bevel 뒤 끝 면에 D자 캡을 합치고 60°로 스무딩(Maya식 마무리). 내부 호환용.</summary>
+    /// <remarks>
+    /// 실제 동작: true면 기존 <see cref="MeshOps.BevelEdges"/> API 호환 모드 — 전역 Clamp Overlap 대신 각 이동 길이를
+    /// 그 엣지 길이의 45%로 따로 자른다(Maya식). 테스트 호환을 위해 internal로 남겨 두었다.
+    /// </remarks>
     internal bool LegacyPerEdgeClamp { get; init; }
 }
 
 /// <summary>Blender식 Bevel(엣지/정점). 세그먼트·프로파일·폭 종류·마이터·교차 채움·노멀 처리.</summary>
 public static partial class MeshOps
 {
+    /// <summary>
+    /// 재구성할 면 루프의 한 항목(코너).
+    /// </summary>
+    /// <param name="Vertex">새 루프에서 쓸 정점(원래 정점 또는 새로 만든 오프셋 점).</param>
+    /// <param name="Uv">코너 UV(원래 면 코너에서 아핀 보간).</param>
+    /// <param name="Normal">원래 코너 노멀.</param>
+    /// <param name="OriginEdge">이 점이 놓인 원래 엣지 ID. -1 = 원래 정점 그대로, -2 = 면 안쪽 점(교점/마이터).</param>
+    /// <param name="OriginVertex">이 점을 만든 원래(베벨) 정점.</param>
     private sealed record BevelEntry(int Vertex, Vector2 Uv, Vector3 Normal, int OriginEdge, int OriginVertex);
 
     /// <summary>
@@ -96,11 +139,15 @@ public static partial class MeshOps
     public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o)
     {
         var info = new BevelInfo();
+        // 1) Affect에 따라 엣지/정점 베벨 핵심 처리
         var result = o.Affect == BevelAffect.Vertices ? BevelVerticesCore(m, ids, o, info) : BevelEdgesCore(m, ids, o, info);
         if (result.Count == 0) { RemoveIsolatedVertices(m); return result; }
+        // 2) 세그먼트 2+ 마무리: 엣지는 D자 캡 병합 + 60° 스무딩, 정점은 스무딩만
         if (o.Affect == BevelAffect.Edges && o.Segments >= 2) PostProcessRoundBevel(m, result, info.Strips);
         else if (o.Affect == BevelAffect.Vertices && o.Segments >= 2) SoftenNewFaces(m, result);
+        // 병합으로 사라진 면 ID 제거
         result.RemoveAll(f => f < 0 || f >= m.FaceCount || !m.Faces[f].Alive);
+        // 3) 노멀 고정 옵션: 기본 노멀을 먼저 계산한 뒤 그 위에 고정 노멀을 덮어쓴다
         if (o.HardenNormals || o.FaceStrength != BevelFaceStrength.None)
         {
             MeshNormals.Recompute(m);
@@ -115,6 +162,7 @@ public static partial class MeshOps
     /// <summary>Bevel 중간 정보(노멀 처리에 씀).</summary>
     private sealed class BevelInfo
     {
+        /// <summary>새로 생긴 띠(베벨 쿼드) 면 ID들. 캡 면과 구별해 노멀 처리/스무딩에 쓴다.</summary>
         public readonly HashSet<int> Strips = new();
         /// <summary>띠 면 → (면 A 법선, 면 B 법선, 정점 → 프로파일 위치 0..1).</summary>
         public readonly Dictionary<int, (Vector3 nA, Vector3 nB, Dictionary<int, float> t)> StripProfiles = new();
@@ -125,6 +173,7 @@ public static partial class MeshOps
     /// <summary>Shape(0..1) → 초타원 지수 r(0.5 → 2 = 원, 0.25 → 1 = 직선, 1 → ∞ = 각, 0 → 0 = 오목).</summary>
     internal static float SuperellipseExponent(float shape)
     {
+        // 0과 1에서는 로그가 발산하므로 살짝 안쪽으로 자른다
         shape = System.Math.Clamp(shape, 0.001f, 0.999f);
         return MathF.Log(0.5f) / MathF.Log(MathF.Sqrt(shape));
     }
@@ -132,10 +181,14 @@ public static partial class MeshOps
     /// <summary>프로파일 정의(단위 정사각 좌표: p0 = (1,0), p1 = (0,1), 모서리 K = (1,1), 안쪽 c = (0,0)).</summary>
     private sealed class ProfileSpec
     {
+        /// <summary>초타원 지수 r(|x|^r + |y|^r = 1). 2 = 원호.</summary>
         public float R = 2f;
+        /// <summary>Custom 프로파일의 제어점(단위 정사각 좌표, p0=(1,0) → p1=(0,1)). null이면 초타원.</summary>
         public List<Vector2>? Custom;
+        /// <summary>Custom 샘플링 옵션(<see cref="BevelOptions.SampleEvenLengths"/>, <see cref="BevelOptions.SampleStraightEdges"/>).</summary>
         public bool EvenLengths, StraightEdges;
 
+        /// <summary>옵션에서 프로파일 정의를 만든다(Custom이면 프리셋 꺾은선을 세그먼트 수에 맞춰 생성).</summary>
         public static ProfileSpec From(BevelOptions o)
         {
             var p = new ProfileSpec { R = SuperellipseExponent(o.Shape), EvenLengths = o.SampleEvenLengths, StraightEdges = o.SampleStraightEdges };
@@ -143,6 +196,7 @@ public static partial class MeshOps
             return p;
         }
 
+        // r에서 초타원의 대각선 점 위치(0.5^(1/r))를 구해 -1..1 범위의 부풂 정도로 바꾼다. Custom은 고정 0.4.
         /// <summary>정사각 좌표 그리드 채움용: 대각선 방향으로 얼마나 모서리 쪽으로 부푸는가(-1..1).</summary>
         public float Bulge => Custom != null ? 0.4f : System.Math.Clamp(2f * MathF.Pow(0.5f, 1f / MathF.Max(R, 1e-3f)) - 1f, -0.5f, 1f);
     }
@@ -169,6 +223,7 @@ public static partial class MeshOps
                 }
             case BevelProfilePreset.Steps:
                 {
+                    // 계단 k단: 위로 올라갔다(면 A 방향) 안쪽으로 들어가기를 반복
                     int k = System.Math.Max(1, segments / 2);
                     pts.Add(new Vector2(1, 0));
                     for (int i = 0; i < k; i++)
@@ -200,8 +255,10 @@ public static partial class MeshOps
     /// </summary>
     private static List<Vector3> ProfileMidPoints(Vector3 p0, Vector3 p1, Vector3 k, int segments, ProfileSpec spec)
     {
+        // segments-1개의 중간 점만 돌려준다(양 끝 p0/p1은 호출자가 이미 가진 정점)
         var res = new List<Vector3>(System.Math.Max(0, segments - 1));
         if (segments < 2) return res;
+        // c = 안쪽 기준점(p0+p1−K), u/w = c에서 두 끝점으로 가는 축. 축이 퇴화하거나 평행하면 직선 보간.
         var c = p0 + p1 - k; var u = p0 - c; var w = p1 - c;
         float ul = u.Length(), wl = w.Length();
         bool linear = ul < 1e-8f || wl < 1e-8f || Vector3.Cross(u, w).Length() < 1e-4f * ul * wl;
@@ -210,11 +267,14 @@ public static partial class MeshOps
             for (int i = 1; i < segments; i++) res.Add(Vector3.Lerp(p0, p1, (float)i / segments));
             return res;
         }
+        // 단위 정사각 좌표(x, y) → 3D 점
         Vector3 At(Vector2 xy) => c + u * xy.X + w * xy.Y;
         if (spec.Custom == null)
         {
+            // 초타원 매개화: θ ∈ [0, π/2] → (cos^e θ, sin^e θ), e = 2/r
             float e = 2f / MathF.Max(spec.R, 1e-3f);
             Vector2 Se(float th) => new(MathF.Pow(MathF.Max(MathF.Cos(th), 0f), e), MathF.Pow(MathF.Max(MathF.Sin(th), 0f), e));
+            // 곡선을 N=512 구간으로 촘촘히 샘플해 누적 호 길이 표를 만들고, 균등 호 길이 목표값마다 이분 탐색 + 선형 보간으로 θ를 구한다
             const int N = 512;
             var len = new float[N + 1]; var prev = At(Se(0));
             for (int i = 1; i <= N; i++) { var p = At(Se(MathF.PI / 2 * i / N)); len[i] = len[i - 1] + Vector3.Distance(prev, p); prev = p; }
@@ -228,6 +288,7 @@ public static partial class MeshOps
             }
             return res;
         }
+        // Custom: 제어점을 3D로 옮긴 꺾은선을 샘플링하고 양 끝을 뺀 중간 점만 사용
         var cp = spec.Custom.Select(At).ToList();
         foreach (var p in SamplePolyline(cp, segments, spec.EvenLengths, spec.StraightEdges).Skip(1).Take(segments - 1)) res.Add(p);
         return res;
@@ -236,11 +297,14 @@ public static partial class MeshOps
     /// <summary>꺾은선을 segments 구간(segments+1 점)으로 샘플링. even = 전체 길이 균등, 아니면 제어점 우선(남는 샘플은 각 구간에 고르게, StraightEdges가 꺼져 있으면 긴 구간부터).</summary>
     private static List<Vector3> SamplePolyline(List<Vector3> cp, int segments, bool even, bool straightEdges)
     {
+        // n = 구간 수. 제어점이 하나뿐이면 같은 점을 반복
         int n = cp.Count - 1;
         var outp = new List<Vector3>();
         if (n <= 0) { for (int i = 0; i <= segments; i++) outp.Add(cp[0]); return outp; }
+        // seg[i] = i번째 구간 길이, total = 전체 길이
         var seg = new float[n]; float total = 0;
         for (int i = 0; i < n; i++) { seg[i] = Vector3.Distance(cp[i], cp[i + 1]); total += seg[i]; }
+        // 균등 길이 모드: 전체 길이를 segments 등분한 목표 거리마다 해당 구간을 찾아 보간
         if (even || total < 1e-9f)
         {
             for (int s = 0; s <= segments; s++)
@@ -260,6 +324,7 @@ public static partial class MeshOps
         // 제어점은 모두 쓰고 남는 샘플을 구간에 나눈다
         var count = Enumerable.Repeat(1, n).ToArray();
         int extra = segments - n;
+        // StraightEdges: 남는 샘플을 구간에 돌아가며 1개씩. 아니면 (구간 길이 / 현재 샘플 수)가 가장 큰 구간에 하나씩 추가
         if (straightEdges) for (int k = 0; k < extra; k++) count[k % n]++;
         else for (int k = 0; k < extra; k++) { int best = 0; for (int i = 1; i < n; i++) if (seg[i] / count[i] > seg[best] / count[best]) best = i; count[best]++; }
         outp.Add(cp[0]);
@@ -269,15 +334,27 @@ public static partial class MeshOps
 
     // ================================================================ 엣지 Bevel
 
+    /// <summary>
+    /// 엣지 Bevel 핵심. 알고리즘:
+    /// ① 선택 엣지(경계 엣지 제외)의 끝점 집합 V와 영향 면(V에 닿은 면)의 하드/심/법선/머티리얼을 기록한다.
+    /// ② 폭 종류에 따라 각 정점에서 인접 비베벨 엣지를 따라 물러날 거리(Slide)를 구하고 Clamp Overlap 비율을 적용한다.
+    /// ③ 영향 면마다 코너를 새 루프로 바꾼다: 베벨 엣지가 없는 코너 = 양쪽 엣지 위 점 두 개, 한쪽만 베벨 = 비베벨 엣지 위 점 하나,
+    ///    양쪽 모두 베벨 = 두 오프셋 선의 교점(Sharp) 또는 마이터 체인. 베벨 엣지 옆 점은 side[(면, 엣지, 정점)]에 기록한다.
+    /// ④ 원래 면을 지우고 새 루프로 재생성(하드/심 복원) → 베벨 엣지마다 두 면 쪽 점 사이를 프로파일 점으로 이은 쿼드 띠를 만든다.
+    /// ⑤ 정점마다 띠 끝/마이터 체인(capChains)을 고리로 이어 캡(NGon/GridFill/Cutoff)을 만든다.
+    /// </summary>
+    /// <returns>새로 생긴 면(띠 + 캡) ID.</returns>
     private static List<int> BevelEdgesCore(PolyMesh m, IEnumerable<int> edgeIds, BevelOptions o, BevelInfo info)
     {
         var result = new List<int>();
+        // 경계 엣지는 한쪽 면만 있어 띠를 만들 수 없으므로 제외
         var selected = new HashSet<int>(edgeIds.Where(e => e >= 0 && e < m.EdgeCount && m.Edges[e].Alive && !m.IsBoundaryEdge(e)));
         if (selected.Count == 0) return result;
         int segments = System.Math.Clamp(o.Segments, 1, 100);
         var spec = ProfileSpec.From(o);
         float width = MathF.Max(o.Width, 1e-6f);
 
+        // V = 베벨 엣지 끝점, pos = 원래 위치(정점 이동 전 스냅샷), selAt[v] = v에 닿은 선택 엣지들
         var V = new HashSet<int>();
         foreach (int e in selected) { var (a, b) = m.EdgeVertices(e); V.Add(a); V.Add(b); }
         var pos = new Dictionary<int, Vector3>();
@@ -306,6 +383,7 @@ public static partial class MeshOps
             faceNormal[f] = fn.LengthSquared() > 1e-18f ? Vector3.Normalize(fn) : Vector3.Zero;
             faceMat[f] = m.Faces[f].Material;
         }
+        // selInfo: 선택 엣지마다 (엣지, He0 쪽 면 f0, He1 쪽 면 f1, He0 시작 정점 a, 끝 정점 b)
         var selInfo = new List<(int e, int f0, int f1, int a, int b)>();
         foreach (int e in selected)
         {
@@ -314,6 +392,7 @@ public static partial class MeshOps
         }
         var facesOfSel = selInfo.ToDictionary(x => x.e, x => (x.f0, x.f1));
 
+        // 로컬 헬퍼: v→other 단위 방향, 엣지의 반대쪽 끝, 엣지 길이
         Vector3 Dir(int v, int other) { var d = m.Verts[other].Position - m.Verts[v].Position; float l = d.Length(); return l > 1e-12f ? d / l : Vector3.Zero; }
         int OtherEnd(int e, int v) { var (a, b) = m.EdgeVertices(e); return a == v ? b : a; }
         float EdgeLen(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
@@ -332,6 +411,7 @@ public static partial class MeshOps
                 _ => width,
             };
         }
+        // Absolute/Percent는 "엣지를 따라 잰 거리"라서 면 위 수직 오프셋 계산을 쓰지 않는다
         bool slideTypes = o.WidthType is BevelWidthType.Absolute or BevelWidthType.Percent;
 
         // 비베벨 엣지 eu를 따라 v에서 물러나는 길이(클램프 전). 관련 베벨 엣지는 같은 면에서 이웃한 것 우선.
@@ -348,6 +428,7 @@ public static partial class MeshOps
             foreach (int es in list) { float s = Vector3.Cross(du, Dir(v, OtherEnd(es, v))).Length(); if (s > bs) { bs = s; best = es; } }
             return best;
         }
+        // 비베벨 엣지 eu를 따라 v에서 물러날 길이: 오프셋 선(베벨 엣지와 평행, 거리 Offset)과 eu의 교점까지 = Offset / sin(두 엣지 사이 각)
         float RawSlide(int v, int eu, int f)
         {
             float len = EdgeLen(eu);
@@ -362,6 +443,7 @@ public static partial class MeshOps
         }
 
         // Clamp Overlap: 모든 이동 길이를 같은 비율로 줄여 이웃 엣지 끝을 넘지 않게(양끝이 모두 베벨이면 절반까지)
+        // clamp = 전역 축소 비율(1 = 그대로). 각 정점의 모든 엣지에 대해 이동 길이 L이 한계(엣지 길이의 98%, 반대쪽도 베벨이면 49%)를 넘으면 줄인다.
         float clamp = 1f;
         if (o.ClampOverlap && !o.LegacyPerEdgeClamp)
         {
@@ -380,14 +462,19 @@ public static partial class MeshOps
                 }
             }
         }
+        // 최종 이동 길이(클램프 적용, Legacy면 엣지별 45% 제한). 0이 되지 않도록 아주 작은 최소값.
         float Slide(int v, int eu, int f)
         {
             float L = RawSlide(v, eu, f) * clamp;
             if (o.LegacyPerEdgeClamp) L = MathF.Min(L, EdgeLen(eu) * 0.45f);
             return MathF.Max(L, 1e-6f);
         }
+        // 클램프가 적용된 면 위 오프셋 거리
         float Off(int e) => OffsetOf(e) * clamp;
 
+        // pOnEdge: (정점, 엣지) → 그 엣지 위 새 점(면 둘이 공유). qOnFace: (정점, 면) → 면 안쪽 교점.
+        // uvOf: 새 정점의 대표 UV(캡 면 UV용). side: (면, 베벨 엣지, 정점) → 띠 가장자리 점과 UV.
+        // capChains: 정점별 캡 둘레 조각(점 체인, 소유 베벨 엣지 또는 -1).
         var pOnEdge = new Dictionary<(int v, int e), int>();
         var qOnFace = new Dictionary<(int v, int f), int>();
         var uvOf = new Dictionary<int, Vector2>();
@@ -396,6 +483,7 @@ public static partial class MeshOps
         foreach (int v in V) capChains[v] = new List<(List<int>, int)>();
 
         // 면 코너 (c, prev, next)에서 위치 → UV(두 엣지 방향의 아핀 좌표로 보간)
+        // 코너 c 기준 r = a·dp + b·dn 를 최소제곱(2×2 정규방정식)으로 풀어 같은 계수로 UV를 보간한다
         Vector2 UvAt(Vector3 p, MeshOps.Corner c, MeshOps.Corner prev, MeshOps.Corner next)
         {
             var pc = m.Verts[c.Vertex].Position;
@@ -408,6 +496,7 @@ public static partial class MeshOps
             return c.Uv + (prev.Uv - c.Uv) * x + (next.Uv - c.Uv) * y;
         }
 
+        // v에서 엣지 e(반대쪽 other)를 따라 물러난 새 점을 만들거나 캐시에서 꺼낸다. f는 Loop Slide 끔 계산에 쓰는 면.
         int P(int v, int e, int other, int f)
         {
             if (pOnEdge.TryGetValue((v, e), out int id)) return id;
@@ -432,6 +521,7 @@ public static partial class MeshOps
             return id;
         }
 
+        // rebuilt: 재구성할 (원래 면, 새 코너 루프, 머티리얼)
         var rebuilt = new List<(int face, List<BevelEntry> loop, int material)>();
         foreach (int f in affected)
         {
@@ -442,10 +532,13 @@ public static partial class MeshOps
             for (int i = 0; i < n; i++)
             {
                 var c = corners[i]; var prev = corners[(i + n - 1) % n]; var next = corners[(i + 1) % n];
+                // 베벨 정점이 아닌 코너는 그대로
                 if (!V.Contains(c.Vertex)) { loop.Add(new BevelEntry(c.Vertex, c.Uv, c.Normal, -1, c.Vertex)); continue; }
                 int ePrev = m.FindEdge(prev.Vertex, c.Vertex), eNext = m.FindEdge(c.Vertex, next.Vertex);
                 bool sp = selected.Contains(ePrev), sn = selected.Contains(eNext);
+                // first: 이 코너에서 추가한 첫 항목 인덱스(side 기록용)
                 int first = loop.Count;
+                // 경우 1: 이 코너의 두 엣지 모두 베벨 아님(베벨 정점의 다른 면) → 두 엣지 위 점으로 모서리를 잘라 냄, 캡 조각은 p2→p1
                 if (!sp && !sn)
                 {
                     int p1 = P(c.Vertex, ePrev, prev.Vertex, f), p2 = P(c.Vertex, eNext, next.Vertex, f);
@@ -454,6 +547,7 @@ public static partial class MeshOps
                     uvOf.TryAdd(p1, uv1); uvOf.TryAdd(p2, uv2);
                     capChains[c.Vertex].Add((new List<int> { p2, p1 }, -1));
                 }
+                // 경우 2: 한쪽만 베벨 → 비베벨 엣지 위 점 하나가 띠 가장자리가 된다
                 else if (sp != sn)
                 {
                     int eu = sp ? eNext : ePrev; var other = sp ? next : prev;
@@ -472,6 +566,7 @@ public static partial class MeshOps
                     // 면 안쪽 법선(왼쪽): prev→c 방향과 c→next 방향 기준
                     var Lp = Vector3.Cross(nf, -dpH); var Ln = Vector3.Cross(nf, dnH);
                     float oP = Off(ePrev), oN = Off(eNext);
+                    // Absolute/Percent: 두 엣지를 따라 각각 비율만큼 간 벡터 합(평행사변형 꼭짓점)
                     if (slideTypes)
                     {
                         float fp = o.WidthType == BevelWidthType.Percent ? width / 100f : MathF.Min(width * clamp / MathF.Max(lp, 1e-9f), 1f);
@@ -488,6 +583,7 @@ public static partial class MeshOps
                         if (MathF.Abs(det) > 1e-5f) { float a = (oP * m22 - m12 * oN) / det, b = (m11 * oN - m21 * oP) / det; q = pc + dpH * a + dnH * b; }
                         else q = pc + (Lp * oP + Ln * oN) * 0.5f; // 거의 일직선
                     }
+                    // reflex: 면 안에서 이 코너가 반사각(>180°)이면 Outer 마이터, 아니면 Inner 마이터 적용
                     bool reflex = Vector3.Dot(Vector3.Cross(dnH, dpH), nf) < -1e-6f;
                     var miter = reflex ? o.MiterOuter : (o.MiterInner == BevelMiter.Patch ? BevelMiter.Sharp : o.MiterInner);
                     if (miter == BevelMiter.Sharp)
@@ -498,6 +594,7 @@ public static partial class MeshOps
                     }
                     else
                     {
+                        // 마이터: q1/q2 두 점 사이를 Patch(교점 q 경유) 또는 Arc(프로파일)로 잇고, 체인 역순을 캡 조각으로 추가
                         Vector3 q1, q2;
                         if (!reflex) { float sp2 = MathF.Max(o.Spread, 1e-4f); q1 = q + dpH * MathF.Min(sp2, lp * 0.45f); q2 = q + dnH * MathF.Min(sp2, ln * 0.45f); }
                         else { q1 = pc + Lp * oP; q2 = pc + Ln * oN; }
@@ -516,14 +613,17 @@ public static partial class MeshOps
                         capChains[c.Vertex].Add((ids, -1));
                     }
                 }
+                // 베벨 엣지 옆 점 기록: prev 쪽 베벨 엣지는 이 코너의 첫 항목, next 쪽은 마지막 항목
                 if (sp) side[(f, ePrev, c.Vertex)] = (loop[first].Vertex, loop[first].Uv);
                 if (sn) side[(f, eNext, c.Vertex)] = (loop[^1].Vertex, loop[^1].Uv);
             }
             rebuilt.Add((f, loop, m.Faces[f].Material));
         }
 
+        // 원래 면 제거(정점은 프로파일 K 계산에 필요하므로 아직 지우지 않음)
         foreach (var (f, _, _) in rebuilt) m.RemoveFace(f, removeIsolated: false);
 
+        // 새 루프의 두 항목 x→y 사이 엣지가 원래 어느 엣지 위에 놓였는지 추적해 그 엣지의 하드 여부를 돌려준다
         bool HardBetween(BevelEntry x, BevelEntry y)
         {
             if (x.OriginEdge >= 0 && (y.OriginEdge == x.OriginEdge || (y.OriginEdge == -1 && edgeVerts.TryGetValue(x.OriginEdge, out var ev) && (ev.a == y.Vertex || ev.b == y.Vertex)))) return hardOf[x.OriginEdge];
@@ -532,6 +632,7 @@ public static partial class MeshOps
                 foreach (var (e, (a, b)) in edgeVerts) if ((a == x.Vertex && b == y.Vertex) || (a == y.Vertex && b == x.Vertex)) return hardOf[e];
             return false;
         }
+        // HardBetween과 같은 규칙으로 심 플래그를 추적
         bool SeamBetween(BevelEntry x, BevelEntry y)
         {
             if (x.OriginEdge >= 0 && (y.OriginEdge == x.OriginEdge || (y.OriginEdge == -1 && edgeVerts.TryGetValue(x.OriginEdge, out var ev) && (ev.a == y.Vertex || ev.b == y.Vertex)))) return seamOf[x.OriginEdge];
@@ -541,6 +642,7 @@ public static partial class MeshOps
             return false;
         }
 
+        // 새 루프로 면 재생성: 연속 중복 정점과 끝-처음 중복 제거 후 3각 이상만
         foreach (var (_, loop, material) in rebuilt)
         {
             var clean = new List<BevelEntry>();
@@ -559,12 +661,14 @@ public static partial class MeshOps
 
         // 프로파일 공유: 같은 정점에서 같은 두 끝점을 쓰는 프로파일(엣지 루프)은 한 번만 만든다(틈 면 방지).
         var profCache = new Dictionary<(int v, int lo, int hi), int[]>();
+        // 정점 v에서 베벨 엣지 e의 프로파일(segments+1 점): 양 끝 s0/s1 사이 중간 점을 (v, 작은 ID, 큰 ID) 키로 캐시해 이웃 띠와 공유
         (int[] verts, Vector2[] uvs) Profile(int v, int e, (int vert, Vector2 uv) s0, (int vert, Vector2 uv) s1)
         {
             var verts = new int[segments + 1]; var uvs = new Vector2[segments + 1];
             verts[0] = s0.vert; uvs[0] = s0.uv; verts[segments] = s1.vert; uvs[segments] = s1.uv;
             if (segments == 1) return (verts, uvs);
             if (s0.vert == s1.vert) { for (int k = 1; k < segments; k++) { verts[k] = s0.vert; uvs[k] = s0.uv; } return (verts, uvs); }
+            // 방향(fwd)에 무관하게 같은 키를 쓰고 꺼낼 때 순서를 맞춘다
             bool fwd = s0.vert < s1.vert;
             var key = (v, fwd ? s0.vert : s1.vert, fwd ? s1.vert : s0.vert);
             if (!profCache.TryGetValue(key, out var mids))
@@ -590,14 +694,18 @@ public static partial class MeshOps
         }
 
         // 베벨 쿼드 띠
+        // 띠 머티리얼: 옵션 지정값, 아니면 f0(없으면 f1) 머티리얼
         int Mat(int f0, int f1) => o.MaterialIndex >= 0 ? o.MaterialIndex : faceMat.GetValueOrDefault(f0, faceMat.GetValueOrDefault(f1));
         foreach (var (e, f0, f1, a, b) in selInfo)
         {
+            // 네 모서리(두 면 × 두 끝점)의 띠 가장자리 점이 모두 있어야 띠를 만든다
             if (!side.TryGetValue((f0, e, a), out var a0) || !side.TryGetValue((f0, e, b), out var b0) ||
                 !side.TryGetValue((f1, e, a), out var a1) || !side.TryGetValue((f1, e, b), out var b1)) continue;
+            // 양 끝이 모두 한 점으로 모이면 띠 넓이가 0이라 건너뜀
             if (a0.vert == a1.vert && b0.vert == b1.vert) continue;
             var (pa, uva) = Profile(a, e, a0, a1);
             var (pb, uvb) = Profile(b, e, b0, b1);
+            // 프로파일 k번째와 k+1번째 점을 이어 쿼드를 만든다. t는 프로파일 위치(Harden Normals 보간용).
             for (int k = 0; k < segments; k++)
             {
                 var quad = new List<Corner> { new(pb[k], uvb[k], Vector3.Zero), new(pa[k], uva[k], Vector3.Zero), new(pa[k + 1], uva[k + 1], Vector3.Zero), new(pb[k + 1], uvb[k + 1], Vector3.Zero) };
@@ -613,6 +721,7 @@ public static partial class MeshOps
             // Mark Seams/Sharp: 표시된 엣지는 띠의 면 f0 쪽 가장자리로 이어 간다(경로가 끊기지 않게)
             if (o.MarkSeams && seamOf.GetValueOrDefault(e)) SetEdgeSeam(m, pa[0], pb[0], true);
             if (o.MarkSharp && hardOf.GetValueOrDefault(e)) SetHard(m, pa[0], pb[0], true);
+            // 띠의 양 끝 프로파일을 캡 조각으로 등록(정점 a 쪽은 역순으로 해서 캡 고리 방향을 맞춤)
             var ca = new List<int>(); for (int k = segments; k >= 0; k--) ca.Add(pa[k]);
             var cb = new List<int>(); for (int k = 0; k <= segments; k++) cb.Add(pb[k]);
             capChains[a].Add((ca, e)); capChains[b].Add((cb, e));
@@ -621,11 +730,13 @@ public static partial class MeshOps
         // 정점 캡
         foreach (int v in V)
         {
+            // 캡 조각들을 끝-시작으로 이어 닫힌 고리를 만든다. 실패(열린 경계 등)면 캡 없음.
             var loopSegs = LinkChains(capChains[v]);
             if (loopSegs == null) continue;
             var loop = new List<int>();
             foreach (var (pts, _) in loopSegs) for (int i = 0; i < pts.Count - 1; i++) loop.Add(pts[i]);
             if (loop.Count < 3 || loop.Distinct().Count() != loop.Count) continue;
+            // 캡 머티리얼: 옵션 지정값, 아니면 첫 영향 면 머티리얼
             int mat = o.MaterialIndex >= 0 ? o.MaterialIndex : affected.Where(f => faceMat.ContainsKey(f)).Select(f => faceMat[f]).DefaultIfEmpty(0).First();
             Vector2 Uv(int id) => uvOf.TryGetValue(id, out var uv) ? uv : Vector2.Zero;
             var capFaces = new List<int>();
@@ -670,6 +781,7 @@ public static partial class MeshOps
                 }
         }
 
+        // 원래 베벨 정점은 이제 어느 면에도 쓰이지 않으므로 제거
         foreach (int v in V) m.RemoveVertexIfIsolated(v);
         m.BumpTopology();
         return result;
@@ -678,11 +790,13 @@ public static partial class MeshOps
     /// <summary>체인(시작 정점 → … → 끝 정점)들을 끝-시작으로 이어 닫힌 고리를 만든다. 실패하면 null.</summary>
     private static List<(List<int> pts, int owner)>? LinkChains(List<(List<int> pts, int owner)> chains)
     {
+        // 점이 2개 이상인 체인만, 시작 정점이 겹치면(분기) 실패
         var valid = chains.Where(c => c.pts.Count >= 2).ToList();
         if (valid.Count == 0) return null;
         var byStart = new Dictionary<int, int>();
         for (int i = 0; i < valid.Count; i++) if (!byStart.TryAdd(valid[i].pts[0], i)) return null;
         var order = new List<(List<int>, int)>();
+        // 0번 체인부터 끝 정점 = 다음 체인 시작 정점으로 따라가 다시 0번으로 돌아오고 모든 체인을 썼으면 성공
         int cur = 0; var used = new HashSet<int>();
         while (used.Add(cur))
         {
@@ -697,11 +811,13 @@ public static partial class MeshOps
     private static List<int> GridFillCap(PolyMesh m, List<int> loop, Func<int, Vector2> uv, Vector3 corner, float bulge, int mat)
     {
         var faces = new List<int>();
+        // 둘레 평균에서 원래 모서리(corner) 쪽으로 bulge만큼 옮긴 가운데 점
         var avg = Vector3.Zero; var uvAvg = Vector2.Zero;
         foreach (int id in loop) { avg += m.Verts[id].Position; uvAvg += uv(id); }
         avg /= loop.Count; uvAvg /= loop.Count;
         int center = m.AddVertex(avg + (corner - avg) * bulge);
         int n = loop.Count;
+        // 짝수 둘레: (i, i+1, i+2, 가운데) 쿼드 n/2개, 홀수: (i, i+1, 가운데) 삼각형 팬
         if (n % 2 == 0 && n >= 4)
             for (int i = 0; i < n; i += 2)
             {
@@ -723,6 +839,7 @@ public static partial class MeshOps
     private static void MarkAlongLoop(PolyMesh m, List<int> loop, List<int> anchors, bool seam)
     {
         int n = loop.Count;
+        // idx = 기준 정점들의 루프 인덱스(정렬). spans = 이웃 기준 정점 사이 구간(시작, 엣지 수)
         var idx = anchors.Select(a => loop.IndexOf(a)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
         if (idx.Count < 2) return;
         var spans = new List<(int from, int count)>();
@@ -737,6 +854,7 @@ public static partial class MeshOps
             }
     }
 
+    /// <summary>정점 a-b 사이 엣지가 있으면 UV 심 플래그를 설정한다(<see cref="SetHard"/>의 심 버전).</summary>
     private static void SetEdgeSeam(PolyMesh m, int a, int b, bool seam)
     {
         int e = m.FindEdge(a, b);
@@ -750,6 +868,7 @@ public static partial class MeshOps
     /// 선택 정점을 베벨한다: 정점에 모인 각 엣지 위에 폭만큼 물러난 점을 만들고, 정점을 둘러싼 각 면의 모서리를 그 점들 사이의 프로파일(세그먼트)로 깎은 뒤
     /// 그 둘레로 캡을 만든다(세그먼트 2+는 가운데를 원래 정점 쪽으로 부풀린 Grid Fill).
     /// </summary>
+    /// <returns>새로 생긴 면(캡) ID. 깎인 원래 면은 같은 면이 아니라 재생성되므로 포함하지 않는다.</returns>
     private static List<int> BevelVerticesCore(PolyMesh m, IEnumerable<int> vertIds, BevelOptions o, BevelInfo info)
     {
         var result = new List<int>();
@@ -758,11 +877,13 @@ public static partial class MeshOps
         int segments = System.Math.Clamp(o.Segments, 1, 100);
         var spec = ProfileSpec.From(o);
         float width = MathF.Max(o.Width, 1e-6f);
+        // pos = 원래 위치 스냅샷, Raw(e) = 엣지 e를 따라 물러날 거리(Percent면 엣지 길이 비율)
         var pos = V.ToDictionary(v => v, v => m.Verts[v].Position);
 
         float EdgeLen(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
         int OtherEnd(int e, int v) { var (a, b) = m.EdgeVertices(e); return a == v ? b : a; }
         float Raw(int e) => o.WidthType == BevelWidthType.Percent ? EdgeLen(e) * width / 100f : width;
+        // Clamp Overlap: 엣지 Bevel과 같은 전역 비율 축소(반대쪽 끝도 베벨이면 49%, 아니면 98%까지)
         float clamp = 1f;
         if (o.ClampOverlap)
         {
@@ -779,6 +900,7 @@ public static partial class MeshOps
             }
         }
 
+        // 영향 면과 원래 엣지 하드/심/정점, 면 머티리얼 기록
         var affected = new List<int>(); var tmp = new List<int>();
         foreach (int v in V) { m.GetVertexFaces(v, tmp); foreach (int f in tmp) if (!affected.Contains(f)) affected.Add(f); }
         var hardOf = new Dictionary<int, bool>(); var seamOf = new Dictionary<int, bool>(); var edgeVerts = new Dictionary<int, (int, int)>();
@@ -790,6 +912,7 @@ public static partial class MeshOps
             faceMat[f] = m.Faces[f].Material;
         }
 
+        // pOnEdge: (정점, 엣지) → 물러난 새 점(이웃 면이 공유), uvOf: 새 점 UV, capChains: 정점별 캡 조각
         var pOnEdge = new Dictionary<(int v, int e), int>();
         var uvOf = new Dictionary<int, Vector2>();
         var capChains = V.ToDictionary(v => v, _ => new List<(List<int> pts, int owner)>());
@@ -804,6 +927,7 @@ public static partial class MeshOps
             return id;
         }
 
+        // 면마다 베벨 정점 코너를 p1(prev 쪽) → 프로파일 중간 점 → p2(next 쪽)로 바꾼 새 루프. originEdge: -1 원래 정점, -2 중간 점.
         var rebuilt = new List<(int face, List<(int vert, Vector2 uv, int originEdge)> loop, int material)>();
         foreach (int f in affected)
         {
@@ -817,6 +941,7 @@ public static partial class MeshOps
                 int ePrev = m.FindEdge(prev.Vertex, c.Vertex), eNext = m.FindEdge(c.Vertex, next.Vertex);
                 int p1 = P(c.Vertex, ePrev, prev.Vertex), p2 = P(c.Vertex, eNext, next.Vertex);
                 float l1 = Vector3.Distance(pos[c.Vertex], m.Verts[prev.Vertex].Position), l2 = Vector3.Distance(pos[c.Vertex], m.Verts[next.Vertex].Position);
+                // UV는 원래 엣지 위 비율로 보간
                 float t1 = l1 > 1e-9f ? Vector3.Distance(pos[c.Vertex], m.Verts[p1].Position) / l1 : 0, t2 = l2 > 1e-9f ? Vector3.Distance(pos[c.Vertex], m.Verts[p2].Position) / l2 : 0;
                 var uv1 = Vector2.Lerp(c.Uv, prev.Uv, t1); var uv2 = Vector2.Lerp(c.Uv, next.Uv, t2);
                 var chain = new List<int> { p1 };
@@ -829,12 +954,14 @@ public static partial class MeshOps
                     loop.Add((id, uv, -2)); uvOf.TryAdd(id, uv); chain.Add(id);
                 }
                 loop.Add((p2, uv2, eNext)); uvOf.TryAdd(p2, uv2); chain.Add(p2);
+                // 캡은 면과 반대 방향으로 감기므로 체인을 뒤집어 저장
                 chain.Reverse();
                 capChains[c.Vertex].Add((chain, -1));
             }
             rebuilt.Add((f, loop, m.Faces[f].Material));
         }
         foreach (var (f, _, _) in rebuilt) m.RemoveFace(f, removeIsolated: false);
+        // 면 재생성 + 원래 엣지 위 구간의 하드/심 복원
         foreach (var (_, loop, material) in rebuilt)
         {
             var clean = new List<(int vert, Vector2 uv, int originEdge)>();
@@ -851,6 +978,7 @@ public static partial class MeshOps
                 if (oe >= 0) { SetHard(m, x.vert, y.vert, hardOf.GetValueOrDefault(oe)); if (seamOf.GetValueOrDefault(oe)) SetEdgeSeam(m, x.vert, y.vert, true); }
             }
         }
+        // 정점마다 캡 생성: 닫힌 고리(내부 정점)면 Grid Fill(세그먼트 2+, NGon 아님) 또는 다각형, 경계 정점은 열린 경로로 다각형
         foreach (int v in V)
         {
             var chains = capChains[v];
@@ -882,6 +1010,7 @@ public static partial class MeshOps
     /// <summary>열린 사슬들(경계 정점)을 끝-시작으로 이어 하나의 열린 경로로 만든다(닫는 엣지는 면이 만든다).</summary>
     private static List<int>? OpenChainLoop(List<(List<int> pts, int owner)> chains)
     {
+        // 시작 정점이 겹치지 않는 체인들 중 다른 체인의 끝으로 이어지지 않는 체인(열린 경로의 시작)을 찾아 차례로 따라간다
         var valid = chains.Where(c => c.pts.Count >= 2).ToList();
         if (valid.Count == 0) return null;
         var byStart = new Dictionary<int, int>();
@@ -908,6 +1037,7 @@ public static partial class MeshOps
     /// </summary>
     private static void PostProcessRoundBevel(PolyMesh m, List<int> result, HashSet<int> strips)
     {
+        // newSet = 이번 Bevel이 만든 면. 병합이 일어나면 result가 바뀌므로 변화가 없을 때까지 반복한다.
         var newSet = new HashSet<int>(result);
         var hes = new List<int>();
         bool merged = true;
@@ -917,6 +1047,7 @@ public static partial class MeshOps
             foreach (int f in result.ToArray())
             {
                 if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive) { result.Remove(f); continue; }
+                // 띠는 건드리지 않고 캡만 검사
                 if (strips.Contains(f)) continue;
                 var nf = MeshNormals.FaceNormalUnnormalized(m, f);
                 m.GetFaceHalfEdges(f, hes);
@@ -936,6 +1067,7 @@ public static partial class MeshOps
                     continue;
                 }
                 nf = Vector3.Normalize(nf);
+                // curved: 이웃한 새 면(띠) 중 이 캡과 법선이 다른 면이 있으면 둥근 Bevel의 끝 캡(D자)이다
                 bool curved = false;
                 foreach (int he in hes)
                 {
@@ -946,6 +1078,7 @@ public static partial class MeshOps
                     if (ng.LengthSquared() > 1e-20f && Vector3.Dot(nf, Vector3.Normalize(ng)) < 0.9999f) { curved = true; break; }
                 }
                 if (!curved) continue;
+                // D자 캡과 같은 평면인 원래 면을 찾아 합친다(한 번 합치면 face 목록이 바뀌므로 처음부터 다시)
                 foreach (int he in hes)
                 {
                     int tw = m.Hes[he].Twin; if (tw < 0) continue;
@@ -964,6 +1097,7 @@ public static partial class MeshOps
         SoftenNewFaces(m, result);
     }
 
+    /// <summary>주어진 면들의 모든 엣지를 60° 기준으로 소프트/하드 처리한다(둥근 Bevel의 부드러운 음영).</summary>
     private static void SoftenNewFaces(PolyMesh m, List<int> faces)
     {
         var hes = new List<int>();
@@ -986,6 +1120,7 @@ public static partial class MeshOps
     {
         var newSet = new HashSet<int>(result);
         var hes = new List<int>();
+        // 띠마다: 각 코너의 프로파일 위치 s로 nA→nB slerp한 노멀을 고정(NormalLocked → Recompute가 건너뜀)
         foreach (var (f, (nA, nB, t)) in info.StripProfiles)
         {
             if (f >= m.FaceCount || !m.Faces[f].Alive) continue;
@@ -998,6 +1133,7 @@ public static partial class MeshOps
                 if (n.LengthSquared() < 1e-12f) continue;
                 h.Normal = n; h.NormalLocked = true; m.Hes[he] = h;
                 int tw = h.Twin;
+                // 띠와 원래 면(새 면 아님) 사이 엣지는 하드: 원래 면은 평평한 노멀 유지
                 if (tw >= 0 && !newSet.Contains(m.Hes[tw].Face)) { var ed = m.Edges[h.Edge]; ed.Hard = true; m.Edges[h.Edge] = ed; }
             }
             // 띠 내부 엣지는 부드럽게
@@ -1005,6 +1141,7 @@ public static partial class MeshOps
         }
     }
 
+    /// <summary>두 단위 노멀 사이 구면 선형 보간(각이 아주 작으면 선형 보간 후 정규화, 영벡터는 다른 쪽 반환).</summary>
     private static Vector3 SlerpNormal(Vector3 a, Vector3 b, float t)
     {
         if (a.LengthSquared() < 1e-12f) return b; if (b.LengthSquared() < 1e-12f) return a;
@@ -1023,6 +1160,7 @@ public static partial class MeshOps
     {
         var newSet = new HashSet<int>(result);
         var hes = new List<int>();
+        // 면 세기: 3 = Strong, 2 = Medium, 1 = Weak. 새 띠 = 2, 새 캡 = 1, 원래 면 = 모드에 따라 3 또는 2.
         int Strength(int f)
         {
             if (newSet.Contains(f)) return info.Strips.Contains(f) ? 2 : 1;
@@ -1036,14 +1174,17 @@ public static partial class MeshOps
             }
             return 2;
         }
+        // 면 세기 메모이제이션
         var strength = new Dictionary<int, int>();
         int S(int f) { if (!strength.TryGetValue(f, out int s)) { s = Strength(f); strength[f] = s; } return s; }
+        // 새 면에 닿은 정점들만 처리
         var verts = new HashSet<int>();
         foreach (int f in result) { if (!m.Faces[f].Alive) continue; m.GetFaceHalfEdges(f, hes); foreach (int he in hes) verts.Add(m.Hes[he].Vertex); }
         foreach (int v in verts)
         {
             foreach (int h in m.VertexOutgoing(v).ToArray())
             {
+                // 이 코너의 스무딩 부채꼴에서 가장 센 면들의 (정규화하지 않은 = 면적 가중) 법선 합을 노멀로 고정
                 var fan = CornerFan(m, h);
                 int best = fan.Max(S);
                 var sum = Vector3.Zero;
@@ -1057,6 +1198,7 @@ public static partial class MeshOps
     /// <summary>코너 h(정점의 나가는 하프에지)와 소프트 엣지로 이어진 면들(MeshNormals와 같은 스무딩 규칙).</summary>
     private static List<int> CornerFan(PolyMesh m, int h)
     {
+        // 하드 엣지나 경계를 만날 때까지 트윈의 Next로 한 방향 회전, 한 바퀴 돌면 wrapped
         var faces = new List<int> { m.Hes[h].Face };
         bool wrapped = false; int cur = h;
         for (int g = 0; g < 4096; g++)
@@ -1067,6 +1209,7 @@ public static partial class MeshOps
             if (nxt == h) { wrapped = true; break; }
             faces.Add(m.Hes[nxt].Face); cur = nxt;
         }
+        // 한 바퀴가 아니면 반대 방향(Prev의 트윈)으로도 돌아 부채꼴 나머지를 모은다
         if (!wrapped)
         {
             cur = h;

@@ -7,8 +7,14 @@ namespace Cube.Core.IO.Fbx;
 /// <summary>FBX 내보내기 옵션. 단위는 cm(UnitScaleFactor 1)로 쓰고 정점·이동·행렬 이동 성분에 UnitScale(기본 100)을 곱한다(Blender/Maya 방식).</summary>
 /// <param name="BakePivots">true(기본)면 Rotation/ScalingPivot 속성 대신 피벗을 지오메트리에 베이크한다(정점 −P, Lcl Translation = P+T, 자식 Translation −P). 가져오는 앱(Blender origin, Unity/Godot)의 원점이 Cube 피벗과 일치한다.</param>
 /// <param name="ExportAnimations">true(기본)면 Document.Animations의 클립마다 AnimationStack/Layer/CurveNode/Curve와 Take를 쓴다(FbxSceneBuilder.Animation.cs).</param>
+/// <param name="UnitScale">m → 파일 단위 배율(기본 100 = cm). 정점·Lcl Translation·피벗·행렬 이동 성분·라이트 범위에 곱한다.</param>
+/// <param name="Compress">큰 배열 속성을 zlib으로 압축할지.</param>
+/// <param name="Creator">헤더 Creator 문자열.</param>
+/// <param name="EmbedLights">라이트 노드를 NodeAttribute Light로 기록할지(false면 Null 모델만).</param>
+/// <param name="BaseDir">FBX 파일이 놓일 폴더. 텍스처 RelativeFilename 계산 기준(null이면 파일 이름만).</param>
 public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = true, string Creator = "Cube FBX writer", bool EmbedLights = true, string? BaseDir = null, bool BakePivots = true, bool ExportAnimations = true)
 {
+    /// <summary>기본 옵션(cm, 압축, 라이트 포함, 피벗 베이크, 애니메이션 포함).</summary>
     public static readonly FbxExportOptions Default = new();
 }
 
@@ -18,30 +24,51 @@ public sealed record FbxExportOptions(float UnitScale = 100f, bool Compress = tr
 /// Material(Phong + DiffuseColor 텍스처 Texture/Video), 조인트(Model LimbNode + NodeAttribute Skeleton), 라이트(NodeAttribute Light),
 /// 스킨(Deformer Skin/Cluster + Pose BindPose; 바인드 포즈 = 내보내는 시점의 현재 포즈, glTF와 동일).
 /// </summary>
+// 생성 흐름: Build → (BuildNode 재귀 → BuildGeometry/MaterialId/TextureId) → BuildSkin → BuildAnimations
+//   → 헤더/설정/Definitions(객체 타입별 개수와 템플릿) → Objects → Connections → Takes.
+// FBX 객체는 모두 고유 64비트 ID를 가지며 부모-자식/속성 연결은 Connections 섹션의 "C" 레코드로 표현한다
+// (OO = 객체→객체, OP = 객체→속성). 루트 노드 ID는 0이다.
 public sealed partial class FbxSceneBuilder
 {
+    /// <summary>내보낼 문서(머티리얼/조인트 조회용).</summary>
     private readonly Document _doc;
+    /// <summary>내보내기 옵션.</summary>
     private readonly FbxExportOptions _opt;
+    /// <summary>다음에 배정할 FBX 객체 ID(1,000,000부터 증가; 0은 루트라 피한다).</summary>
     private long _nextId = 1_000_000;
+    /// <summary>Objects 섹션에 들어갈 객체 노드(Model, Geometry, Material, Deformer, Pose, Animation* 등) — 만든 순서대로.</summary>
     private readonly List<FbxNode> _objects = new();
+    /// <summary>Connections 섹션에 쓸 연결(자식 ID, 부모 ID, 속성 이름; 속성이 null이면 OO, 아니면 OP 연결).</summary>
     private readonly List<(long child, long parent, string? prop)> _connections = new();
+    /// <summary>씬 노드 → FBX Model ID.</summary>
     private readonly Dictionary<SceneNode, long> _modelIds = new();
+    /// <summary>문서 머티리얼 ID → FBX Material ID(같은 머티리얼은 한 번만 만든다).</summary>
     private readonly Dictionary<int, long> _materialIds = new();
+    /// <summary>객체 타입별 생성 개수(Definitions 섹션의 ObjectType Count).</summary>
     private readonly Dictionary<string, int> _typeCounts = new();
+    /// <summary>내보낸 모델(노드) 수. 결과 메시지용.</summary>
     public int NodeCount { get; private set; }
+    /// <summary>내보낸 삼각형 수(n각형은 n-2개로 셈). 결과 메시지용.</summary>
     public int TriangleCount { get; private set; }
 
+    /// <summary>빌더를 만든다. 한 인스턴스는 한 번의 <see cref="Build"/>에만 쓴다(ID·목록이 누적되므로).</summary>
     public FbxSceneBuilder(Document doc, FbxExportOptions? options = null) { _doc = doc; _opt = options ?? FbxExportOptions.Default; }
 
+    /// <summary>새 객체 ID를 배정하고 그 타입의 개수를 1 늘린다.</summary>
     private long NewId(string type) { _typeCounts[type] = _typeCounts.GetValueOrDefault(type) + 1; return _nextId++; }
+    /// <summary>단위 배율(<see cref="FbxExportOptions.UnitScale"/>) 단축 속성.</summary>
     private float S => _opt.UnitScale;
 
     /// <summary>roots와 그 하위 전체를 내보낸다. 스킨이 참조하는 조인트가 roots 밖이면 그 조인트 체인의 루트부터 함께 내보낸다.</summary>
+    /// <returns>파일 최상위 노드 목록(<see cref="FbxBinaryWriter.Write(IEnumerable{FbxNode}, bool)"/>에 넘긴다).</returns>
     public List<FbxNode> Build(IReadOnlyList<SceneNode> roots)
     {
+        // 1단계: 내보낼 최상위 노드와 그 하위 전체 집합(inSet)을 만든다. 문서 루트 자체는 제외.
         var tops = new List<SceneNode>(roots.Where(r => !r.IsRoot));
         var inSet = new HashSet<SceneNode>();
         foreach (var r in tops) { inSet.Add(r); foreach (var d in r.Descendants()) inSet.Add(d); }
+        // 스킨이 참조하는 조인트가 집합 밖이면, 집합에 없는 조인트 부모를 따라 올라가 체인 루트를 찾아 그 하위 트리를 추가한다
+        // (선택 내보내기에서 메시만 골라도 스켈레톤이 함께 나가도록).
         foreach (var n in inSet.ToList())
         {
             if (n.Skin == null) continue;
@@ -62,6 +89,7 @@ public sealed partial class FbxSceneBuilder
         // 애니메이션(모델 ID와 베이크 피벗이 정해진 뒤)
         if (_opt.ExportAnimations) BuildAnimations();
 
+        // 2단계: 파일 최상위 섹션을 FBX SDK와 같은 순서로 구성한다. Definitions는 객체 생성 후에 만들어야 개수가 정확하다.
         var top = new List<FbxNode>
         {
             HeaderExtension(),
@@ -76,6 +104,7 @@ public sealed partial class FbxSceneBuilder
         var objects = new FbxNode("Objects");
         foreach (var o in _objects) objects.Add(o);
         top.Add(objects);
+        // Connections: 모든 연결을 "C" 레코드로 기록.
         var conns = new FbxNode("Connections");
         foreach (var (child, parent, prop) in _connections)
         {
@@ -89,6 +118,9 @@ public sealed partial class FbxSceneBuilder
 
     // ---------------------------------------------------------------- 헤더/설정
 
+    /// <summary>
+    /// FBXHeaderExtension 섹션: 헤더/FBX 버전, 생성 시각, Creator, SceneInfo(GlobalInfo 메타데이터와 Original/LastSaved 애플리케이션 정보).
+    /// </summary>
     private FbxNode HeaderExtension()
     {
         var now = DateTime.Now;
@@ -121,6 +153,10 @@ public sealed partial class FbxSceneBuilder
         return h;
     }
 
+    /// <summary>
+    /// GlobalSettings 섹션: 축(Up = Y, Front = +Z, Coord = +X; 오른손 Y-up), UnitScaleFactor 1(= cm 파일),
+    /// 그리고 애니메이션 시간 설정(TimeMode/TimeSpan/CustomFrameRate; <c>TimeSettings()</c>가 내보내는 클립에서 계산).
+    /// </summary>
     private FbxNode GlobalSettings()
     {
         var g = new FbxNode("GlobalSettings");
@@ -146,6 +182,7 @@ public sealed partial class FbxSceneBuilder
         return g;
     }
 
+    /// <summary>Documents 섹션: 씬 문서 하나(RootNode 0)와 활성 애니메이션 스택 이름(첫 클립).</summary>
     private FbxNode Documents()
     {
         var d = new FbxNode("Documents");
@@ -158,12 +195,17 @@ public sealed partial class FbxSceneBuilder
         return d;
     }
 
+    /// <summary>
+    /// Definitions 섹션: GlobalSettings 1개 + 실제로 만든 객체 타입별 개수, 그리고 타입별 PropertyTemplate(기본 속성값).
+    /// 템플릿은 가져오는 쪽이 생략된 속성의 기본값으로 쓴다(FBX SDK/Blender 출력과 같은 값).
+    /// </summary>
     private FbxNode Definitions()
     {
         var d = new FbxNode("Definitions");
         d.Add("Version", 100);
         d.Add("Count", 1 + _typeCounts.Values.Sum());
         d.Add("ObjectType", "GlobalSettings").Add("Count", 1);
+        // 타입 이름 순으로 정렬해 출력을 결정적으로 만든다.
         foreach (var (type, count) in _typeCounts.OrderBy(kv => kv.Key))
         {
             var ot = d.Add("ObjectType", type);
@@ -262,10 +304,20 @@ public sealed partial class FbxSceneBuilder
 
     // ---------------------------------------------------------------- 노드
 
+    /// <summary>메시 노드 → FBX Geometry ID(스킨 Deformer를 연결할 대상).</summary>
     private readonly Dictionary<SceneNode, long> _geometryIds = new();
     /// <summary>BakePivots일 때 노드마다 지오메트리/자식에 적용한 피벗 오프셋(오브젝트 공간, m).</summary>
     private readonly Dictionary<SceneNode, Vector3> _bakedPivot = new();
 
+    /// <summary>
+    /// 씬 노드 하나를 FBX Model로 만들고 재귀적으로 자식을 처리한다.
+    /// 모델 타입: 조인트 = LimbNode, 메시 = Mesh, 라이트 = Light, 그 외 = Null.
+    /// 셰이프에 따라 NodeAttribute(조인트/라이트) 또는 Geometry + Material을 만들어 Model에 연결한다.
+    /// </summary>
+    /// <param name="n">내보낼 노드.</param>
+    /// <param name="parentId">부모 Model ID(최상위는 0 = 루트).</param>
+    /// <param name="bakeWorld">부모가 내보내기 대상이 아니면 true — 로컬 대신 월드 행렬을 TRS로 분해해 쓴다.</param>
+    /// <param name="parentShift">부모가 지오메트리/자식에 베이크한 피벗 오프셋(자식 Translation에서 뺀다).</param>
     private void BuildNode(SceneNode n, long parentId, bool bakeWorld, Vector3 parentShift)
     {
         NodeCount++;
@@ -275,6 +327,7 @@ public sealed partial class FbxSceneBuilder
         if (bakeWorld) _bakedWorldNodes.Add(n);
         var model = new FbxNode("Model", id, FbxNode.Id("Model", n.Name), type);
         model.Add("Version", 232);
+        // 월드 베이크 노드는 월드 행렬을 피벗 유지 분해, 아니면 로컬 TRS 그대로.
         var t = bakeWorld ? Transform3.FromMatrix(n.WorldMatrix, n.Local.Pivot) : n.Local;
         var p = model.Add("Properties70");
         var shift = Vector3.Zero; // 이 노드의 지오메트리와 자식에 적용할 −피벗 오프셋
@@ -287,11 +340,13 @@ public sealed partial class FbxSceneBuilder
             _bakedPivot[n] = shift;
             _parentShiftOf[n] = parentShift;
         }
+        // 베이크하지 않을 때는 FBX의 RotationPivot/ScalingPivot 속성으로 피벗을 표현한다(cm 단위).
         else if (t.Pivot != Vector3.Zero)
         {
             p.Add("P", "RotationPivot", "Vector3D", "Vector", "", (double)(t.Pivot.X * S), (double)(t.Pivot.Y * S), (double)(t.Pivot.Z * S));
             p.Add("P", "ScalingPivot", "Vector3D", "Vector", "", (double)(t.Pivot.X * S), (double)(t.Pivot.Y * S), (double)(t.Pivot.Z * S));
         }
+        // 표준 모델 속성: 회전 활성, InheritType 1(RSrs; Maya 기본 상속), Lcl T(cm)/R(XYZ 오일러, 도)/S.
         p.Add("P", "RotationActive", "bool", "", "", 1);
         p.Add("P", "InheritType", "enum", "", "", 1);
         p.Add("P", "ScalingMax", "Vector3D", "Vector", "", 0.0, 0.0, 0.0);
@@ -300,6 +355,7 @@ public sealed partial class FbxSceneBuilder
         p.Add("P", "Lcl Rotation", "Lcl Rotation", "", "A", (double)t.RotationDegrees.X, (double)t.RotationDegrees.Y, (double)t.RotationDegrees.Z);
         p.Add("P", "Lcl Scaling", "Lcl Scaling", "", "A", (double)t.Scale.X, (double)t.Scale.Y, (double)t.Scale.Z);
         if (!n.Visible) p.Add("P", "Visibility", "Visibility", "", "A", 0.0);
+        // 모델 끝 레코드 + 부모 모델과의 OO 연결.
         model.Add("MultiLayer", 0);
         model.Add("MultiTake", 0);
         model.Add("Shading", true);
@@ -309,6 +365,7 @@ public sealed partial class FbxSceneBuilder
 
         if (n.IsJoint)
         {
+            // 조인트: Skeleton 타입의 LimbNode NodeAttribute(Size = 조인트 반지름 × 단위).
             long aid = NewId("NodeAttribute");
             var attr = new FbxNode("NodeAttribute", aid, FbxNode.Id("NodeAttribute", n.Name), "LimbNode");
             var ap = attr.Add("Properties70");
@@ -319,6 +376,7 @@ public sealed partial class FbxSceneBuilder
         }
         else if (n.Mesh != null)
         {
+            // 메시: Geometry를 만들어 연결하고 머티리얼(없으면 기본 lambert1)도 모델에 연결한다.
             long gid = BuildGeometry(n);
             _geometryIds[n] = gid;
             _connections.Add((gid, id, null));
@@ -327,6 +385,7 @@ public sealed partial class FbxSceneBuilder
         }
         else if (n.IsLight && _opt.EmbedLights)
         {
+            // 라이트: LightType(0 Point/1 Directional/2 Spot), 색, 세기(×100 = FBX 관례 %), 감쇠 범위(cm), 스폿 내/외 각.
             long aid = NewId("NodeAttribute");
             var l = n.Light!;
             var attr = new FbxNode("NodeAttribute", aid, FbxNode.Id("NodeAttribute", n.Name), "Light");
@@ -353,13 +412,22 @@ public sealed partial class FbxSceneBuilder
             _connections.Add((aid, id, null));
         }
 
+        // 자식 재귀. 자식은 항상 로컬 기준이며 이 노드가 베이크한 피벗(shift)을 넘긴다.
         foreach (var c in n.Children) BuildNode(c, id, bakeWorld: false, parentShift: shift);
     }
 
     // ---------------------------------------------------------------- 지오메트리
 
+    /// <summary>메시 노드 → (메시 정점 슬롯 → FBX 정점 인덱스, 죽은 정점 = -1). 스킨 Cluster Indexes 변환에 쓴다.</summary>
     private readonly Dictionary<SceneNode, int[]> _vertexRemap = new();
 
+    /// <summary>
+    /// 메시 노드의 Geometry 객체를 만든다.
+    /// Vertices = 살아 있는 정점(−베이크 피벗, ×단위), PolygonVertexIndex = 면 코너 정점 인덱스(면의 마지막 코너는 비트 반전 ~i로 면 끝 표시, CCW 그대로),
+    /// LayerElementNormal = 코너 노멀(ByPolygonVertex/Direct), LayerElementUV "map1" = 코너 UV(ByPolygonVertex/IndexToDirect, 같은 UV 값 공유, 하단 원점 그대로),
+    /// LayerElementMaterial = AllSame(노드당 머티리얼 하나), Layer 0에 세 요소를 등록.
+    /// </summary>
+    /// <returns>Geometry 객체 ID.</returns>
     private long BuildGeometry(SceneNode n)
     {
         var mesh = n.Mesh!;
@@ -382,6 +450,7 @@ public sealed partial class FbxSceneBuilder
         _vertexRemap[n] = remap;
         g.Add("Vertices", verts.ToArray());
 
+        // 면 코너 순회용 버퍼: poly = 정점 인덱스(끝 코너 ~idx), normals = 코너 노멀, uvs/uvIndex = 고유 UV 값과 코너별 인덱스.
         var poly = new List<int>();
         var normals = new List<double>();
         var uvs = new List<double>();
@@ -401,9 +470,11 @@ public sealed partial class FbxSceneBuilder
                 var he = mesh.Hes[hes[k]];
                 int idx = remap[he.Vertex];
                 poly.Add(k == deg - 1 ? ~idx : idx);
+                // 코너 노멀이 비어 있으면(계산 전 등) 면 노멀로 대체한다.
                 var nrm = he.Normal;
                 if (nrm.LengthSquared() < 1e-12f) nrm = mesh.Faces[f].Normal;
                 normals.Add(nrm.X); normals.Add(nrm.Y); normals.Add(nrm.Z);
+                // UV는 값이 같은 것끼리 하나의 항목을 공유한다(IndexToDirect).
                 var key = (he.Uv0.X, he.Uv0.Y);
                 if (!uvDict.TryGetValue(key, out int ui)) { ui = uvDict.Count; uvDict[key] = ui; uvs.Add(he.Uv0.X); uvs.Add(he.Uv0.Y); }
                 uvIndex.Add(ui);
@@ -411,6 +482,7 @@ public sealed partial class FbxSceneBuilder
         }
         g.Add("PolygonVertexIndex", poly.ToArray());
 
+        // 레이어 요소들(노멀/UV/머티리얼) 기록.
         var ln = g.Add("LayerElementNormal", 0);
         ln.Add("Version", 101); ln.Add("Name", "");
         ln.Add("MappingInformationType", "ByPolygonVertex");
@@ -430,6 +502,7 @@ public sealed partial class FbxSceneBuilder
         lm.Add("ReferenceInformationType", "IndexToDirect");
         lm.Add("Materials", new[] { 0 });
 
+        // Layer 0에 위 요소들을 등록해야 대부분의 임포터가 읽는다.
         var layer = g.Add("Layer", 0);
         layer.Add("Version", 100);
         foreach (var le in new[] { "LayerElementNormal", "LayerElementMaterial", "LayerElementUV" })
@@ -450,11 +523,13 @@ public sealed partial class FbxSceneBuilder
         ("emissive", "EmissiveColor"), ("specularColorFactor", "SpecularColor"),
     };
 
+    /// <summary>이미지 전체 경로 → Texture 객체 ID(같은 이미지 재사용).</summary>
     private readonly Dictionary<string, long> _textureIds = new();
 
     /// <summary>이미지 경로 하나에 Video + Texture 노드(RelativeFilename = FBX 위치 기준). 같은 경로는 재사용.</summary>
     private long TextureId(string fullPath)
     {
+        // 경로는 '/'로 통일하고, BaseDir이 있으면 FBX 위치 기준 상대 경로를 RelativeFilename으로 쓴다(실패 시 파일 이름).
         if (_textureIds.TryGetValue(fullPath, out long tid0)) return tid0;
         string path = fullPath.Replace('\\', '/');
         string file = Path.GetFileName(path);
@@ -463,6 +538,7 @@ public sealed partial class FbxSceneBuilder
         {
             try { rel = Path.GetRelativePath(_opt.BaseDir, fullPath).Replace('\\', '/'); } catch { rel = file; }
         }
+        // Video(Clip) 객체: 실제 이미지 파일 참조.
         long vid = NewId("Video");
         var video = new FbxNode("Video", vid, FbxNode.Id("Video", file), "Clip");
         video.Add("Type", "Clip");
@@ -474,6 +550,7 @@ public sealed partial class FbxSceneBuilder
         video.Add("RelativeFilename", rel);
         _objects.Add(video);
 
+        // Texture 객체: Video를 Media로 참조하고 UV 세트 map1을 사용. Video → Texture로 연결한다.
         long tid = NewId("Texture");
         var tex = new FbxNode("Texture", tid, FbxNode.Id("Texture", file), "");
         tex.Add("Type", "TextureVideoClip");
@@ -495,6 +572,13 @@ public sealed partial class FbxSceneBuilder
         return tid;
     }
 
+    /// <summary>
+    /// 문서 머티리얼 ID에 대한 FBX Material을 만들거나 재사용한다.
+    /// Lambert/Unlit/Matcap = Lambert, BlinnPhong/Pbr = Phong. PBR은 Metallic/Roughness를 근사 스펙큘러 색·광택 지수로 바꾼다.
+    /// 발광/투명도/노멀 강도(BumpFactor)도 기록하고, 파라미터 텍스처는 <see cref="FbxTextureSlots"/>의 FBX 표준 속성에 OP 연결한다.
+    /// </summary>
+    /// <param name="docMaterialId">문서 머티리얼 ID(없는 ID면 이름 lambert1, 회색 기본 머티리얼).</param>
+    /// <returns>FBX Material 객체 ID.</returns>
     private long MaterialId(int docMaterialId)
     {
         if (_materialIds.TryGetValue(docMaterialId, out long id)) return id;
@@ -508,6 +592,7 @@ public sealed partial class FbxSceneBuilder
         m.Add("ShadingModel", phong ? "Phong" : "Lambert");
         m.Add("MultiLayer", 0);
         var p = m.Add("Properties70");
+        // 공통 속성: 셰이딩 모델, 발광(색 + 세기; 발광이 없으면 Factor 0), 확산색, 투명도(Opacity = alpha, TransparencyFactor = 1 − alpha).
         var color = def?.Color ?? new Vector3(0.5f, 0.5f, 0.5f);
         p.Add("P", "ShadingModel", "KString", "", "", phong ? "Phong" : "Lambert");
         var emis = def?.Get("emissive") ?? Vector3.Zero;
@@ -526,6 +611,7 @@ public sealed partial class FbxSceneBuilder
         if (def != null && def.GetF("normal") != 1f) p.Add("P", "BumpFactor", "double", "Number", "", (double)def.GetF("normal"));
         if (phong)
         {
+            // BlinnPhong은 값 그대로, PBR은 스펙큘러 = 0.04 + 0.9·metallic 회색, 광택 지수 = (1 − roughness)²·128(최소 2)로 근사한다.
             var spec = def!.Type == MaterialType.BlinnPhong ? def.Specular : new Vector3(def.Metallic * 0.9f + 0.04f);
             float shininess = def.Type == MaterialType.BlinnPhong ? def.Shininess : MathF.Max(2f, (1f - def.Roughness) * (1f - def.Roughness) * 128f);
             p.Add("P", "SpecularColor", "Color", "", "A", (double)spec.X, (double)spec.Y, (double)spec.Z);
@@ -558,11 +644,20 @@ public sealed partial class FbxSceneBuilder
 
     // ---------------------------------------------------------------- 스킨
 
+    /// <summary>
+    /// 스킨이 있는 메시에 Deformer Skin과 조인트별 Cluster, 그리고 BindPose를 만든다.
+    /// Cluster: Indexes/Weights = 그 조인트의 가중치가 0보다 큰 정점(FBX 정점 인덱스), Transform = 메시 월드, TransformLink = 조인트 월드.
+    /// 바인드 포즈는 저장된 바인드 행렬이 아니라 내보내는 시점의 현재(rest) 월드 행렬이다(glTF 내보내기와 동일).
+    /// 행렬 이동 성분은 cm로 스케일한다.
+    /// </summary>
+    /// <param name="n">스킨 메시 노드.</param>
+    /// <param name="geomId">그 메시의 Geometry ID(Skin Deformer가 여기에 연결된다).</param>
     private void BuildSkin(SceneNode n, long geomId)
     {
         var skin = n.Skin!;
         var mesh = n.Mesh!;
         var remap = _vertexRemap[n];
+        // 내보내기에 포함된 조인트만 (스킨 조인트 슬롯 번호, 노드)로 모은다. 하나도 없으면 스킨을 쓰지 않는다.
         var jointNodes = new List<(int index, SceneNode node)>();
         for (int j = 0; j < skin.Joints.Count; j++)
         {
@@ -571,6 +666,7 @@ public sealed partial class FbxSceneBuilder
         }
         if (jointNodes.Count == 0) return;
 
+        // Skin Deformer → Geometry 연결.
         long sid = NewId("Deformer");
         var sk = new FbxNode("Deformer", sid, FbxNode.Id("Deformer", n.Name + "_skin"), "Skin");
         sk.Add("Version", 101);
@@ -581,6 +677,7 @@ public sealed partial class FbxSceneBuilder
 
         // 피벗을 베이크했으면 메시 모델의 월드는 T(P)·M (지오메트리가 −P만큼 옮겨졌으므로)
         var meshWorld = Scaled(_bakedPivot.TryGetValue(n, out var mp) ? Matrix4x4.CreateTranslation(mp) * n.WorldMatrix : n.WorldMatrix);
+        // BindPose: 메시와 각 조인트의 바인드 월드 행렬 목록.
         long poseId = NewId("Pose");
         var pose = new FbxNode("Pose", poseId, FbxNode.Id("Pose", n.Name + "_bind"), "BindPose");
         pose.Add("Type", "BindPose");
@@ -590,6 +687,7 @@ public sealed partial class FbxSceneBuilder
 
         foreach (var (j, jn) in jointNodes)
         {
+            // 이 조인트 슬롯 j에 가중치를 가진 정점들을 FBX 정점 인덱스(remap)로 모은다.
             var idx = new List<int>(); var wts = new List<double>();
             for (int v = 0; v < skin.Weights.Length && v < mesh.VertexCount; v++)
             {
@@ -598,6 +696,7 @@ public sealed partial class FbxSceneBuilder
                 foreach (var (joint, weight) in list)
                     if (joint == j && weight > 0f) { idx.Add(remap[v]); wts.Add(weight); }
             }
+            // Cluster(SubDeformer) 객체: Skin에 연결하고, 조인트 Model을 Cluster에 연결(링크)한다.
             long cid = NewId("Deformer");
             var cl = new FbxNode("Deformer", cid, FbxNode.Id("SubDeformer", n.Name + "_" + jn.Name), "Cluster");
             cl.Add("Version", 100);
@@ -617,8 +716,10 @@ public sealed partial class FbxSceneBuilder
         _objects.Add(pose);
     }
 
+    /// <summary>행렬의 이동 성분(M41..M43)에만 단위 배율을 곱한다(회전/스케일 부분은 그대로).</summary>
     private Matrix4x4 Scaled(Matrix4x4 m) { m.M41 *= S; m.M42 *= S; m.M43 *= S; return m; }
 
+    /// <summary>행렬을 행 우선 16개 double로 펼친다. 행벡터 규약(이동 = 4행)이 FBX의 열 우선 저장과 같은 바이트 순서가 된다.</summary>
     private static double[] ToArray(Matrix4x4 m) => new double[]
     {
         m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44,

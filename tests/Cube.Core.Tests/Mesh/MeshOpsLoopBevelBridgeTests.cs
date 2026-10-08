@@ -3,8 +3,16 @@ using Cube.Core.Mesh;
 
 namespace Cube.Core.Tests.Mesh;
 
+/// <summary>
+/// M2 모델링 연산을 검증한다: 엣지 루프/링 탐색(<c>MeshOps.Loops</c>), Insert Edge Loop, 기본 Bevel(<c>BevelEdges</c>),
+/// Bridge(경계 엣지 체인 두 개를 쿼드로 연결). 결과 요소 수와 메시 유효성·오일러 특성을 확인한다.
+/// </summary>
 public class MeshOpsLoopBevelBridgeTests
 {
+    /// <summary>
+    /// 한쪽 끝이 조건 <paramref name="a"/>, 다른 끝이 조건 <paramref name="b"/>를 만족하는(방향 무관) 살아 있는 엣지를 찾는다. 없으면 -1.
+    /// 위치로 특정 엣지를 고르기 위한 도우미다.
+    /// </summary>
     private static int EdgeBetween(PolyMesh m, Func<Vector3, bool> a, Func<Vector3, bool> b)
     {
         for (int e = 0; e < m.EdgeCount; e++)
@@ -17,6 +25,10 @@ public class MeshOpsLoopBevelBridgeTests
         return -1;
     }
 
+    /// <summary>
+    /// 큐브 정점은 3가라 엣지 루프를 이어갈 "맞은편 엣지"가 없으므로 루프는 시작 엣지 하나뿐이어야 한다.
+    /// 4x4 평면의 내부 가로 엣지에서 시작하면 4가 정점을 지나 같은 행(Z=0)의 엣지 4개가 루프가 되어야 한다.
+    /// </summary>
     [Fact]
     public void EdgeLoop_OnCube_IsSingleEdge_And_OnPlaneRunsAcross()
     {
@@ -33,6 +45,7 @@ public class MeshOpsLoopBevelBridgeTests
         foreach (int le in loop) { var (x, y) = plane.EdgeVertices(le); Assert.True(MathF.Abs(plane.Verts[x].Position.Z) < 1e-4f && MathF.Abs(plane.Verts[y].Position.Z) < 1e-4f); }
     }
 
+    /// <summary>경계 엣지에서 시작한 루프는 메시 테두리(보더 루프)를 따라 한 바퀴, 2x2 평면이면 엣지 8개가 되어야 한다.</summary>
     [Fact]
     public void EdgeLoop_OnBoundary_WalksBorder()
     {
@@ -42,6 +55,9 @@ public class MeshOpsLoopBevelBridgeTests
         Assert.Equal(8, loop.Count);
     }
 
+    /// <summary>
+    /// 캡 없는 8분할 원기둥의 세로 엣지에서 엣지 링을 구하면 옆면 쿼드 8개를 건너며 세로 엣지 8개로 닫힌 링이 되어야 한다.
+    /// </summary>
     [Fact]
     public void EdgeRing_OnCylinderSide_IsClosed()
     {
@@ -54,6 +70,10 @@ public class MeshOpsLoopBevelBridgeTests
         Assert.Equal(8, faces.Count);
     }
 
+    /// <summary>
+    /// 큐브 세로 엣지에 t=0.5로 Insert Edge Loop하면 옆면 네 개를 가로지르는 닫힌 루프가 생겨
+    /// 정점 +4, 면 +4, 엣지 +8이 되고, 새 엣지는 모두 높이 Y=0(가운데)에 놓여야 한다.
+    /// </summary>
     [Fact]
     public void InsertEdgeLoop_OnCube_AddsFourVertsAndFourFaces()
     {
@@ -70,6 +90,10 @@ public class MeshOpsLoopBevelBridgeTests
         foreach (int ne in newEdges) { var (x, y) = m.EdgeVertices(ne); Assert.True(MathF.Abs(m.Verts[x].Position.Y) < 1e-5f && MathF.Abs(m.Verts[y].Position.Y) < 1e-5f); }
     }
 
+    /// <summary>
+    /// 열린 2x2 평면에서 Z 방향 엣지에 루프를 넣으면 경계에서 멈추는 열린 루프가 되어 새 엣지 2, 정점 +3, 면 +2가 되고
+    /// 메시가 유효해야 한다.
+    /// </summary>
     [Fact]
     public void InsertEdgeLoop_OnOpenPlane_SplitsRowAndKeepsManifold()
     {
@@ -84,6 +108,9 @@ public class MeshOpsLoopBevelBridgeTests
         Assert.Empty(MeshValidator.Check(m));
     }
 
+    /// <summary>
+    /// 큐브 엣지 하나를 베벨하면 베벨 쿼드 1개가 생겨 면 7, 정점 10(양끝 정점 2개가 각각 둘로 갈라짐)이 되고 오일러 2가 유지되어야 한다.
+    /// </summary>
     [Fact]
     public void Bevel_SingleCubeEdge_AddsQuad()
     {
@@ -96,6 +123,9 @@ public class MeshOpsLoopBevelBridgeTests
         Assert.Equal(2, m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount); // 오일러 특성 유지
     }
 
+    /// <summary>
+    /// 큐브의 모든 엣지를 베벨하면 엣지마다 쿼드 12개 + 꼭짓점마다 삼각 캡 8개가 생겨 총 26면·24정점이 되고 닫힌 위상을 유지해야 한다.
+    /// </summary>
     [Fact]
     public void Bevel_AllCubeEdges_MakesCapsAtCorners()
     {
@@ -109,6 +139,10 @@ public class MeshOpsLoopBevelBridgeTests
         Assert.Equal(2, m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount);
     }
 
+    /// <summary>
+    /// 캡 없는 원통 두 개를 한 메시로 합친 뒤(위쪽은 Y로 2 이동) 마주보는 두 림(각 8엣지)을 브리지하면
+    /// 쿼드 8개가 생기고, 브리지한 림 엣지가 더 이상 경계가 아니어서 하나의 튜브로 이어져야 한다.
+    /// </summary>
     [Fact]
     public void Bridge_TwoCylinderRims_ClosesTube()
     {

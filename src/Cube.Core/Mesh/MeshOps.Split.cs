@@ -6,11 +6,16 @@ namespace Cube.Core.Mesh;
 public static partial class MeshOps
 {
     /// <summary>엣지 플래그(하드/심/크리즈) 묶음.</summary>
+    /// <param name="Hard">하드 엣지(노멀 분리).</param>
+    /// <param name="Seam">UV 심.</param>
+    /// <param name="Crease">서브디비전 크리즈 단계(0 = 없음).</param>
     internal readonly record struct EdgeFlags(bool Hard, bool Seam, float Crease)
     {
+        /// <summary>플래그가 모두 꺼진 기본값(엣지가 없을 때 반환).</summary>
         public static readonly EdgeFlags None = new(false, false, 0f);
     }
 
+    /// <summary>정점 a-b 사이 엣지의 하드/심/크리즈 플래그를 읽는다. 엣지가 없으면 <see cref="EdgeFlags.None"/>.</summary>
     internal static EdgeFlags GetFlags(PolyMesh m, int a, int b)
     {
         int e = m.FindEdge(a, b);
@@ -19,6 +24,7 @@ public static partial class MeshOps
         return new EdgeFlags(ed.Hard, ed.Seam, ed.Crease);
     }
 
+    /// <summary>정점 a-b 사이 엣지가 있으면 하드/심/크리즈 플래그를 한꺼번에 쓴다.</summary>
     internal static void SetFlags(PolyMesh m, int a, int b, EdgeFlags f)
     {
         int e = m.FindEdge(a, b);
@@ -30,17 +36,28 @@ public static partial class MeshOps
     /// 면 집합을 캡처해 제거한 뒤 새 루프로 다시 만들고 엣지 플래그를 복원한다.
     /// 플래그는 정점 쌍으로 찾고, 분할로 생긴 정점(parent[v] = (a,b))의 엣지는 부모 엣지의 플래그를 물려받는다.
     /// </summary>
+    /// <remarks>
+    /// 사용 순서: Capture(면…) → (필요하면 새 정점 생성 + SetParent) → RemoveCaptured() → Captured를 돌며 새 루프로 AddFace.
+    /// 면을 지우면 엣지 레코드도 사라지므로 플래그는 Capture 시점에 정점 쌍 키로 저장해 두었다가 AddFace 때 다시 쓴다.
+    /// </remarks>
     internal sealed class FaceRebuilder
     {
+        /// <summary>대상 메시.</summary>
         private readonly PolyMesh _m;
+        /// <summary>캡처한 엣지 플래그(무향 정점 쌍 키 → 플래그).</summary>
         private readonly Dictionary<long, EdgeFlags> _flags = new(PairKeyComparer.Instance);
+        /// <summary>분할로 생긴 정점 → 그 정점이 놓인 원래 엣지의 두 끝 정점.</summary>
         private readonly Dictionary<int, (int a, int b)> _parent = new();
+        /// <summary>캡처한 면 목록(원래 면 ID, 코너, 머티리얼). 호출자는 이것을 순회하며 새 루프를 만든다.</summary>
         public readonly List<(int face, List<Corner> corners, int material)> Captured = new();
 
+        /// <summary>메시 m을 대상으로 하는 빈 재구성기를 만든다.</summary>
         public FaceRebuilder(PolyMesh m) { _m = m; }
 
+        /// <summary>무향 정점 쌍 키: 작은 ID를 상위 32비트, 큰 ID를 하위 32비트에 넣는다.</summary>
         private static long Key(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
+        /// <summary>면 f의 코너와 모든 둘레 엣지 플래그를 저장한다. 죽은 면이나 이미 캡처한 면은 무시한다.</summary>
         public void Capture(int f)
         {
             if (f < 0 || f >= _m.FaceCount || !_m.Faces[f].Alive) return;
@@ -57,6 +74,11 @@ public static partial class MeshOps
         /// <summary>v가 (a,b) 엣지 위에서 만들어졌음을 기록한다(플래그 상속).</summary>
         public void SetParent(int v, int a, int b) => _parent[v] = (a, b);
 
+        /// <summary>
+        /// 새 엣지 x-y가 가질 플래그를 결정한다:
+        /// ① 캡처된 원래 엣지 그대로면 그 플래그, ② x가 분할 정점이고 y가 그 부모 엣지 끝점(또는 같은 부모의 분할 정점)이면 부모 엣지 플래그,
+        /// ③ y가 분할 정점이고 x가 부모 끝점이면 부모 플래그, ④ 그 외(면 안을 가로지르는 새 엣지)는 플래그 없음.
+        /// </summary>
         public EdgeFlags FlagsFor(int x, int y)
         {
             if (_flags.TryGetValue(Key(x, y), out var f)) return f;
@@ -65,6 +87,7 @@ public static partial class MeshOps
             return EdgeFlags.None;
         }
 
+        /// <summary>캡처한 면을 모두 제거한다(정점은 남긴다 — 새 루프가 다시 쓴다).</summary>
         public void RemoveCaptured()
         {
             foreach (var (f, _, _) in Captured) _m.RemoveFace(f, removeIsolated: false);
@@ -73,6 +96,7 @@ public static partial class MeshOps
         /// <summary>새 면을 추가하고 모든 엣지의 플래그를 복원한다. 실패하면 -1.</summary>
         public int AddFace(IReadOnlyList<Corner> loop, int material)
         {
+            // 연속 중복 정점과 처음/끝 중복을 제거해 퇴화 코너를 없앤다
             var clean = new List<Corner>();
             foreach (var c in loop) if (clean.Count == 0 || clean[^1].Vertex != c.Vertex) clean.Add(c);
             while (clean.Count > 1 && clean[0].Vertex == clean[^1].Vertex) clean.RemoveAt(clean.Count - 1);
@@ -87,12 +111,14 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Split edge / face
 
     /// <summary>엣지를 t(0..1, EdgeVertices 순서 a→b)에서 나눈다. 양쪽 면에 새 정점이 끼워지고 코너 UV/노멀은 보간된다. 반환값은 새 정점.</summary>
+    /// <remarks>t는 0.001..0.999로 클램프해 기존 정점과 겹치지 않게 한다. 새 엣지 두 개는 원래 엣지의 플래그를 물려받는다.</remarks>
     public static int SplitEdge(PolyMesh m, int e, float t)
     {
         if (e < 0 || e >= m.EdgeCount || !m.Edges[e].Alive) return -1;
         t = Math.Clamp(t, 0.001f, 0.999f);
         var (a, b) = m.EdgeVertices(e);
         int nv = m.AddVertex(Vector3.Lerp(m.Verts[a].Position, m.Verts[b].Position, t));
+        // 엣지 양쪽 면(경계면 하나)을 캡처하고 새 정점의 부모를 기록
         var rb = new FaceRebuilder(m);
         var (f0, f1) = m.EdgeFaces(e);
         rb.Capture(f0); if (f1 >= 0) rb.Capture(f1);
@@ -104,11 +130,13 @@ public static partial class MeshOps
             int n = corners.Count;
             for (int i = 0; i < n; i++)
             {
+                // a-b 엣지를 지나는 코너 사이에 새 정점 코너를 끼운다. 면 방향에 따라 a→b 또는 b→a이므로 보간 비율 s를 맞춘다.
                 var c = corners[i]; var d = corners[(i + 1) % n];
                 loop.Add(c);
                 if ((c.Vertex == a && d.Vertex == b) || (c.Vertex == b && d.Vertex == a))
                 {
                     float s = c.Vertex == a ? t : 1f - t;
+                    // 노멀 보간 결과가 0이 되는 경우를 피하려고 아주 작은 값을 더해 정규화
                     loop.Add(new Corner(nv, Vector2.Lerp(c.Uv, d.Uv, s), Vector3.Normalize(Vector3.Lerp(c.Normal, d.Normal, s) + new Vector3(1e-12f))));
                 }
             }
@@ -119,6 +147,7 @@ public static partial class MeshOps
     }
 
     /// <summary>면을 두 코너 정점 va–vb 사이에서 둘로 나눈다(인접 코너면 실패). 반환값은 새 엣지 ID(-1 = 실패).</summary>
+    /// <remarks>코너 i(va)부터 j(vb)까지와 j부터 i까지 두 루프로 나눈다. 새 대각 엣지는 플래그 없음.</remarks>
     public static int SplitFace(PolyMesh m, int f, int va, int vb)
     {
         if (f < 0 || f >= m.FaceCount || !m.Faces[f].Alive || va == vb) return -1;
@@ -130,6 +159,7 @@ public static partial class MeshOps
         var rb = new FaceRebuilder(m);
         rb.Capture(f);
         rb.RemoveCaptured();
+        // loop1 = va → … → vb, loop2 = vb → … → va (둘 다 원래 감김 방향 유지)
         var loop1 = new List<Corner>(); var loop2 = new List<Corner>();
         for (int k = i; ; k = (k + 1) % n) { loop1.Add(corners[k]); if (k == j) break; }
         for (int k = j; ; k = (k + 1) % n) { loop2.Add(corners[k]); if (k == i) break; }
@@ -141,6 +171,7 @@ public static partial class MeshOps
     }
 
     /// <summary>두 정점을 코너로 가지는 공통 면을 찾아 나눈다(이미 엣지로 이어져 있으면 -1).</summary>
+    /// <remarks>va와 vb를 모두 포함하는 면을 차례로 시도해 처음 성공한 분할의 엣지를 돌려준다.</remarks>
     public static int SplitFaceBetween(PolyMesh m, int va, int vb)
     {
         if (m.FindEdge(va, vb) >= 0) return -1;
@@ -152,6 +183,7 @@ public static partial class MeshOps
 
     // ------------------------------------------------------------ Add Divisions
 
+    /// <summary>Exponential Add Divisions의 분할 방식. Quads = 코너마다 쿼드, Triangles = 코너마다 삼각형 2개.</summary>
     public enum DivisionMode { Quads, Triangles }
 
     /// <summary>
@@ -161,11 +193,17 @@ public static partial class MeshOps
     public static List<int> AddDivisions(PolyMesh m, IEnumerable<int> faceIds, int levels, DivisionMode mode)
     {
         var current = new List<int>(faceIds.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive));
+        // 레벨은 1..4로 제한(면 수가 4^levels로 늘어난다)
         levels = Math.Clamp(levels, 1, 4);
         for (int l = 0; l < levels; l++) current = SubdivideOnce(m, current, mode);
         return current;
     }
 
+    /// <summary>
+    /// Add Divisions 한 단계. 영역 면의 모든 엣지에 중점을 만들고, 각 면에 중심점을 추가해 코너마다 (코너, 다음 중점, 중심, 이전 중점) 쿼드
+    /// 또는 삼각형 두 개로 나눈다. 영역 밖 이웃 면은 공유 엣지에 중점만 끼워 T-정점(구멍)이 생기지 않게 한다.
+    /// </summary>
+    /// <returns>영역 면에서 새로 생긴 면 ID(다음 단계 입력).</returns>
     private static List<int> SubdivideOnce(PolyMesh m, List<int> faces, DivisionMode mode)
     {
         var result = new List<int>();
@@ -182,6 +220,7 @@ public static partial class MeshOps
         }
         foreach (int f in neighbors) rb.Capture(f);
         // 엣지 중점(영역 면의 엣지만)
+        // mid: 무향 엣지 키 → 중점 정점. K는 FaceRebuilder.Key와 같은 키 함수.
         var mid = new Dictionary<long, int>(PairKeyComparer.Instance);
         long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
         foreach (int f in faces)
@@ -212,6 +251,7 @@ public static partial class MeshOps
                 rb.AddFace(loop, material);
                 continue;
             }
+            // 영역 면: 면 중심(정점 평균)과 UV 평균으로 중심 정점 생성
             var center = Vector3.Zero; var uvC = Vector2.Zero;
             foreach (var c in corners) { center += m.Verts[c.Vertex].Position; uvC += c.Uv; }
             center /= n; uvC /= n;
@@ -219,6 +259,7 @@ public static partial class MeshOps
             for (int i = 0; i < n; i++)
             {
                 var c = corners[i]; var next = corners[(i + 1) % n]; var prev = corners[(i + n - 1) % n];
+                // mOut = 코너→다음 엣지 중점, mIn = 이전→코너 엣지 중점
                 int mOut = mid[K(c.Vertex, next.Vertex)], mIn = mid[K(prev.Vertex, c.Vertex)];
                 var uvOut = (c.Uv + next.Uv) * 0.5f; var uvIn = (prev.Uv + c.Uv) * 0.5f;
                 if (mode == DivisionMode.Quads)
@@ -239,11 +280,18 @@ public static partial class MeshOps
     }
 
     /// <summary>Add Divisions(면, Linearly): 쿼드 면을 u×v 격자로 나눈다. 쿼드가 아니면 Exponential 1단계로 대신한다.</summary>
+    /// <remarks>
+    /// 쿼드 코너 0→1 방향이 U, 1→2 방향이 V. 공유 엣지의 분할점은 정점 쌍 키로 한 번만 만들어 이웃 쿼드가 공유한다.
+    /// 이웃 쿼드와 분할 수가 맞지 않는 엣지(U/V 방향이 엇갈림)는 공유점을 쓰지 않고 내부 격자점을 새로 만든다.
+    /// 영역 밖 이웃 면은 공유 엣지에 분할점만 끼운다.
+    /// </remarks>
     public static List<int> AddDivisionsLinear(PolyMesh m, IEnumerable<int> faceIds, int divU, int divV)
     {
+        // 분할 수는 1..32로 제한
         divU = Math.Clamp(divU, 1, 32); divV = Math.Clamp(divV, 1, 32);
         var result = new List<int>();
         var faces = faceIds.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive).ToList();
+        // 쿼드가 아닌 면은 Exponential 1단계로 처리하고 쿼드만 격자 분할
         var nonQuad = faces.Where(f => m.FaceDegree(f) != 4).ToList();
         var quads = faces.Where(f => m.FaceDegree(f) == 4).ToList();
         if (nonQuad.Count > 0) result.AddRange(AddDivisions(m, nonQuad, 1, DivisionMode.Quads));
@@ -251,6 +299,7 @@ public static partial class MeshOps
         var set = new HashSet<int>(quads);
         var rb = new FaceRebuilder(m);
         foreach (int f in quads) rb.Capture(f);
+        // 영역 밖 이웃 면도 공유 엣지에 분할점을 끼워야 하므로 캡처
         var neighbors = new List<int>();
         foreach (int f in quads)
         {
@@ -261,6 +310,7 @@ public static partial class MeshOps
         // 엣지별 분할 정점(방향: 정점 쌍 키, 작은 ID → 큰 ID 순서로 저장)
         var edgePts = new Dictionary<long, int[]>(PairKeyComparer.Instance);
         long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+        // 엣지 a→b 방향의 분할점 배열(divisions-1개). 처음 요청에 작은 ID→큰 ID 순서로 생성해 캐시하고, 방향에 맞게 뒤집어 돌려준다.
         int[] PtsFromTo(int a, int b, int divisions)
         {
             long k = K(a, b);
@@ -286,6 +336,7 @@ public static partial class MeshOps
             int n = corners.Count;
             if (!set.Contains(f))
             {
+                // 이웃 면: 공유 엣지의 분할점을 원래 순서에 맞춰 끼우고 UV는 엣지 위 비율로 보간
                 var loop = new List<Corner>();
                 for (int i = 0; i < n; i++)
                 {
@@ -306,6 +357,7 @@ public static partial class MeshOps
             var p0 = m.Verts[corners[0].Vertex].Position; var p1 = m.Verts[corners[1].Vertex].Position; var p2 = m.Verts[corners[2].Vertex].Position; var p3 = m.Verts[corners[3].Vertex].Position;
             var bottom = PtsFromTo(corners[0].Vertex, corners[1].Vertex, divU); var top = PtsFromTo(corners[3].Vertex, corners[2].Vertex, divU);
             var left = PtsFromTo(corners[0].Vertex, corners[3].Vertex, divV); var right = PtsFromTo(corners[1].Vertex, corners[2].Vertex, divV);
+            // 격자점 위치/UV = 네 코너의 쌍선형 보간. 테두리는 공유 분할점을 쓰고(개수가 맞을 때), 내부는 새 정점.
             for (int i = 0; i <= divU; i++)
                 for (int j = 0; j <= divV; j++)
                 {
@@ -321,6 +373,7 @@ public static partial class MeshOps
                     else if (i == divU && right.Length == divV - 1) grid[i, j] = right[j - 1];
                     else grid[i, j] = m.AddVertex(Vector3.Lerp(Vector3.Lerp(p0, p1, s), Vector3.Lerp(p3, p2, s), t));
                 }
+            // 격자 칸마다 쿼드(감김 방향은 원래 코너 순서와 같음)
             for (int i = 0; i < divU; i++)
                 for (int j = 0; j < divV; j++)
                 {
@@ -337,6 +390,10 @@ public static partial class MeshOps
     }
 
     /// <summary>Add Divisions(엣지): 각 엣지에 정점 levels개를 균등하게 끼운다. 반환값은 새 정점들.</summary>
+    /// <remarks>
+    /// SplitEdge를 반복한다: 매번 남은 엣지(curA–b)를 1/(남은 칸 수)에서 잘라 결과적으로 균등 간격이 된다.
+    /// levels는 1..32로 제한. 플래그는 SplitEdge가 상속한다.
+    /// </remarks>
     public static List<int> DivideEdges(PolyMesh m, IEnumerable<int> edgeIds, int levels)
     {
         levels = Math.Clamp(levels, 1, 32);

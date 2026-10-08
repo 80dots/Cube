@@ -8,11 +8,17 @@ using Godot;
 
 namespace Cube.App.UI;
 
+/// <summary>브리지로 연동하는 외부 앱 종류.</summary>
+/// <remarks>
+/// 각 값: Blender = FBX로 보내고 애드온이 쓴 OBJ(+ 원점 JSON)로 받음, RizomUv = OBJ 왕복(UV만 원본에 적용),
+/// Marmoset = FBX 보내기만(Toolbag 가져오기 스크립트), Cascadeur = FBX 왕복(교체 가져오기 + 애니메이션 클립 교체).
+/// </remarks>
 public enum BridgeApp { Blender, RizomUv, Marmoset, Cascadeur }
 
 /// <summary>외부 앱으로 보낸 파일 하나에 대한 세션. 파일이 바뀌면(외부 앱 저장) 다시 읽는다.</summary>
 public sealed class BridgeSession
 {
+    /// <summary>이 세션의 대상 앱.</summary>
     public BridgeApp App;
     /// <summary>Cube가 외부 앱으로 보낸 파일.</summary>
     public string Path = "";
@@ -20,10 +26,13 @@ public sealed class BridgeSession
     public string ReturnPath = "";
     /// <summary>보낸 노드(ID, 보낸 시점의 이름). UV 전송은 이름으로, 교체 가져오기는 ID로 찾는다.</summary>
     public List<(NodeId id, string name)> Nodes = new();
+    /// <summary>마지막으로 확인/반영한 ReturnPath의 수정 시각(UTC). 이보다 새 파일이면 외부 앱이 저장한 것으로 본다.</summary>
     public DateTime Stamp;
+    /// <summary>자동 다시 읽기가 꺼져 있을 때 "파일이 바뀌었다" 안내를 이미 띄웠는지(한 번만 안내).</summary>
     public bool Notified;
     /// <summary>true = OBJ UV만 받아 원본 메시에 덮어쓴다(RizomUV). false = 파일을 다시 가져와 보낸 노드를 교체한다.</summary>
     public bool UvOnly => App == BridgeApp.RizomUv;
+    /// <summary>되돌려 받을 수 있는 앱인지. Marmoset은 보내기만 하므로 감시·다시 읽기를 하지 않는다.</summary>
     public bool CanReload => App != BridgeApp.Marmoset;
 }
 
@@ -31,12 +40,25 @@ public sealed class BridgeSession
 /// Bridge 메뉴: Blender(glTF + 파이썬 패널 "Send to Cube"), RizomUV(OBJ, UV만 왕복), Marmoset Toolbag(FBX, 보내기만),
 /// Cascadeur(FBX 왕복), Tripo3D(API로 생성 → 가져오기). 파일은 user://bridge/&lt;app&gt;/cube_bridge.* 에 쓰고 1초마다 변경을 감시한다.
 /// </summary>
+/// <remarks>
+/// 현재 동작(이후 버전에서 바뀐 점 포함): Blender는 자체 FBX writer로 보내고, 애드온의 'Send to Cube'가 쓴 OBJ + cube_bridge.json(원점)을
+/// 받아 보낸 노드를 교체한다(v0.0.14~). Marmoset은 Toolbag 파이썬 가져오기 스크립트를 생성해 실행 인자로 넘긴다(v0.0.49).
+/// 감시는 1초 Timer(CheckBridgeFile), 다시 읽기는 한 Undo 그룹으로 묶어 되돌릴 수 있다.
+/// </remarks>
 public partial class Shell
 {
+    /// <summary>현재(마지막) 브리지 세션. 시작 시 Blender 반환 파일 감시용 세션이 기본으로 만들어진다. 한 번에 하나만 유지.</summary>
     public BridgeSession? Bridge { get; private set; }
+    /// <summary>Bridge Settings 패널(앱 실행 파일 경로, Tripo API 키 등). 처음 열 때 만든다.</summary>
     public BridgeSettingsWindow? BridgeSettingsWindow { get; private set; }
+    /// <summary>Tripo Editor 패널(Tripo3D OpenAPI로 생성·가공·리깅 후 가져오기). 처음 열 때 만든다.</summary>
     public TripoWindow? TripoWindow { get; private set; }
 
+    /// <summary>
+    /// bridge.* 액션 등록(RizomUV/Marmoset/Cascadeur 보내기, Tripo 창·가져오기·폴더, 다시 읽기·자동 다시 읽기·폴더 열기, 설정,
+    /// Blender 전체/선택 보내기, 애드온 설치·저장·폴더 열기). 이어서 Blender 반환 파일 감시 세션을 만들고
+    /// 1초 주기 Timer(BridgeWatch)로 CheckBridgeFile을 돌린다.
+    /// </summary>
     private void RegisterBridgeActions()
     {
         Actions.Register("bridge.rizom", "Send to RizomUV (OBJ, UVs round-trip)", () => SendToBridge(BridgeApp.RizomUv), canExecute: HasBridgeNodes, repeatable: true);
@@ -69,8 +91,12 @@ public partial class Shell
         AddChild(timer);
     }
 
+    /// <summary>보낼 것이 있는지: 루트 바로 아래에 메시 또는 조인트 노드가 하나라도 있어야 한다.</summary>
     private bool HasBridgeNodes() => Document.Root.Children.Any(n => n.Mesh != null || n.IsJoint);
 
+    /// <summary>
+    /// 앱별 브리지 폴더(user://bridge/&lt;app 소문자&gt;; app이 null이면 user://bridge)의 절대 경로. 없으면 만든다.
+    /// </summary>
     public static string BridgeDir(BridgeApp? app)
     {
         string dir = ProjectSettings.GlobalizePath("user://bridge/" + (app?.ToString().ToLowerInvariant() ?? ""));
@@ -87,8 +113,18 @@ public partial class Shell
         return selectionOnly ? sel : Document.Root.Children.ToList();
     }
 
+    /// <summary>메뉴/셸프용 보내기: 앱을 실행하며, 선택이 있으면 선택만 아니면 전체를 보낸다.</summary>
     private void SendToBridge(BridgeApp app) => SendToBridge(app, launch: true, selection: null);
 
+    /// <summary>
+    /// 외부 앱으로 보내기. 순서: ① 보낼 노드 결정 ② 앱별 파일 쓰기(Blender/Cascadeur/Marmoset = FBX, RizomUV = 월드 좌표 OBJ)
+    /// ③ 새 BridgeSession 생성(반환 파일 = Blender는 cube_bridge.obj, 나머지는 보낸 파일; Stamp = 현재 반환 파일 시각이라 기존 파일은 무시)
+    /// ④ launch가 false면(Blender) 안내만 하고 끝 ⑤ 실행 파일을 찾아(없으면 폴더 열기 + 설정 창) 프로세스 시작.
+    /// Marmoset은 이미 실행 중이고 이 세션에서 띄운 적이 있으면 FBX 갱신만으로 Toolbag이 자동 다시 읽는다.
+    /// </summary>
+    /// <param name="app">대상 앱.</param>
+    /// <param name="launch">true면 외부 앱 실행 파일을 띄운다.</param>
+    /// <param name="selection">null = 선택이 있으면 선택만, true/false = 강제.</param>
     private void SendToBridge(BridgeApp app, bool launch, bool? selection)
     {
         var nodes = BridgeNodes(selection, out bool selOnly);
@@ -116,6 +152,7 @@ public partial class Shell
         }
         catch (Exception ex) { HelpLine.Text = $"Bridge: export failed — {ex.Message}"; return; }
 
+        // 세션 기록: 보낸 노드(ID, 이름) — UV 전송은 이름으로, 교체 가져오기는 ID로 찾는다
         string ret = app == BridgeApp.Blender ? System.IO.Path.Combine(dir, "cube_bridge.obj") : path;
         Bridge = new BridgeSession { App = app, Path = path, ReturnPath = ret, Nodes = nodes.Select(n => (n.Id, n.Name)).ToList(), Stamp = System.IO.File.Exists(ret) ? System.IO.File.GetLastWriteTimeUtc(ret) : DateTime.UtcNow };
         if (!launch) { HelpLine.Text = $"Bridge: sent {nodes.Count} node(s) ({(selOnly ? "selected" : "all")}) — the Blender add-on (View3D sidebar → Cube tab, Auto receive) imports {System.IO.Path.GetFileName(path)}; 'Send All/Selected to Cube' there sends back."; return; }
@@ -143,6 +180,7 @@ public partial class Shell
         }
         try
         {
+            // 셸 실행 없이 직접 실행(인자 목록 사용으로 공백/한글 경로 안전), 작업 폴더 = 브리지 폴더
             var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = dir };
             foreach (var a in args) psi.ArgumentList.Add(a);
             Process.Start(psi);
@@ -156,7 +194,9 @@ public partial class Shell
         catch (Exception ex) { HelpLine.Text = $"Bridge: could not start {AppLabel(app)} — {ex.Message}"; OS.ShellOpen(dir); }
     }
 
+    /// <summary>이 세션에서 Toolbag을 가져오기 스크립트와 함께 띄운 적이 있는지(다시 보낼 때 새로 띄우지 않고 파일만 갱신).</summary>
     private bool _marmosetLaunched;
+    /// <summary>브리지 폴더에 생성되는 Toolbag 가져오기 스크립트 파일 이름.</summary>
     private const string MarmosetScriptName = "cube_bridge_toolbag.py";
 
     /// <summary>
@@ -166,6 +206,7 @@ public partial class Shell
     private static string WriteMarmosetScript(string dir, string fbx)
     {
         string src;
+        // 스크립트 원본: 개발 실행은 res:// 리소스, 배포본은 실행 파일 옆 addons/marmoset 폴더에서 읽는다
         var res = "res://assets/addons/marmoset/cube_bridge_toolbag.py";
         var bytes = Godot.FileAccess.FileExists(res) ? Godot.FileAccess.GetFileAsBytes(res) : null;
         if (bytes is { Length: > 0 }) src = System.Text.Encoding.UTF8.GetString(bytes);
@@ -182,8 +223,12 @@ public partial class Shell
         return path;
     }
 
+    /// <summary>사용자에게 보여 줄 앱 이름.</summary>
     public static string AppLabel(BridgeApp app) => app switch { BridgeApp.Blender => "Blender", BridgeApp.RizomUv => "RizomUV", BridgeApp.Marmoset => "Marmoset Toolbag", _ => "Cascadeur" };
 
+    /// <summary>
+    /// 앱 실행 파일 경로: 설정에 저장된 경로가 존재하면 그것, 아니면 DetectExe로 자동 감지해 설정에 저장한다. 못 찾으면 null.
+    /// </summary>
     private string? ResolveExe(BridgeApp app)
     {
         var b = Settings.Bridge;
@@ -201,6 +246,8 @@ public partial class Shell
     /// <summary>흔한 설치 경로에서 실행 파일을 찾는다(가장 최신 버전 폴더 우선).</summary>
     public static string? DetectExe(BridgeApp app)
     {
+        // 후보 = (검색 루트, 하위 폴더 패턴, 실행 파일 패턴). 폴더는 이름 내림차순(대개 최신 버전 우선)으로 보고,
+        // 바로 아래에 없으면 하위 전체에서 첫 번째 일치를 쓴다. 권한 오류 등은 무시하고 다음 후보로.
         string pf = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ProgramFiles);
         string pf86 = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ProgramFilesX86);
         string local = System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
@@ -230,6 +277,10 @@ public partial class Shell
 
     // ---------------------------------------------------------------- 다시 읽기
 
+    /// <summary>
+    /// 1초마다 호출: 세션의 반환 파일이 Stamp보다 새로 저장되었고 저장 후 1초 이상 지났으면
+    /// 자동 다시 읽기(설정)면 ReloadBridge, 아니면 헬프 라인에 한 번 안내한다. 파일 잠금 등 예외는 무시(다음 틱에 재시도).
+    /// </summary>
     private void CheckBridgeFile()
     {
         var b = Bridge;
@@ -247,9 +298,16 @@ public partial class Shell
         catch { /* 잠금 등 */ }
     }
 
+    /// <summary>
+    /// 반환 파일 다시 읽기. UV 전용 세션(RizomUV)은 ReloadUvsFromObj로 UV만 적용한다.
+    /// 그 외에는 한 Undo 그룹에서: 보낸 노드의 머티리얼 할당을 이름별로 기억 → (Blender) OBJ + 원점을 먼저 읽고 성공하면 보낸 노드 삭제 후 추가,
+    /// (Cascadeur 등) 보낸 노드만 가리키던 애니메이션 클립 제거 + 노드 삭제 후 Files.Import → 세션 노드 목록을 새 노드로 갱신하고
+    /// 같은 이름 메시에 이전 머티리얼을 다시 할당한다.
+    /// </summary>
     private void ReloadBridge()
     {
         var b = Bridge; if (b == null) return;
+        // 지금 파일 시각을 기록해 같은 저장을 두 번 읽지 않게 하고 안내 상태를 초기화
         b.Stamp = System.IO.File.GetLastWriteTimeUtc(b.ReturnPath); b.Notified = false;
         if (b.UvOnly) { ReloadUvsFromObj(b); return; }
         var doc = Document;
@@ -280,6 +338,7 @@ public partial class Shell
                 if (existing.Count > 0) { var del = new DeleteNodesCommand(doc, existing); if (!del.IsEmpty) doc.Undo.Push(del); }
                 res = Files.Import(b.ReturnPath);
             }
+            // 성공: 다음 다시 읽기에서 교체할 노드를 새로 가져온 노드로 바꾸고, 이름이 같은 메시에 머티리얼을 이어 준다(같은 머티리얼끼리 한 명령)
             if (res.Ok)
             {
                 b.Nodes = res.Nodes.Select(n => (n.Id, n.Name)).ToList();
@@ -296,8 +355,10 @@ public partial class Shell
     /// </summary>
     private ImportResult ImportObjWithOrigins(string objPath)
     {
+        // ① OBJ를 월드 좌표 그대로 노드로 가져온다(아직 문서에 넣지 않음)
         var res = new ObjImporter().Import(objPath, Document, ImportOptions.Default);
         if (!res.Ok) { HelpLine.Text = res.Message; return res; }
+        // ② 같은 이름의 .json(OBJ와 30초 이내에 쓰인 것만 = 같은 내보내기)에서 오브젝트 이름 → 4x4 월드 행렬을 읽는다
         string jsonPath = System.IO.Path.ChangeExtension(objPath, ".json");
         var matrices = new Dictionary<string, Matrix4x4>();
         try
@@ -321,6 +382,7 @@ public partial class Shell
         }
         catch (Exception ex) { GD.PushWarning($"[Bridge] origins json: {ex.Message}"); }
         if (matrices.Count == 0) return res;
+        // ③ 노드마다 행렬을 찾아(정확한 이름, 없으면 "이름_" 접두어나 공백→_ 치환 이름) 정점을 역행렬로 로컬화하고 T/R/S를 복원
         int restored = 0;
         foreach (var n in res.Nodes)
         {
@@ -347,6 +409,10 @@ public partial class Shell
     }
 
     /// <summary>RizomUV 왕복: OBJ의 오브젝트를 이름(없으면 순서)으로 원본 노드와 짝지어 면 순서대로 UV만 복사한다.</summary>
+    /// <remarks>
+    /// OBJ 오브젝트 이름은 공백이 _로 바뀌어 있으므로 Sanitize로 비교한다. 면 수/순서가 다르면(위상 변경) 해당 면은 건너뛰고
+    /// 건너뛴 수와 찾지 못한 오브젝트 수를 헬프 라인에 알린다. 노드마다 UvEditCommand(한 Undo 그룹).
+    /// </remarks>
     private void ReloadUvsFromObj(BridgeSession b)
     {
         List<ObjObject> objs;
@@ -374,6 +440,7 @@ public partial class Shell
 
     // ---------------------------------------------------------------- Blender 애드온
 
+    /// <summary>내장 Blender 애드온 원본 경로(배포 빌드에는 include_filter로 포함된다).</summary>
     private const string BlenderAddonRes = "res://assets/addons/blender/cube_bridge.py";
 
     /// <summary>앱 시작 시 Blender 브리지 파일이 이미 있으면(애드온의 'Send to Cube') 수동 세션 없이도 변경을 감시한다(가져오기만, 교체 없음).</summary>
@@ -385,6 +452,7 @@ public partial class Shell
         Bridge = new BridgeSession { App = BridgeApp.Blender, Path = System.IO.Path.Combine(dir, "cube_bridge.fbx"), ReturnPath = ret, Stamp = System.IO.File.Exists(ret) ? System.IO.File.GetLastWriteTimeUtc(ret) : DateTime.UtcNow };
     }
 
+    /// <summary>Blender 애드온 파이썬 소스 텍스트(없으면 빈 문자열).</summary>
     private static string BlenderAddonSource() => Godot.FileAccess.GetFileAsString(BlenderAddonRes);
 
     /// <summary>%APPDATA%\Blender Foundation\Blender\&lt;버전&gt;\scripts\addons\cube_bridge.py 로 복사한다(모든 설치 버전). Blender에서 Preferences → Add-ons → "Cube Bridge" 활성화 필요.</summary>
@@ -392,6 +460,7 @@ public partial class Shell
     {
         string src = BlenderAddonSource();
         if (string.IsNullOrEmpty(src)) { HelpLine.Text = "Bridge: add-on source not found (assets/addons/blender/cube_bridge.py)."; return; }
+        // Blender 사용자 폴더 아래의 버전 폴더(config/userpref.blend 또는 scripts가 있는 것)마다 scripts/addons에 복사
         string root = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "Blender Foundation", "Blender");
         var installed = new List<string>();
         try
@@ -416,6 +485,7 @@ public partial class Shell
         HelpLine.Text = $"Bridge: cube_bridge.py installed for Blender {string.Join(", ", installed)}. In Blender: Edit → Preferences → Add-ons → enable \"Cube Bridge\" (View3D sidebar → Cube tab).";
     }
 
+    /// <summary>애드온 파일을 사용자가 고른 위치에 저장한다(Blender Preferences → Add-ons → Install로 설치하도록 안내).</summary>
     private void SaveBlenderAddon()
     {
         var fd = new FileDialog { FileMode = FileDialog.FileModeEnum.SaveFile, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Title = "Save Blender Add-on", CurrentFile = "cube_bridge.py" };
@@ -431,10 +501,12 @@ public partial class Shell
         fd.PopupCentered();
     }
 
+    /// <summary>OBJ 내보내기와 같은 규칙으로 이름의 공백 문자를 '_'로 바꾼다(이름 짝짓기용).</summary>
     private static string Sanitize(string name) => string.Concat(name.Select(c => char.IsWhiteSpace(c) ? '_' : c));
 
     // ---------------------------------------------------------------- 창
 
+    /// <summary>Bridge Settings 패널 열기/닫기 토글. open이 지정되면 그 상태로 강제(실행 파일을 못 찾았을 때 열기 등).</summary>
     private void ToggleBridgeSettings() => ToggleBridgeSettings(open: null);
     private void ToggleBridgeSettings(bool? open)
     {
@@ -443,6 +515,7 @@ public partial class Shell
         if (show) BridgeSettingsWindow.Open(); else BridgeSettingsWindow.Close();
     }
 
+    /// <summary>Bridge Settings 패널을 지연 생성하고 DockManager에 등록한다(레이아웃 복원 "bridgeSettings"에서도 호출).</summary>
     private BridgeSettingsWindow EnsureBridgeSettings()
     {
         if (BridgeSettingsWindow == null)
@@ -455,6 +528,7 @@ public partial class Shell
         return BridgeSettingsWindow;
     }
 
+    /// <summary>Tripo Editor 패널을 지연 생성하고 DockManager에 등록한다(레이아웃 복원 "tripo"에서도 호출).</summary>
     private TripoWindow EnsureTripo()
     {
         if (TripoWindow == null)
@@ -467,6 +541,7 @@ public partial class Shell
         return TripoWindow;
     }
 
+    /// <summary>Tripo Editor 열기/닫기 토글.</summary>
     private void ToggleTripo()
     {
         var w = EnsureTripo();

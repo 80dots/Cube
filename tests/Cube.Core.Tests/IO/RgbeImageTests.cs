@@ -3,8 +3,16 @@ using Cube.Core.IO;
 
 namespace Cube.Core.Tests.IO;
 
+/// <summary>
+/// Radiance .hdr(RGBE) 인코더/디코더(<c>RgbeImage</c>)를 검증한다. IBL HDRI를 Godot 임포터 없이 런타임에 읽기 위해 쓰인다.
+/// 평면/새 방식 RLE/옛 방식 RLE 스캔라인, +Y 방향 행 뒤집기, 잘못된 서명·형식 거부를 다룬다.
+/// </summary>
 public class RgbeImageTests
 {
+    /// <summary>
+    /// 큰 값·아주 작은 값·0·정확히 표현 가능한 값이 섞인 4x3 이미지를 인코딩 후 디코딩한다.
+    /// 헤더 서명, 크기, 정확히 표현되는 픽셀의 무손실 복원, 그리고 나머지 픽셀이 공유 지수·8비트 가수 정밀도(max/128) 안에서 복원되는지 확인한다.
+    /// </summary>
     [Fact]
     public void Encode_Decode_FlatRoundTrip_WithinRgbePrecision()
     {
@@ -38,6 +46,9 @@ public class RgbeImageTests
         }
     }
 
+    /// <summary>
+    /// 새 방식 RLE(채널별로 분리된 런/리터럴) 스캔라인을 손으로 만든 바이트로 디코딩해, 런·리터럴·지수 적용이 맞는지 확인한다.
+    /// </summary>
     [Fact]
     public void Decode_NewStyleRle_Scanline()
     {
@@ -61,6 +72,10 @@ public class RgbeImageTests
         }
     }
 
+    /// <summary>
+    /// "+Y" 해상도 줄은 파일 첫 행이 이미지 맨 아래임을 뜻하므로 디코더가 행을 뒤집어야 한다.
+    /// RLE 없는 평면 스캔라인 2x2를 읽어 맨 위 행이 파일의 두 번째 행인지 확인한다.
+    /// </summary>
     [Fact]
     public void Decode_PlusY_FlipsRows_AndFlatScanlines()
     {
@@ -76,6 +91,9 @@ public class RgbeImageTests
         Assert.Equal(new float[] { 1, 0, 0, 0, 1, 0 }, img.Rgb.Skip(6).ToArray());
     }
 
+    /// <summary>
+    /// 옛 방식 RLE: (1,1,1,n) 픽셀은 이전 픽셀을 n번 반복하라는 뜻이다. 첫 픽셀 (1,0.5,0.25)이 4개 모두에 채워지는지 확인한다.
+    /// </summary>
     [Fact]
     public void Decode_OldStyleRle_RepeatsPreviousPixel()
     {
@@ -92,6 +110,7 @@ public class RgbeImageTests
         }
     }
 
+    /// <summary>"#?" 서명이 없거나 FORMAT이 rgbe가 아닌(xyze 등) 파일은 <c>InvalidDataException</c>으로 거부해야 한다.</summary>
     [Fact]
     public void Decode_RejectsBadSignatureAndFormat()
     {

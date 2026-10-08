@@ -13,9 +13,14 @@ using NVec2 = System.Numerics.Vector2;
 
 namespace Cube.App.UI.UvEditor;
 
+/// <summary>
+/// UV 캔버스 배경 종류: 없음 / 0..1 그리드만 / UV 그리드 텍스처 / 머티리얼에 매핑된 텍스처(Mapped) / 체커 맵.
+/// 값 순서는 UvEditorWindow의 배경 드롭다운 항목 순서와 같다(CycleBackground가 mod 5로 순환).
+/// </summary>
 public enum UvBackground { None, Grid, UvTexture, Mapped, Checker }
 
 /// <summary>UV 편집기 캔버스 툴(Maya UV Editor Tools 메뉴). None = 선택/조작기.</summary>
+// 항목: None = 선택/조작기, Tweak = 점 직접 끌기, Grab/Smooth/Pinch/Smear = 브러시 변형, PinBrush = 핀 칠하기, CutSew = 엣지 자르기/꿰매기, MoveShell = 셸 단위 이동.
 public enum UvCanvasTool { None, Tweak, Grab, Smooth, Pinch, Smear, PinBrush, CutSew, MoveShell }
 
 /// <summary>
@@ -24,62 +29,106 @@ public enum UvCanvasTool { None, Tweak, Grab, Smooth, Pinch, Smear, PinBrush, Cu
 /// 표시 옵션: Shaded(앞/뒤 색), Distortion, Texture Borders, Isolate Select, Grid, UDIM 타일, 이미지 Dim/Unfiltered/Pixel Snap, Checker 배경, Pin(파랑), 통계 HUD.
 /// 파이 메뉴 정책은 뷰포트와 같다: RMB = 모드, Shift+RMB = Edit(UV 기능, 서브 파이), Ctrl+RMB = Select(변환).
 /// 내비게이션: Alt+MMB 팬, Alt+RMB·휠 줌, F 프레임, A 전체.
+/// 좌표계: UV(0..1, V 위쪽이 +)를 캔버스 px로 <c>px = _origin + (u, -v) × _zoom</c>으로 매핑한다(<see cref="UvToPx"/>/<see cref="PxToUv"/>).
+/// 그리기: 정적인 기하(면 틴트·와이어·심·점)는 <c>UvCanvasLayer</c> 레이어에 엔진 메시로 캐시하고, 이 컨트롤의 _Draw는 오버레이(조작기·호버·마키·HUD)만 그린다.
+/// UV 위상(<see cref="UvTopology"/>)은 노드별로 캐시하며 위상/속성 변경 때만 다시 만든다. 편집은 모두 <see cref="UvEditCommand"/>로 Undo 가능.
 /// </summary>
 public partial class UvCanvas : Control
 {
+    /// <summary>소유 셸(문서, 툴, 액션, 헬프 라인, 파이 메뉴 정의 접근).</summary>
     private Shell _shell = null!;
+    /// <summary>현재 배경 종류(백킹 필드).</summary>
     private UvBackground _background = UvBackground.UvTexture;
+    /// <summary>배경 종류. 바꾸면 다시 그린다.</summary>
     public UvBackground Background { get => _background; set { _background = value; QueueRedraw(); } }
+    /// <summary>Island 모드(UV 모드의 변형): 켜져 있으면 클릭/마키로 집은 요소가 속한 UV 섬 전체를 선택한다.</summary>
     public bool IslandMode { get; private set; }
+    /// <summary>Island 모드가 바뀔 때 발생(툴바 모드 버튼 갱신용).</summary>
     public event Action? IslandModeChanged;
+    /// <summary>캔버스 전용 파이 메뉴(RMB 모드 / Shift+RMB 편집 / Ctrl+RMB 선택).</summary>
     private PieMenu _pie = null!;
+    /// <summary>줌: UV 1단위당 px.</summary>
     private float _zoom = 400f;
+    /// <summary>UV (0,0)의 캔버스 px 위치(팬 오프셋). Zero면 아직 프레임되지 않은 상태로 본다.</summary>
     private GVec2 _origin;
+    /// <summary>UV 그리드 배경 텍스처(내장 PNG 바이트에서 로드).</summary>
     private Texture2D? _gridTex;
+    /// <summary>체커 배경 텍스처 캐시와 그 칸 수(CheckerSize가 바뀌면 다시 만든다).</summary>
     private ImageTexture? _checkerTex; private int _checkerTexSize = -1;
 
     // 표시 옵션
+    // 백킹 필드: Shaded/Distortion/TextureBorders는 기하 레이어 색이 바뀌므로 MarkGeomDirty, 나머지는 오버레이만 다시 그린다.
     private bool _shaded, _distortion, _texBorders = true, _showStats, _gridLines = true, _tiles, _dim = true, _unfiltered, _pixelSnap;
+    /// <summary>Shaded: 면을 앞면 파랑/뒷면(UV가 뒤집힌 면) 빨강으로 칠한다.</summary>
     public bool Shaded { get => _shaded; set { _shaded = value; MarkGeomDirty(); } }
+    /// <summary>Distortion: 면을 UV 늘어남/줄어듦 비율 색으로 칠한다.</summary>
     public bool Distortion { get => _distortion; set { _distortion = value; MarkGeomDirty(); } }
+    /// <summary>Texture Borders: UV 셸 경계 엣지를 굵게 표시한다(기본 켜짐).</summary>
     public bool TextureBorders { get => _texBorders; set { _texBorders = value; MarkGeomDirty(); } }
+    /// <summary>통계 HUD(셸 수, 겹침, 뒤집힘, 사용률) 표시.</summary>
     public bool ShowStats { get => _showStats; set { _showStats = value; QueueRedraw(); } }
+    /// <summary>그리드 선 표시(기본 켜짐).</summary>
     public bool ShowGridLines { get => _gridLines; set { _gridLines = value; QueueRedraw(); } }
+    /// <summary>UDIM 타일 라벨 표시.</summary>
     public bool ShowTiles { get => _tiles; set { _tiles = value; QueueRedraw(); } }
+    /// <summary>배경 이미지를 어둡게(기본 켜짐).</summary>
     public bool DimImage { get => _dim; set { _dim = value; QueueRedraw(); } }
+    /// <summary>배경 이미지를 최근접 필터(픽셀 그대로)로 그린다.</summary>
     public bool Unfiltered { get => _unfiltered; set { _unfiltered = value; TextureFilter = value ? TextureFilterEnum.Nearest : TextureFilterEnum.Linear; QueueRedraw(); } }
+    /// <summary>Pixel Snap: 조작기 이동 결과를 텍스처 픽셀 격자에 맞춘다.</summary>
     public bool PixelSnap { get => _pixelSnap; set { _pixelSnap = value; QueueRedraw(); } }
+    /// <summary>체커 배경의 한 변 칸 수(1~256, 기본 8).</summary>
     public int CheckerSize { get; private set; } = 8;
+    /// <summary>체커 칸 수를 설정한다(범위 고정).</summary>
     public void SetCheckerSize(int n) { CheckerSize = Math.Clamp(n, 1, 256); QueueRedraw(); }
+    /// <summary>Isolate Select 상태: 노드 → 표시할 면 집합. null = 격리 해제(모든 면 표시).</summary>
     private Dictionary<NodeId, HashSet<int>>? _isolate;
+    /// <summary>Isolate Select가 켜져 있는지.</summary>
     public bool Isolated => _isolate != null;
+    /// <summary>현재 캔버스 툴(백킹 필드).</summary>
     private UvCanvasTool _tool;
+    /// <summary>현재 캔버스 툴. 바꾸면 브러시 커서를 지우고 헬프 라인에 툴 설명을 띄운다.</summary>
     public UvCanvasTool Tool { get => _tool; set { _tool = value; _brushPos = null; QueueRedraw(); _shell.HelpLine.Text = ToolHelp(value); } }
 
+    /// <summary>노드 → UV 위상 캐시(UV 점·셸). 위상/속성 변경·리셋·Invalidate 때 무효화.</summary>
     private readonly Dictionary<NodeId, UvTopology> _topos = new();
+    /// <summary>UV 변형 드래그 중(이 동안 위상 캐시를 지우지 않는다 — 점 ID가 유지되어야 함).</summary>
     private bool _dragging;
 
     // 입력 상태
+    // _navButton: 내비게이션 중인 버튼(Alt+MMB 팬, Alt+RMB 줌), _last: 직전 마우스 위치.
     private MouseButton _navButton = MouseButton.None;
     private GVec2 _last;
+    // _pressed: LMB 선택 클릭 중, _marquee: 드래그가 임계값을 넘어 마키 선택으로 바뀜.
     private bool _pressed, _marquee;
+    // _pressPos: 누른 위치, _modifier: Shift/Ctrl 선택 수식어, _marqueeEnd: 마키 끝점, _hover: 프리셀렉션 대상.
     private GVec2 _pressPos;
     private SelectModifier _modifier;
     private GVec2? _marqueeEnd;
     private SelItem? _hover;
 
     // 조작기
+    // Part: 조작기 부분(X/Y 축, 중앙, 회전 링). _hoverPart = 커서 아래, _dragPart = 끌고 있는 부분. _pivotUv = 조작기 중심(UV), _hasPivot = 선택이 있어 조작기를 그릴지.
     private enum Part { None, X, Y, Center, Ring }
     private Part _hoverPart = Part.None, _dragPart = Part.None;
     private NVec2 _pivotUv;
     private bool _hasPivot;
 
     // 변형 드래그(조작기/Tweak/브러시/셸 이동 공용)
+    // _xform: 노드별 변형 대상(위상, 움직일 UV 점, 시작 UV, 명령). 드래그 동안 시작 UV에서 매번 다시 계산하므로 오차가 쌓이지 않는다.
+    // _xformTool: 진행 중인 변형의 이름(Undo 항목·Action Popup용).
     private readonly List<(NodeId node, UvTopology topo, int[] points, NVec2[] initial, UvEditCommand cmd)> _xform = new();
     private string _xformTool = "";
+    // 브러시 상태: _brushPos = 브러시 원 위치(null = 숨김), _brushLast = 직전 스트로크 위치, _brushing = 스트로크 중,
+    // _cutSewPainting = Cut/Sew 칠하기 중, _cutSewSew = Ctrl(꿰매기) 모드.
     private GVec2? _brushPos; private GVec2 _brushLast; private bool _brushing; private bool _cutSewPainting; private bool _cutSewSew;
+    // 한 스트로크에서 이미 자르거나 꿰맨 (노드, 엣지) — 같은 엣지를 반복 처리하지 않게.
     private readonly HashSet<(NodeId, int)> _cutSewDone = new();
 
+    /// <summary>
+    /// 캔버스를 초기화한다: 입력/포커스/크기/클리핑 설정, 그리드 텍스처 로드, 그리기 레이어 생성, 파이 메뉴 추가, 문서·선택·모드·툴 이벤트 구독.
+    /// 크기가 바뀔 때 아직 프레임되지 않았거나 도킹 직후 창이면 전체 프레임을 다시 한다.
+    /// </summary>
     public void Setup(Shell shell)
     {
         _shell = shell;
@@ -100,6 +149,7 @@ public partial class UvCanvas : Control
         CallDeferred(nameof(FrameAll));
     }
 
+    /// <summary>이 시각(엔진 ms)까지는 크기가 바뀔 때마다 FrameAll한다(<see cref="FrameOnResize"/>가 설정).</summary>
     private ulong _frameUntilMs;
 
     /// <summary>
@@ -114,8 +164,13 @@ public partial class UvCanvas : Control
         if (_shell != null) { _shell.Document.Changed -= OnDocChanged; _shell.Document.Selection.Changed -= OnSelectionChanged; }
     }
 
+    /// <summary>선택이 바뀌면 선택 UV 점 캐시를 지우고 기하 레이어(선택 색)를 다시 만든다.</summary>
     private void OnSelectionChanged() { _selPts.Clear(); MarkGeomDirty(); }
 
+    /// <summary>
+    /// 문서 변경 처리. 그리기 캐시 스탬프는 항상 올리고, 드래그 중이면 위상 캐시는 건드리지 않고 다시 그리기만 한다.
+    /// 위상/속성/삭제/리셋이면 그 노드의 위상·통계·왜곡 캐시를 버린다(리셋은 전부 + Isolate 해제).
+    /// </summary>
     private void OnDocChanged(DocChange c)
     {
         _geomStamp++;   // UV 드래그 중에도 그리기 캐시는 갱신(위상 캐시는 아래에서 드래그가 끝난 뒤에만)
@@ -126,8 +181,10 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>모든 캐시(위상·선택 점·통계·왜곡)를 버리고 기하를 다시 만들게 한다(UV 세트 전환, 창 열기 등 외부 변경 후 호출).</summary>
     public void Invalidate() { _topos.Clear(); _selPts.Clear(); _geomStamp++; _statsCache.Clear(); _distortionCache.Clear(); QueueRedraw(); }
 
+    /// <summary>Island 모드를 켜고 끈다. 켤 때 UV 모드가 아니면 UV 모드 액션을 먼저 실행한다.</summary>
     public void SetIslandMode(bool on)
     {
         IslandMode = on;
@@ -136,6 +193,7 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>툴별 헬프 라인 안내 문구.</summary>
     private static string ToolHelp(UvCanvasTool t) => t switch
     {
         UvCanvasTool.Tweak => "Tweak UV: drag a UV point (or the selection) directly.",
@@ -151,6 +209,9 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 데이터
 
+    /// <summary>
+    /// UV를 보여 줄 노드들: 선택된 오브젝트 + 컴포넌트가 선택된 노드(중복 제거) 중 메시를 가진 것.
+    /// </summary>
     public IEnumerable<SceneNode> TargetNodes()
     {
         var sel = _shell.Document.Selection;
@@ -159,18 +220,21 @@ public partial class UvCanvas : Control
         foreach (var id in ids) { var n = _shell.Document.Find(id); if (n?.Mesh != null) yield return n; }
     }
 
+    /// <summary>노드의 UV 위상(캐시; 없으면 만든다). UV 점 ID는 이 위상의 Points 인덱스이며 뷰포트 UV 모드와 같은 순서다.</summary>
     public UvTopology Topo(SceneNode n)
     {
         if (!_topos.TryGetValue(n.Id, out var t)) { t = UvTopology.Build(n.Mesh!); _topos[n.Id] = t; }
         return t;
     }
 
+    /// <summary>Isolate Select 중이면 격리된 면만 보이고, 아니면 모든 면이 보인다.</summary>
     private bool FaceVisible(NodeId node, int f) => _isolate == null || (_isolate.TryGetValue(node, out var set) && set.Contains(f));
 
     /// <summary>Isolate Select: 현재 선택(면/UV 점이 속한 면)만 표시 ↔ 해제.</summary>
     public void ToggleIsolate()
     {
         if (_isolate != null) { _isolate = null; MarkGeomDirty(); return; }
+        // 노드마다 선택 UV 점을 하나라도 포함하는 면을 모은다.
         var map = new Dictionary<NodeId, HashSet<int>>();
         foreach (var node in TargetNodes())
         {
@@ -184,9 +248,12 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 좌표
 
+    /// <summary>UV → 캔버스 px(V를 뒤집어 위쪽이 +V).</summary>
     public GVec2 UvToPx(NVec2 uv) => _origin + new GVec2(uv.X, -uv.Y) * _zoom;
+    /// <summary>캔버스 px → UV(<see cref="UvToPx"/>의 역변환).</summary>
     public NVec2 PxToUv(GVec2 px) => new((px.X - _origin.X) / _zoom, -(px.Y - _origin.Y) / _zoom);
 
+    /// <summary>0..1 영역과 모든 대상 UV를 포함하도록 프레임한다(캔버스가 너무 작으면 건너뜀).</summary>
     public void FrameAll()
     {
         if (Size.X < 10 || Size.Y < 10) return;
@@ -195,6 +262,7 @@ public partial class UvCanvas : Control
         FrameRect(min, max);
     }
 
+    /// <summary>선택 UV 점들의 범위로 프레임한다. 선택이 없으면 전체, 범위가 거의 0이면 ±0.05로 넓힌다.</summary>
     public void FrameSelected()
     {
         var min = new NVec2(float.MaxValue); var max = new NVec2(float.MinValue); int n = 0;
@@ -206,6 +274,7 @@ public partial class UvCanvas : Control
         FrameRect(min, max);
     }
 
+    /// <summary>UV 사각형 [min, max]가 여백 40px(배율 적용)을 두고 캔버스에 꽉 차도록 줌과 원점을 정한다.</summary>
     private void FrameRect(NVec2 min, NVec2 max)
     {
         float margin = 40 * CubeApp.Instance.UiScale;
@@ -230,11 +299,15 @@ public partial class UvCanvas : Control
         _selPts[node.Id] = (topo, set);
         return set;
     }
+    /// <summary>노드 → (캐시를 만든 위상, 선택 UV 점 집합). 위상 객체가 바뀌면 다시 계산한다.</summary>
     private readonly Dictionary<NodeId, (UvTopology topo, HashSet<int> set)> _selPts = new();
 
+    /// <summary>엣지 e가 선택되어 있는지(엣지 모드 선택 기준).</summary>
     private bool IsEdgeSelected(SceneNode node, int e) => _shell.Document.Selection.IsComponentSelected(node.Id, SelectMode.Edge, e);
+    /// <summary>면 f가 선택되어 있는지(면 모드 선택 기준).</summary>
     private bool IsFaceSelected(SceneNode node, int f) => _shell.Document.Selection.IsComponentSelected(node.Id, SelectMode.Face, f);
 
+    /// <summary>조작기 피벗 = 모든 대상 노드의 선택 UV 점 평균. 선택이 없으면 false.</summary>
     private bool ComputePivot(out NVec2 pivot)
     {
         var sum = NVec2.Zero; int n = 0;
@@ -243,14 +316,21 @@ public partial class UvCanvas : Control
         return n > 0;
     }
 
+    /// <summary>조작기를 쓰는 상태인지: 캔버스 툴이 없고 셸의 현재 툴이 Move/Rotate/Scale일 때.</summary>
     private bool GizmoActive => _tool == UvCanvasTool.None && _shell.Tools.Current?.Id is "move" or "rotate" or "scale";
+    /// <summary>조작기 축 길이(px).</summary>
     private float GizmoLen => 70f * CubeApp.Instance.UiScale;
 
     // ---------------------------------------------------------------- 그리기
 
+    /// <summary>노드 → (메시 버전, 면별 왜곡 비율) 캐시. Distortion 표시용.</summary>
     private readonly Dictionary<NodeId, (int version, float[] ratio)> _distortionCache = new();
+    /// <summary>노드 → (메시 버전, 통계) 캐시. 통계 HUD용.</summary>
     private readonly Dictionary<NodeId, (int version, (int shells, int overlapping, int reversed, float usage) stats)> _statsCache = new();
 
+    /// <summary>
+    /// 체커 배경 텍스처를 만든다(캐시). 한 변 CheckerSize 칸, 텍스처 크기는 약 512px가 되도록 칸 크기의 배수로 맞춘다.
+    /// </summary>
     private Texture2D? CheckerTexture()
     {
         int n = Math.Max(CheckerSize, 1);
@@ -275,8 +355,13 @@ public partial class UvCanvas : Control
     /// 60프레임마다 그리기(_Draw + 레이어 Paint 합)/호버 평균 시간과 FPS를 `[UvPerf]` 줄로 출력한다(vsync 끔).
     /// </summary>
     private static readonly bool PerfMode = OS.GetCmdlineUserArgs().Contains("--uvperf");
+    /// <summary>_perfDraw/_perfHover: 누적 ms, _perfFrames/_perfHoverN: 누적 횟수.</summary>
     private double _perfDraw, _perfHover; private int _perfFrames, _perfHoverN;
 
+    /// <summary>
+    /// 성능 측정 모드에서만 동작: vsync를 끄고, 시간에 따라 움직이는 합성 커서로 호버를 계산해 측정하며, 매 프레임 다시 그린다.
+    /// 60프레임마다 평균을 출력하고 누적을 초기화한다.
+    /// </summary>
     public override void _Process(double delta)
     {
         if (!PerfMode || !IsVisibleInTree()) return;
@@ -294,6 +379,7 @@ public partial class UvCanvas : Control
         }
     }
 
+    /// <summary>그리기 함수를 실행하며 측정 모드면 걸린 시간을 누적한다(UiPerf가 켜져 있으면 그쪽에도 기록).</summary>
     private void Timed(Action a)
     {
         if (!PerfMode && !UiPerf.Enabled) { a(); return; }
@@ -309,8 +395,11 @@ public partial class UvCanvas : Control
     // 와이어 굵기와 점 크기는 정점의 UV 속성(픽셀 단위 오프셋)과 셰이더 유니폼(1/줌)으로 정하므로 팬/줌/호버에는 다시 만들 필요가 없다.
     // 예전에는 요소마다 DrawLine/DrawColoredPolygon/DrawRect를 불러 12k 면에서 _Draw 한 번에 130ms(4fps)가 걸렸다.
 
+    /// <summary>그리기 레이어 4개(배경 / 면 틴트·와이어 / 굵은 선 / UV 점). 자식 순서대로 이 컨트롤의 _Draw보다 먼저 그려진다.</summary>
     private UvCanvasLayer _bgLayer = null!, _meshLayer = null!, _lineLayer = null!, _pointLayer = null!;
+    /// <summary>메시·점 레이어용 오프셋 셰이더 머티리얼(레이어마다 따로 두어 px_to_local 유니폼을 각각 설정).</summary>
     private ShaderMaterial _meshMat = null!, _pointMat = null!;
+    /// <summary>오프셋 셰이더 공유 인스턴스(지연 생성).</summary>
     private static Shader? _offsetShader;
 
     /// <summary>VERTEX(UV 공간) += UV(픽셀 오프셋) × 1/줌: 줌과 무관하게 일정한 픽셀 굵기/크기.</summary>
@@ -319,6 +408,7 @@ public partial class UvCanvas : Control
         Code = "shader_type canvas_item;\nuniform float px_to_local = 1.0;\nvoid vertex() { VERTEX += UV * px_to_local; }\n",
     };
 
+    /// <summary>레이어 4개를 만들고 각 레이어의 Paint 콜백(측정 래퍼 포함)과 머티리얼을 연결한다.</summary>
     private void SetupLayers()
     {
         _meshMat = new ShaderMaterial { Shader = OffsetShader };
@@ -329,6 +419,7 @@ public partial class UvCanvas : Control
         _pointLayer = AddLayer("UvPoints", l => Timed(() => PaintPoints(l)), _pointMat);
     }
 
+    /// <summary>캔버스를 꽉 채우는 레이어를 자식으로 추가한다.</summary>
     private UvCanvasLayer AddLayer(string name, Action<UvCanvasLayer> paint, Material? mat)
     {
         var l = new UvCanvasLayer { Name = name, Paint = paint, Material = mat };
@@ -347,18 +438,25 @@ public partial class UvCanvas : Control
     /// <summary>호버/마키/브러시 커서처럼 맨 위 덧그림만 바뀔 때(메시 레이어는 그대로).</summary>
     private void QueueOverlayRedraw() => base.QueueRedraw();
 
+    /// <summary>UV 공간 → 캔버스 px 변환(x 축 = (줌, 0), y 축 = (0, −줌), 원점 = _origin). 캐시 메시를 그릴 때 쓴다.</summary>
     private Transform2D UvTransform => new(new GVec2(_zoom, 0), new GVec2(0, -_zoom), _origin);
 
+    /// <summary>이 컨트롤 자신의 그리기 = 덧그림(오버레이). 측정 모드면 시간을 재고 프레임 수를 센다.</summary>
     public override void _Draw()
     {
         if (PerfMode) { Timed(DrawOverlay); _perfFrames++; }
         else DrawOverlay();
     }
 
+    /// <summary>
+    /// 배경 레이어: 바탕색 → (UDIM 타일이 켜져 있으면 −1..2 범위 3×3 타일, 아니면 0..1 한 칸)마다 배경 이미지·그리드 선·테두리·타일 번호.
+    /// 0..1 칸(home)은 더 밝게, 다른 타일은 반투명으로 그린다. Dim이 켜져 있으면 이미지를 어둡게.
+    /// </summary>
     private void PaintBackground(UvCanvasLayer L)
     {
         float s = CubeApp.Instance.UiScale;
         L.DrawRect(new Rect2(GVec2.Zero, Size), MathConvert.Rgb(0x2b2b2b));
+        // 0..1 칸의 화면 사각형(위쪽 = V 1).
         var p0 = UvToPx(new NVec2(0, 1)); var p1 = UvToPx(new NVec2(1, 0));
         var unit = new Rect2(p0, p1 - p0);
         float imgAlpha = _dim ? 0.28f : 1f;
@@ -375,6 +473,7 @@ public partial class UvCanvas : Control
                     case UvBackground.Mapped: { var tex = MappedTexture(); if (tex != null) L.DrawTextureRect(tex, r, false, new Color(1, 1, 1, home ? (_dim ? 0.7f : 1f) : 0.35f)); else L.DrawRect(r, MathConvert.Rgb(0x3a3a3a)); break; }
                     case UvBackground.Grid: L.DrawRect(r, MathConvert.Rgb(0x333333)); break;
                 }
+                // 그리드 선은 그리드/없음 배경일 때만: 0.1 간격, 0.5마다 밝게.
                 if (_gridLines && (_background == UvBackground.Grid || _background == UvBackground.None))
                     for (int i = 0; i <= 10; i++)
                     {
@@ -383,6 +482,7 @@ public partial class UvCanvas : Control
                         L.DrawLine(UvToPx(new NVec2(tx, ty + t)), UvToPx(new NVec2(tx + 1, ty + t)), col, 1 * s);
                     }
                 L.DrawRect(r, home ? MathConvert.Rgb(0x9a9a9a) : MathConvert.Rgb(0x555555), false, 1 * s);
+                // UDIM 번호 = 1001 + u타일 + v타일×10.
                 if (_tiles && tx >= 0 && ty >= 0) L.DrawString(GetThemeDefaultFont(), r.Position + new GVec2(4 * s, 14 * s), (1001 + tx + ty * 10).ToString(), HorizontalAlignment.Left, -1, (int)(11 * s), MayaTheme.TextDim);
             }
     }
@@ -390,6 +490,7 @@ public partial class UvCanvas : Control
     /// <summary>면 틴트 + 일반 와이어(1px×배율, AA 없음: 수만 개 선에 AA 페더를 붙이면 CPU·렌더 비용 대부분을 차지했다).</summary>
     private void PaintMeshes(UvCanvasLayer L)
     {
+        // 캐시를 최신으로 맞추고 셰이더에 1/줌을 넘긴 뒤 노드별 면 메시 → 와이어 메시 순으로 한 번씩 추가한다.
         var geoms = EnsureGeometry();
         _meshMat.SetShaderParameter("px_to_local", 1f / _zoom);
         var item = L.GetCanvasItem(); var xf = UvTransform;
@@ -406,6 +507,7 @@ public partial class UvCanvas : Control
         DrawPxLines(L, geoms, g => g.Selected, w);
     }
 
+    /// <summary>UV 점 레이어: 노드별 점 메시(픽셀 크기 오프셋 사각형)를 한 번에 그린다.</summary>
     private void PaintPoints(UvCanvasLayer L)
     {
         var geoms = EnsureGeometry();
@@ -420,6 +522,7 @@ public partial class UvCanvas : Control
         float s = CubeApp.Instance.UiScale;
         var sel = _shell.Document.Selection;
         var font = GetThemeDefaultFont(); int fs = (int)(11 * s);
+        // 대상 목록은 EnsureGeometry가 만든 것을 그대로 쓴다.
         EnsureGeometry();
         var targets = _geomTargets;
         if (targets.Count == 0)
@@ -428,6 +531,7 @@ public partial class UvCanvas : Control
             return;
         }
         DrawHover(targets, sel, s);
+        // 마키 사각형.
         if (_marquee && _marqueeEnd is { } me)
         {
             var r = RectFrom(_pressPos, me);
@@ -435,16 +539,19 @@ public partial class UvCanvas : Control
             DrawRect(r, new Color(1, 1, 1, 0.9f), false, 1 * s);
         }
         DrawGizmo(s);
+        // 브러시 툴이면 브러시 원.
         if (_tool is UvCanvasTool.Grab or UvCanvasTool.Smooth or UvCanvasTool.Pinch or UvCanvasTool.Smear or UvCanvasTool.PinBrush && _brushPos is { } bp)
         {
             float r = BrushRadius;
             DrawArc(bp, r, 0, Mathf.Tau, 48, new Color(1f, 0.4f, 0.4f, 0.9f), 1.5f * s, true);
         }
+        // 하단 상태 줄: 모드, 툴, 줌(400px/단위 = 100%), UV 세트, Isolate/Pixel Snap 표시.
         string modeText = IslandMode && sel.Mode == SelectMode.Uv ? "Island" : sel.Mode switch { SelectMode.Uv => "UV", SelectMode.Edge => "Edge", SelectMode.Face => "Face", SelectMode.Vertex => "Vertex", _ => "Object" };
         string toolText = _tool == UvCanvasTool.None ? _shell.Tools.Current?.Label ?? "" : _tool.ToString();
         string setText = "";
         var first = targets[0].Mesh!; if (first.UvSets.Count > 1) setText = $"   set: {first.UvSets[Math.Clamp(first.CurrentUvSet, 0, first.UvSets.Count - 1)].Name}";
         DrawString(font, new GVec2(12 * s, Size.Y - 10 * s), $"{modeText} mode   tool: {toolText}   zoom {(_zoom / 400f):P0}{setText}{(_isolate != null ? "   [isolate]" : "")}{(_pixelSnap ? "   [pixel snap]" : "")}", HorizontalAlignment.Left, -1, fs, MayaTheme.TextDim);
+        // 통계 HUD: 노드별로 지오메트리 버전이 바뀌었을 때만 다시 계산.
         if (_showStats)
         {
             int shells = 0, overlap = 0, reversed = 0; float usage = 0;
@@ -465,6 +572,7 @@ public partial class UvCanvas : Control
         var hn = targets.Find(n => n.Id == h.Node);
         if (hn == null || !_geom.TryGetValue(hn.Id, out var g)) return;
         var m = hn.Mesh!;
+        // 엣지 모드: 엣지의 양쪽 하프에지 각각의 UV 선분(심이면 UV가 두 군데)을 흰색으로.
         if (sel.Mode == SelectMode.Edge && h.Component < m.EdgeCount && m.Edges[h.Component].Alive)
         {
             var ed = m.Edges[h.Component];
@@ -475,6 +583,7 @@ public partial class UvCanvas : Control
                 DrawLine(UvToPx(m.Hes[he].Uv0), UvToPx(m.Hes[m.Hes[he].Next].Uv0), MeshView.Hover, 2.5f * s, true);
             }
         }
+        // UV 모드: 호버 점(Island면 같은 셸의 모든 점)을 즉시 그리기 묶음으로 그린다(핀이면 바깥 파랑 테두리).
         else if (sel.Mode == SelectMode.Uv)
         {
             var topo = Topo(hn);
@@ -494,6 +603,9 @@ public partial class UvCanvas : Control
         }
     }
 
+    /// <summary>
+    /// 노드별 선분 묶음(UV 공간)을 화면 px로 바꿔 한 번의 DrawMultilineColors(AA)로 그린다. AA 페더가 픽셀 단위여야 해서 메시 캐시 대신 매번 화면 공간에서 그린다.
+    /// </summary>
     private void DrawPxLines(CanvasItem target, List<NodeGeom> geoms, Func<NodeGeom, LineBatch> pick, float width)
     {
         _pxLines.Clear();
@@ -505,6 +617,7 @@ public partial class UvCanvas : Control
         if (_pxLines.Count > 0) target.DrawMultilineColors(_pxLines.Points, _pxLines.Colors, width, true);
     }
 
+    /// <summary>UV(Godot Vector2) → 캔버스 px.</summary>
     private GVec2 UvPtToPx(GVec2 uv) => _origin + new GVec2(uv.X, -uv.Y) * _zoom;
 
     // ---------------------------------------------------------------- 배치 버퍼(재사용)
@@ -512,10 +625,15 @@ public partial class UvCanvas : Control
     /// <summary>색·오프셋이 있는 삼각형 묶음. 메시로 올리거나(Upload) 바로 그린다(DrawImmediate).</summary>
     private sealed class TriBatch
     {
+        // 정점 위치/픽셀 오프셋/색 배열과 인덱스 배열. 모자라면 두 배로 늘리고 Clear 후에도 재사용한다(할당 최소화).
         private GVec2[] _pts = new GVec2[256], _offs = new GVec2[256]; private Color[] _cols = new Color[256]; private int[] _idx = new int[512];
+        // _np = 정점 수, _ni = 인덱스 수.
         private int _np, _ni;
+        /// <summary>현재 정점 수.</summary>
         public int VertexCount => _np;
+        /// <summary>내용을 비운다(배열은 유지).</summary>
         public void Clear() { _np = 0; _ni = 0; }
+        /// <summary>정점 vertexCount개 자리를 확보하고 첫 정점 인덱스를 돌려준다.</summary>
         public int Begin(int vertexCount)
         {
             if (_np + vertexCount > _pts.Length)
@@ -525,13 +643,17 @@ public partial class UvCanvas : Control
             }
             int b = _np; _np += vertexCount; return b;
         }
+        /// <summary>정점 i의 위치·색·픽셀 오프셋을 설정한다.</summary>
         public void Set(int i, GVec2 p, Color c, GVec2 off = default) { _pts[i] = p; _cols[i] = c; _offs[i] = off; }
+        /// <summary>삼각형 인덱스 하나를 추가한다.</summary>
         public void Tri(int a, int b, int c)
         {
             if (_ni + 3 > _idx.Length) Array.Resize(ref _idx, Math.Max(_idx.Length * 2, _ni + 3));
             _idx[_ni++] = a; _idx[_ni++] = b; _idx[_ni++] = c;
         }
+        /// <summary>start부터 count개 정점의 색을 c로 바꾼다.</summary>
         public void SetColorRange(int start, int count, Color c) { for (int i = 0; i < count; i++) _cols[start + i] = c; }
+        /// <summary>b..b+3 네 정점으로 사각형(삼각형 2개)을 만든다.</summary>
         public void Quad(int b) { Tri(b, b + 1, b + 2); Tri(b, b + 2, b + 3); }
         /// <summary>화면 공간 사각형(즉시 그리기용).</summary>
         public void Rect(GVec2 center, float r, Color c)
@@ -556,6 +678,7 @@ public partial class UvCanvas : Control
             Set(i, a, c, n); Set(i + 1, b, c, n); Set(i + 2, b, c, -n); Set(i + 3, a, c, -n);
             Quad(i);
         }
+        /// <summary>캔버스 아이템에 삼각형 배열로 바로 그린다(호버처럼 매번 바뀌는 소량 그리기용).</summary>
         public void DrawImmediate(Rid item)
         {
             if (_ni == 0) return;
@@ -579,67 +702,98 @@ public partial class UvCanvas : Control
     /// <summary>선분 묶음(선분마다 색).</summary>
     private sealed class LineBatch
     {
+        /// <summary>Pts: 선분 끝점 쌍(2i, 2i+1), _cols: 선분별 색.</summary>
         public GVec2[] Pts = new GVec2[256]; private Color[] _cols = new Color[128];
+        /// <summary>선분 수.</summary>
         public int Count;
+        /// <summary>비운다(배열 유지).</summary>
         public void Clear() => Count = 0;
+        /// <summary>선분 하나를 추가한다(배열이 모자라면 두 배로).</summary>
         public void Add(GVec2 a, GVec2 b, Color c)
         {
             if (Count >= _cols.Length) { Array.Resize(ref _cols, _cols.Length * 2); Array.Resize(ref Pts, _cols.Length * 2); }
             Pts[2 * Count] = a; Pts[2 * Count + 1] = b; _cols[Count++] = c;
         }
+        /// <summary>i번 선분 색.</summary>
         public Color ColorAt(int i) => _cols[i];
+        /// <summary>유효한 끝점 범위(DrawMultilineColors 인자).</summary>
         public ReadOnlySpan<GVec2> Points => new(Pts, 0, Count * 2);
+        /// <summary>유효한 색 범위.</summary>
         public ReadOnlySpan<Color> Colors => new(_cols, 0, Count);
     }
 
     /// <summary>노드 하나의 그리기 캐시: UV 공간 메시(면 틴트/와이어/점) + 굵은 선 목록 + 점 플래그. 문서·선택·표시 옵션이 바뀔 때만 다시 만든다.</summary>
     private sealed class NodeGeom
     {
+        // Topo: 캐시를 만든 위상, Stamp: 만든 시점의 _geomStamp, Scale: 만든 시점의 UI 배율(바뀌면 다시 만든다).
         public UvTopology? Topo; public int Stamp = -1; public float Scale = -1;
+        // 노드별 RenderingServer 메시 RID 3개(면/와이어/점). Free()로 해제한다.
         public readonly Rid FaceMesh = RenderingServer.MeshCreate(), WireMesh = RenderingServer.MeshCreate(), PointMesh = RenderingServer.MeshCreate();
+        // 각 메시의 정점 수(0이면 그리지 않음).
         public int FaceVerts, WireVerts, PointVerts;
+        // 면 f의 틴트 정점 시작 인덱스·개수(면 호버 패치용), FaceBase = 면의 원래 틴트 색.
         public int[] FaceStart = Array.Empty<int>(), FaceCount = Array.Empty<int>();
         public Color[] FaceBase = Array.Empty<Color>();
         // 면 호버: 메시 속성 버퍼에서 그 면 정점의 색 바이트만 바꾼다(전체 재업로드 없이)
+        // Attr: 면 메시 속성 버퍼 사본, AttrStride/ColorOffset/ColorSize: 정점당 바이트 배치, HoverColorBytes: 호버 색 바이트.
         public byte[]? Attr; public int AttrStride, ColorOffset, ColorSize; public byte[]? HoverColorBytes;
+        // 현재 호버 색으로 패치된 면(-1 = 없음).
         public int PatchedFace = -1;
+        // 굵은 선 목록: 텍스처 경계, 선택 엣지(UV 공간 끝점).
         public readonly LineBatch Border = new(), Selected = new();
+        // UV 점별 플래그(PtVisible/PtSelected/PtPinned). 호버 그리기와 피킹에서 쓴다.
         public byte[] PtFlags = Array.Empty<byte>();
+        // 렌더링 서버 메시 해제(노드가 사라지거나 캔버스가 지워질 때).
         public void Free() { RenderingServer.FreeRid(FaceMesh); RenderingServer.FreeRid(WireMesh); RenderingServer.FreeRid(PointMesh); }
     }
 
+    /// <summary>UV 점 플래그 비트: 보임(격리·면 가시성), 선택됨, 핀.</summary>
     private const byte PtVisible = 1, PtSelected = 2, PtPinned = 4;
+    /// <summary>노드 → 그리기 캐시.</summary>
     private readonly Dictionary<NodeId, NodeGeom> _geom = new();
+    /// <summary>이번 프레임에 그릴 캐시 목록(대상 노드 순서).</summary>
     private readonly List<NodeGeom> _geomList = new();
+    /// <summary>이번 프레임의 대상 노드 목록(EnsureGeometry가 채움).</summary>
     private readonly List<SceneNode> _geomTargets = new();
     /// <summary>캐시 무효화 번호: 문서/선택/모드/표시 옵션/Isolate가 바뀌면 증가.</summary>
     private int _geomStamp;
+    /// <summary>그리기 캐시를 무효화하고 다시 그린다. 새 표시 옵션을 추가하면 setter에서 반드시 이것을 불러야 한다.</summary>
     private void MarkGeomDirty() { _geomStamp++; QueueRedraw(); }
 
+    /// <summary>_build: 캐시 메시를 만들 때 쓰는 공용 묶음, _pxPoints: 호버 점 즉시 그리기용 묶음.</summary>
     private readonly TriBatch _build = new(), _pxPoints = new();
+    /// <summary>굵은 선 화면 공간 그리기용 묶음.</summary>
     private readonly LineBatch _pxLines = new();
+    /// <summary>면 하나의 UV 좌표 임시 버퍼(면 꼭짓점 수에 맞춰 늘린다).</summary>
     private NVec2[] _faceUv = new NVec2[16];
+    /// <summary>색: 일반 와이어(밝은 회색), 텍스처 경계(노랑), 핀(진파랑).</summary>
     private static readonly Color EdgeNormalCol = MathConvert.Rgb(0xdddddd), EdgeBorderCol = MathConvert.Rgb(0xffe034), PinCol = MathConvert.Rgb(0x2255ff);
+    /// <summary>색: 선택 면(주황 반투명), 호버 면(흰색 반투명).</summary>
     private static readonly Color FaceSelCol = new(1f, 0.55f, 0f, 0.35f), FaceHoverCol = new(1f, 1f, 1f, 0.18f);
 
+    /// <summary>모든 노드 캐시의 렌더링 서버 메시를 해제하고 비운다.</summary>
     private void FreeGeometry() { foreach (var g in _geom.Values) g.Free(); _geom.Clear(); _geomList.Clear(); }
 
     /// <summary>현재 대상 노드의 캐시를 최신으로 만들고(필요한 것만 다시 빌드) 면 호버 색을 반영한다. 레이어/덧그림 어디서 먼저 불려도 된다.</summary>
     private List<NodeGeom> EnsureGeometry()
     {
+        // 대상 목록을 다시 모으고, 더 이상 대상이 아닌 노드의 캐시는 해제한다.
         var sel = _shell.Document.Selection; float s = CubeApp.Instance.UiScale;
         _geomTargets.Clear(); _geomTargets.AddRange(TargetNodes());
         if (_geom.Count > _geomTargets.Count || _geom.Keys.Any(id => !_geomTargets.Exists(n => n.Id == id)))
             foreach (var id in _geom.Keys.ToList()) if (!_geomTargets.Exists(n => n.Id == id)) { _geom[id].Free(); _geom.Remove(id); }
         _geomList.Clear();
+        // 노드마다: 스탬프·배율·위상이 바뀌었으면 다시 빌드.
         foreach (var node in _geomTargets)
         {
             var topo = Topo(node);
             if (!_geom.TryGetValue(node.Id, out var g)) { g = new NodeGeom(); _geom[node.Id] = g; }
             if (g.Stamp != _geomStamp || g.Scale != s || !ReferenceEquals(g.Topo, topo)) { long t0 = UiPerf.Begin(); BuildGeom(g, node, topo, sel, s); UiPerf.End("uvBuildGeom", t0); }
+            // 면 모드에서 호버 중인 면(선택된 면은 제외)을 찾는다.
             int want = -1;
             if (sel.Mode == SelectMode.Face && _hover is { } hf && hf.Node == node.Id && hf.Component >= 0 && hf.Component < g.FaceStart.Length
                 && g.FaceStart[hf.Component] >= 0 && g.FaceBase[hf.Component] != FaceSelCol) want = hf.Component;
+            // 호버 면이 바뀌었으면 이전 면의 색을 되돌리고 새 면을 호버 색으로 패치한다.
             if (want != g.PatchedFace)
             {
                 if (g.HoverColorBytes != null)
@@ -655,6 +809,10 @@ public partial class UvCanvas : Control
         return _geomList;
     }
 
+    /// <summary>
+    /// 면 f의 틴트 정점들의 색 바이트만 GPU 속성 버퍼에서 바꾼다(hover = 호버 색, false = 원래 캐시 사본의 색으로 복원).
+    /// 메시 전체를 다시 올리지 않으므로 수만 면에서도 호버가 가볍다.
+    /// </summary>
     private static void PatchFaceColor(NodeGeom g, int f, bool hover)
     {
         int start = g.FaceStart[f], n = g.FaceCount[f], stride = g.AttrStride;
@@ -667,15 +825,18 @@ public partial class UvCanvas : Control
     /// <summary>면 틴트/와이어/점 메시와 경계·선택 선 목록을 다시 만든다(예전 요소별 그리기와 같은 색·굵기·조건).</summary>
     private void BuildGeom(NodeGeom g, SceneNode node, UvTopology topo, SelectionState sel, float s)
     {
+        // 캐시 메타데이터 갱신.
         g.Topo = topo; g.Stamp = _geomStamp; g.Scale = s; g.PatchedFace = -1;
         var m = node.Mesh!;
         var selPts = SelectedPoints(node);
+        // Distortion이 켜져 있으면 면별 왜곡 비율(지오메트리 버전으로 캐시)을 쓴다.
         float[]? ratio = null;
         if (_distortion)
         {
             if (!_distortionCache.TryGetValue(node.Id, out var dc) || dc.version != m.GeometryVersion) { dc = (m.GeometryVersion, UvOps.DistortionPerFace(m)); _distortionCache[node.Id] = dc; }
             ratio = dc.ratio;
         }
+        // 현재 모드의 선택 면/엣지 집합(해당 모드가 아니면 null).
         sel.Components.TryGetValue(node.Id, out var comps);
         var selFaces = sel.Mode == SelectMode.Face ? comps?.Faces : null;
         var selEdges = sel.Mode == SelectMode.Edge ? comps?.Edges : null;
@@ -691,6 +852,7 @@ public partial class UvCanvas : Control
         {
             g.FaceStart[f] = -1;
             if (!faces[f].Alive || (iso && !FaceVisible(node.Id, f))) continue;
+            // 면의 UV 다각형을 모은다.
             int n = 0, start = faces[f].HalfEdge, he = start;
             do
             {
@@ -699,10 +861,12 @@ public partial class UvCanvas : Control
             } while (he != start);
             if (n < 3) continue;
             var poly = new ReadOnlySpan<NVec2>(_faceUv, 0, n);
+            // 부호 있는 넓이(신발끈 공식). 양수 = 앞면(CCW), 음수 = UV가 뒤집힌 면.
             float area = 0;
             for (int i = 0; i < n; i++) { var a = poly[i]; var b = poly[(i + 1) % n]; area += a.X * b.Y - b.X * a.Y; }
             area *= 0.5f;
             if (MathF.Abs(area) < 1e-12f) continue;   // 면적 0(퇴화) 면은 그리지 않음
+            // 틴트 색 우선순위: 선택 > 왜곡(빨강 = 줄어듦, 파랑 = 늘어남) > Shaded(앞 파랑/뒤 빨강) > 기본 옅은 파랑.
             Color col;
             if (selFaces != null && selFaces.Contains(f)) col = FaceSelCol;
             else if (ratio != null) { float rr = ratio[f]; col = rr < 1 ? new Color(1f, 0.3f, 0.3f, Math.Clamp((1 - rr) * 1.5f, 0.05f, 0.6f)) : new Color(0.3f, 0.5f, 1f, Math.Clamp((rr - 1) * 1.5f, 0.05f, 0.6f)); }
@@ -712,6 +876,7 @@ public partial class UvCanvas : Control
             int b0 = _build.Begin(n);
             for (int i = 0; i < n; i++) _build.Set(b0 + i, new GVec2(poly[i].X, poly[i].Y), col);
             g.FaceStart[f] = b0; g.FaceCount[f] = n;
+            // 볼록 면은 팬 삼각분할.
             if (n == 3 || IsConvex(poly)) { for (int i = 1; i + 1 < n; i++) _build.Tri(b0, b0 + i, b0 + i + 1); continue; }
             // 오목 면: 큰 배율로 키워 삼각분할(작은 UV 값에서 엔진 epsilon에 걸리지 않게)
             var tmp = new GVec2[n];
@@ -739,6 +904,7 @@ public partial class UvCanvas : Control
         // 엣지: 일반 와이어(메시) / 텍스처 경계·선택(굵은 선 목록, 선택이 경계보다 위). 양쪽 하프에지의 UV가 같으면(이음매 없음) 한 번만.
         _build.Clear(); g.Border.Clear(); g.Selected.Clear();
         float wire = 1f * s;
+        // 엣지마다 양쪽 하프에지 방향의 UV 선분을 분류한다: 선택 → 선택 목록, 심/경계 → 경계 목록, 나머지 → 와이어 메시.
         for (int e = 0; e < edges.Length; e++)
         {
             ref readonly var ed = ref edges[e];
@@ -786,6 +952,10 @@ public partial class UvCanvas : Control
     }
 
     /// <summary>면 메시의 속성 버퍼(색)를 복사해 두고 마지막 표본 정점에서 호버 색 바이트를 얻는다. 형식을 알 수 없으면 패치를 끈다.</summary>
+    /// <remarks>
+    /// 원리: BuildGeom이 면 정점 뒤에 호버 색 표본 정점을 하나 붙여 올리므로, 엔진이 실제로 저장한 바이트 형식(압축 여부 포함)의 호버 색을 그대로 얻을 수 있다.
+    /// 색 크기는 다음 속성(TexUV) 오프셋까지의 거리로 추정한다. 검증에 실패하면 Attr/HoverColorBytes를 null로 두어 다시 빌드 방식으로 돌아간다.
+    /// </remarks>
     private static void CaptureFaceAttributes(NodeGeom g, int faceVerts)
     {
         g.Attr = null; g.HoverColorBytes = null;
@@ -824,8 +994,13 @@ public partial class UvCanvas : Control
         return true;
     }
 
+    /// <summary>조작기 색: X(빨강), Y(초록), 중앙/링(하늘색), 활성(노랑 — 호버 또는 드래그 중인 부분).</summary>
     private static readonly Color AxisX = MathConvert.Rgb(0xff2a2a), AxisY = MathConvert.Rgb(0x5aff2a), AxisC = MathConvert.Rgb(0x6ad0ff), Active = MathConvert.Rgb(0xffff00);
 
+    /// <summary>
+    /// 2D 조작기를 선택 중심(피벗)에 그린다. 회전 툴 = 원 링, 이동 = X/Y 화살표, 스케일 = X/Y 끝 상자, 공통 중앙 사각형.
+    /// 드래그 중에는 피벗을 다시 계산하지 않는다(움직이는 점의 평균을 따라가지 않도록 시작 위치 고정).
+    /// </summary>
     private void DrawGizmo(float s)
     {
         if (!GizmoActive) { _hasPivot = false; return; }
@@ -834,6 +1009,7 @@ public partial class UvCanvas : Control
         var c = UvToPx(_pivotUv);
         float len = GizmoLen;
         string tool = _shell.Tools.Current!.Id;
+        // 호버/드래그 중인 부분은 활성 색으로.
         Color Col(Part p, Color normal) => (_dragging ? _dragPart : _hoverPart) == p ? Active : normal;
         if (tool == "rotate") { DrawArc(c, len, 0, Mathf.Tau, 64, Col(Part.Ring, AxisC), 2 * s, true); DrawCircle(c, 3 * s, Col(Part.Ring, AxisC)); return; }
         var ex = c + new GVec2(len, 0); var ey = c - new GVec2(0, len);
@@ -854,6 +1030,9 @@ public partial class UvCanvas : Control
         DrawRect(new Rect2(c - new GVec2(cs, cs), new GVec2(2 * cs, 2 * cs)), Col(Part.Center, AxisC));
     }
 
+    /// <summary>
+    /// 화면 px 위치가 조작기의 어느 부분에 닿는지. 회전 = 링 반지름 ±8px, 그 외 = 중앙 9px 원 → X축 선분 → Y축 선분 순(거리 8px 이내).
+    /// </summary>
     private Part HitGizmo(GVec2 px)
     {
         if (!GizmoActive || !_hasPivot) return Part.None;
@@ -868,6 +1047,7 @@ public partial class UvCanvas : Control
         return Part.None;
     }
 
+    /// <summary>대상 노드 중 처음으로 매핑 텍스처(머티리얼 컬러 텍스처)를 가진 뷰포트 MeshView의 텍스처.</summary>
     private Texture2D? MappedTexture()
     {
         foreach (var node in TargetNodes()) { var mv = _shell.Viewport.Scene.GetMeshView(node.Id); if (mv?.MappedTexture != null) return mv.MappedTexture; }
@@ -881,6 +1061,7 @@ public partial class UvCanvas : Control
     private static bool RectIntersectsSegment(Rect2 r, GVec2 a, GVec2 b)
     {
         if (r.HasPoint(a) || r.HasPoint(b)) return true;
+        // 매개변수 t ∈ [0, 1]을 사각형 네 변의 반평면으로 잘라 남는 구간이 있으면 교차.
         var d = b - a; float t0 = 0, t1 = 1;
         bool Clip(float p, float q, ref float lo, ref float hi)
         {
@@ -894,6 +1075,7 @@ public partial class UvCanvas : Control
             && Clip(-d.Y, a.Y - r.Position.Y, ref t0, ref t1) && Clip(d.Y, r.End.Y - a.Y, ref t0, ref t1);
     }
 
+    /// <summary>두 점으로 정규화된(최소/최대) 사각형을 만든다(마키용).</summary>
     private static Rect2 RectFrom(GVec2 a, GVec2 b)
     {
         var min = new GVec2(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y));
@@ -903,10 +1085,19 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 입력
 
+    /// <summary>브러시 반지름(px, 배율 적용). 셸의 Brush Options 값.</summary>
     private float BrushRadius => _shell.BrushOptions.Float("radius") * CubeApp.Instance.UiScale;
+    /// <summary>브러시 세기(Brush Options).</summary>
     private float BrushStrength => _shell.BrushOptions.Float("strength");
+    /// <summary>현재 툴이 원형 브러시 계열인지(Grab/Smooth/Pinch/Smear/PinBrush).</summary>
     private bool IsBrushTool => _tool is UvCanvasTool.Grab or UvCanvasTool.Smooth or UvCanvasTool.Pinch or UvCanvasTool.Smear or UvCanvasTool.PinBrush;
 
+    /// <summary>
+    /// 캔버스 입력 처리(우선순위 순):
+    /// 버튼 — 파이 메뉴 → Ctrl+휠 브러시 반지름 → 휠 줌 → Alt+버튼 내비게이션 시작/끝 → LMB(툴 누름 / 조작기 핸들 / 선택 클릭 시작, 뗌 = 진행 중 작업 종료·클릭/마키 선택 확정).
+    /// 이동 — 파이 포인터 → 내비게이션(MMB 팬, RMB 줌) → 브러시 커서 → Cut/Sew 칠하기 → 브러시 → 변형 드래그 → 마키(4px 이상 끌면 시작) → 호버.
+    /// 키 — F 선택 프레임, A 전체 프레임, Esc 변형 취소 / 툴 해제. 그 밖의 키는 _UnhandledKeyInput이 셸 단축키로 넘긴다.
+    /// </summary>
     public override void _GuiInput(InputEvent e)
     {
         float s = CubeApp.Instance.UiScale;
@@ -915,15 +1106,18 @@ public partial class UvCanvas : Control
             case InputEventMouseButton mb:
                 if (mb.Pressed) GrabFocus();
                 if (HandlePie(mb)) { AcceptEvent(); return; }
+                // Ctrl+휠: 브러시 반지름 ×1.15 / ÷1.15 (5~500).
                 if (mb.Pressed && mb.CtrlPressed && IsBrushTool && mb.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
                 {
                     var o = _shell.BrushOptions; o.Set("radius", Math.Clamp(o.Float("radius") * (mb.ButtonIndex == MouseButton.WheelUp ? 1.15f : 1 / 1.15f), 5f, 500f)); QueueRedraw(); AcceptEvent(); return;
                 }
                 if (mb.Pressed && mb.ButtonIndex == MouseButton.WheelUp) { ZoomAt(mb.Position, 1.1f); AcceptEvent(); return; }
                 if (mb.Pressed && mb.ButtonIndex == MouseButton.WheelDown) { ZoomAt(mb.Position, 1 / 1.1f); AcceptEvent(); return; }
+                // Alt+버튼 = 내비게이션(MMB 팬, RMB 줌). 누른 버튼을 기억해 같은 버튼을 뗄 때 끝낸다.
                 if (mb.Pressed && mb.AltPressed && mb.ButtonIndex is MouseButton.Middle or MouseButton.Right or MouseButton.Left && _navButton == MouseButton.None)
                 { _navButton = mb.ButtonIndex; _last = mb.Position; AcceptEvent(); return; }
                 if (!mb.Pressed && mb.ButtonIndex == _navButton) { _navButton = MouseButton.None; AcceptEvent(); return; }
+                // LMB 누름: 캔버스 툴 → 조작기 핸들 → 일반 선택 클릭 순으로 시도.
                 if (mb.ButtonIndex == MouseButton.Left)
                 {
                     if (mb.Pressed)
@@ -934,6 +1128,7 @@ public partial class UvCanvas : Control
                         _pressed = true; _marquee = false; _pressPos = mb.Position; _modifier = ModifierOf(mb);
                         AcceptEvent(); return;
                     }
+                    // LMB 뗌: 진행 중인 작업(칠하기/브러시/변형/선택) 중 하나를 마무리한다.
                     if (_cutSewPainting) { _cutSewPainting = false; AcceptEvent(); return; }
                     if (_brushing) { EndBrush(); AcceptEvent(); return; }
                     if (_dragging) { EndTransform(commit: true); AcceptEvent(); return; }
@@ -950,6 +1145,7 @@ public partial class UvCanvas : Control
                 if (_pie.IsOpen) { _pie.UpdatePointer(mm.Position); AcceptEvent(); return; }
                 if (_navButton != MouseButton.None)
                 {
+                    // 팬은 이동량만큼 원점 이동, 줌은 누른 위치를 중심으로 (dx − dy)에 지수 비례.
                     var d = mm.Position - _last; _last = mm.Position;
                     if (_navButton == MouseButton.Middle) _origin += d;
                     else if (_navButton == MouseButton.Right) ZoomAt(_pressPos == GVec2.Zero ? Size / 2 : _pressPos, MathF.Exp((d.X - d.Y) * 0.004f));
@@ -976,12 +1172,14 @@ public partial class UvCanvas : Control
         }
     }
 
+    /// <summary>해제 직전(Predelete)에는 이벤트 구독과 렌더링 서버 메시를 정리하고, 마우스가 나가면 호버·브러시 커서를 지운다.</summary>
     public override void _Notification(int what)
     {
         if (what == (int)NotificationPredelete) { Unsubscribe(); FreeGeometry(); return; }
         if (what == NotificationMouseExit) { if (_hover != null || _hoverPart != Part.None || _brushPos != null) { _hover = null; _hoverPart = Part.None; _brushPos = null; QueueOverlayRedraw(); } }
     }
 
+    /// <summary>호버 갱신: 조작기 핸들이 우선이고, 아니면 피킹 결과를 호버로. 바뀌었을 때만 덧그림을 다시 그린다.</summary>
     private void UpdateHover(GVec2 px)
     {
         var part = HitGizmo(px);
@@ -989,6 +1187,10 @@ public partial class UvCanvas : Control
         if (part != _hoverPart || !Nullable.Equals(hit, _hover)) { _hoverPart = part; _hover = hit; QueueOverlayRedraw(); }
     }
 
+    /// <summary>
+    /// 캔버스가 처리하지 않은 키를 셸 단축키 라우터로 넘긴다(임베디드/플로팅 상태에서 루트 _Input을 받지 못하는 경우 대비).
+    /// 처리되었으면 이 뷰포트에서도 처리됨으로 표시한다.
+    /// </summary>
     public override void _UnhandledKeyInput(InputEvent e)
     {
         if (e is not InputEventKey) return;
@@ -1001,6 +1203,7 @@ public partial class UvCanvas : Control
     {
         if (mb.ButtonIndex == MouseButton.Right)
         {
+            // RMB 누름: 열린 sticky 서브 파이는 닫고, Alt(줌)·드래그 중이면 열지 않는다. Ctrl = 선택 파이, Shift = 편집 파이, 기본 = 모드 파이.
             if (mb.Pressed)
             {
                 if (_pie.IsOpen && _pie.Sticky) { _pie.Close(); QueueRedraw(); return true; }
@@ -1009,6 +1212,7 @@ public partial class UvCanvas : Control
                 _pie.Open(items, mb.Position);
                 return _pie.IsOpen;
             }
+            // RMB 뗌: sticky가 아니면 고른 항목 실행.
             if (_pie.IsOpen)
             {
                 if (_pie.Sticky) return true;
@@ -1017,10 +1221,14 @@ public partial class UvCanvas : Control
             }
             return false;
         }
+        // sticky 서브 파이는 LMB 클릭으로 고른다.
         if (_pie.IsOpen && _pie.Sticky && mb.ButtonIndex == MouseButton.Left && mb.Pressed) { ExecutePie(_pie.Release()); return true; }
         return _pie.IsOpen;
     }
 
+    /// <summary>
+    /// 고른 파이 항목 실행: 비활성/없음이면 무시, 서브 파이 생성기가 있으면 그 자리에 sticky 서브 파이를 열고, 아니면 직접 실행(Run) 또는 액션 호출.
+    /// </summary>
     private void ExecutePie(PieItem? chosen)
     {
         if (chosen == null || !chosen.Enabled) { QueueRedraw(); return; }
@@ -1029,6 +1237,7 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>커서 아래 UV가 제자리에 있도록 줌(20~20000 px/단위)을 바꾸고 원점을 보정한다.</summary>
     private void ZoomAt(GVec2 px, float factor)
     {
         var uv = PxToUv(px);
@@ -1037,6 +1246,7 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>마우스 수식어 → 선택 수식어(Maya 규칙: Ctrl+Shift 추가, Ctrl 제거, Shift 토글, 없음 교체).</summary>
     private static SelectModifier ModifierOf(InputEventWithModifiers e)
         => e.CtrlPressed && e.ShiftPressed ? SelectModifier.Add : e.CtrlPressed ? SelectModifier.Remove : e.ShiftPressed ? SelectModifier.Toggle : SelectModifier.Replace;
 
@@ -1044,6 +1254,7 @@ public partial class UvCanvas : Control
 
     // 피킹 도우미는 모두 관리 코드(엔진 Geometry2D 호출·면마다 배열 할당은 마우스 이동마다 수만 번 불려 느렸다)
 
+    /// <summary>점 p와 선분 ab 사이 최단 거리(px).</summary>
     private static float SegDist(GVec2 p, GVec2 a, GVec2 b)
     {
         var ab = b - a; float l2 = ab.LengthSquared();
@@ -1067,6 +1278,10 @@ public partial class UvCanvas : Control
         return inside;
     }
 
+    /// <param name="topo">대상 UV 위상.</param>
+    /// <param name="px">커서 위치(px).</param>
+    /// <param name="maxPx">허용 거리(px).</param>
+    /// <param name="best">지금까지의 최단 거리(여러 노드에 걸쳐 갱신된다).</param>
     /// <summary>best보다 가깝고 maxPx 이내인 가장 가까운 UV 점(없으면 -1). UV 공간 상자 검사로 먼 점은 바로 건너뛴다.</summary>
     private int NearestPoint(UvTopology topo, GVec2 px, float maxPx, ref float best)
     {
@@ -1085,6 +1300,7 @@ public partial class UvCanvas : Control
     /// <summary>best보다 가깝고 maxPx 이내인 가장 가까운 엣지와 그 하프에지(없으면 -1, -1).</summary>
     private (int edge, int he) NearestEdge(PolyMesh m, GVec2 px, float maxPx, ref float best)
     {
+        // 엣지의 두 하프에지 방향 UV 선분을 각각 검사한다(심이면 두 선분이 다른 위치).
         var uv = PxToUv(px); float r = maxPx / _zoom; int hitE = -1, hitH = -1;
         var hes = CollectionsMarshal.AsSpan(m.Hes); var edges = CollectionsMarshal.AsSpan(m.Edges);
         for (int e = 0; e < edges.Length; e++)
@@ -1114,6 +1330,7 @@ public partial class UvCanvas : Control
         return -1;
     }
 
+    /// <summary>면의 UV 중심(꼭짓점 평균)을 px로(마키 면 선택 판정용).</summary>
     private GVec2 FaceCenterPx(PolyMesh m, int f)
     {
         var c = NVec2.Zero; int n = 0;
@@ -1122,6 +1339,9 @@ public partial class UvCanvas : Control
         return UvToPx(c / n);
     }
 
+    /// <summary>
+    /// Island 모드 피킹: 점(8px) → 엣지(6px, 그 하프에지의 UV 점) → 면 내부(첫 하프에지의 UV 점) 순으로 섬을 대표할 UV 점을 고른다.
+    /// </summary>
     private SelItem? PickIsland(GVec2 px, SceneNode node, ref float best)
     {
         float s = CubeApp.Instance.UiScale;
@@ -1147,6 +1367,7 @@ public partial class UvCanvas : Control
         return hit;
     }
 
+    /// <summary>커서 아래 엣지(모드 무관, 6px). Cut/Sew 툴용.</summary>
     private (SceneNode node, int edge)? PickEdgeAny(GVec2 px)
     {
         float s = CubeApp.Instance.UiScale; float best = 6 * s; (SceneNode, int)? hit = null;
@@ -1158,6 +1379,10 @@ public partial class UvCanvas : Control
         return hit;
     }
 
+    /// <summary>
+    /// 현재 모드에 맞는 피킹: UV = 가장 가까운 점, Island = 섬 대표 점, Edge = 가장 가까운 엣지, Face/Object = 커서 아래 면(Object면 Component -1).
+    /// 여러 노드에 걸쳐 가장 가까운 것을 고른다(best 공유).
+    /// </summary>
     private SelItem? Pick(GVec2 px)
     {
         var sel = _shell.Document.Selection;
@@ -1184,6 +1409,7 @@ public partial class UvCanvas : Control
         return hit;
     }
 
+    /// <summary>Island 모드면 항목을 그 UV 섬의 모든 점으로 펼치고, 아니면 그대로 돌려준다.</summary>
     private IEnumerable<SelItem> ExpandIsland(SelItem item)
     {
         if (!IslandMode) { yield return item; yield break; }
@@ -1193,17 +1419,25 @@ public partial class UvCanvas : Control
         foreach (int p in topo.PointsInShell(shell)) yield return new SelItem(item.Node, p);
     }
 
+    /// <summary>
+    /// 클릭 선택: 피킹 결과(UV 모드면 섬 펼치기)를 수식어와 함께 셸의 선택 기록 경로로 적용한다(Undo 가능).
+    /// </summary>
     private void ClickSelect(GVec2 px)
     {
         var sel = _shell.Document.Selection;
         var hit = Pick(px);
         var items = hit != null ? (sel.Mode == SelectMode.Uv ? ExpandIsland(hit.Value).ToArray() : new[] { hit.Value }) : Array.Empty<SelItem>();
+        // 빈 곳 클릭은 교체 모드일 때만 선택 해제로 기록한다. 오브젝트 모드에서는 빈 곳 클릭을 무시한다.
         if (items.Length == 0 && _modifier != SelectModifier.Replace) return;
         if (sel.Mode == SelectMode.Object && items.Length == 0) return;
         var mod = _modifier;
         _shell.RecordSelection(ss => ss.Apply(items, mod));
     }
 
+    /// <summary>
+    /// 마키 선택 확정. 모드별 포함 규칙: UV = 사각형 안의 점(Island면 점·면 중심·사각형과 교차하는 면 테두리로 섬 전체),
+    /// Edge = 어느 한 끝점이 안에 있는 엣지(양쪽 하프에지 UV 기준), Face = 면 UV 중심이 안에 있는 면. 오브젝트 모드는 무시.
+    /// </summary>
     private void FinishMarquee(GVec2 px)
     {
         var sel = _shell.Document.Selection;
@@ -1219,6 +1453,7 @@ public partial class UvCanvas : Control
                         var shells = new HashSet<int>();
                         for (int i = 0; i < topo.Points.Count; i++)
                             if (r.HasPoint(UvToPx(topo.Points[i].Uv))) { if (IslandMode) shells.Add(topo.Points[i].Shell); else items.Add(new SelItem(node.Id, i)); }
+                        // Island: 면 중심이 안에 있거나 면 테두리가 사각형과 교차하면 그 면의 섬도 포함한다(점이 하나도 안에 없는 큰 섬 대응).
                         if (IslandMode)
                             for (int f = 0; f < m.FaceCount; f++)
                             {
@@ -1260,6 +1495,10 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 변형 (조작기 드래그)
 
+    /// <summary>
+    /// 조작기 핸들 드래그 시작: 셸의 현재 툴이 Move/Rotate/Scale일 때만, 선택 UV 점을 캡처하고 드래그 상태로 들어간다.
+    /// </summary>
+    /// <returns>시작했으면 true(캡처할 점이 없으면 false).</returns>
     private bool TryBeginTransform(GVec2 px, Part part)
     {
         var tool = _shell.Tools.Current?.Id ?? "select";
@@ -1270,6 +1509,9 @@ public partial class UvCanvas : Control
     }
 
     /// <summary>현재 선택(또는 지정 점)을 변형 대상으로 캡처한다.</summary>
+    /// <param name="name">Undo 항목 이름.</param>
+    /// <param name="pointsOf">노드 → 움직일 UV 점 집합(null이면 현재 선택). 핀 점은 Tweak 툴이 아니면 제외한다.</param>
+    /// <returns>캡처한 점이 하나라도 있으면 true.</returns>
     private bool CaptureSelectionForTransform(string name, Func<SceneNode, HashSet<int>>? pointsOf)
     {
         _xform.Clear();
@@ -1283,6 +1525,7 @@ public partial class UvCanvas : Control
             if (ids.Length == 0) continue;
             var init = ids.Select(i => topo.Points[i].Uv).ToArray();
             count += ids.Length;
+            // 노드마다 UvEditCommand를 만들어 시작 상태를 캡처해 둔다(놓을 때 Commit).
             var cmd = new UvEditCommand(name, node.Id);
             cmd.Capture(_shell.Document);
             _xform.Add((node.Id, topo, ids, init, cmd));
@@ -1290,6 +1533,7 @@ public partial class UvCanvas : Control
         return count > 0;
     }
 
+    /// <summary>Pixel Snap이 켜져 있으면 이동량을 텍스처 1픽셀(1/해상도 UV) 단위로 반올림한다.</summary>
     private NVec2 SnapDelta(NVec2 delta)
     {
         if (!_pixelSnap) return delta;
@@ -1297,6 +1541,11 @@ public partial class UvCanvas : Control
         return new NVec2(MathF.Round(delta.X / px) * px, MathF.Round(delta.Y / px) * px);
     }
 
+    /// <summary>
+    /// 변형 드래그 갱신: 누른 위치부터의 마우스 이동으로 변환 행렬을 만들어 모든 대상 점의 "시작 UV"에 적용한다.
+    /// 이동(move/tweak/shell) = px/줌 이동(축 핸들이면 한 축만, X 홀드 = 1/8 그리드 스냅, Pixel Snap),
+    /// 회전 = 피벗 중심 각도 차(J 홀드 = 회전 스냅 각), 스케일 = 축 핸들 길이 비율 또는 중앙(dx − dy) 균등(J 홀드 = 스케일 스냅).
+    /// </summary>
     private void UpdateTransform(GVec2 px)
     {
         var d = px - _pressPos;
@@ -1308,6 +1557,7 @@ public partial class UvCanvas : Control
             case "tweak":
             case "shell":
                 {
+                    // 화면 Y는 아래가 +이므로 V는 부호를 뒤집는다.
                     var delta = new NVec2(d.X / _zoom, -d.Y / _zoom);
                     if (_dragPart == Part.X) delta.Y = 0; else if (_dragPart == Part.Y) delta.X = 0;
                     if (_shell.Viewport.IsGridSnapHeld) { float g = 1f / 8f; delta = new NVec2(MathF.Round(delta.X / g) * g, MathF.Round(delta.Y / g) * g); }
@@ -1316,6 +1566,7 @@ public partial class UvCanvas : Control
             case "rotate":
                 {
                     float a0 = MathF.Atan2(_pressPos.Y - c.Y, _pressPos.X - c.X), a1 = MathF.Atan2(px.Y - c.Y, px.X - c.X);
+                    // 화면 각도와 UV 각도는 Y 뒤집기 때문에 부호가 반대.
                     float angle = -(a1 - a0);
                     if (_shell.Viewport.IsSnapHeld) { float step = MathF.Max(CubeApp.Instance.Settings.RotateSnapDegrees, 0.1f) * MathF.PI / 180f; angle = MathF.Round(angle / step) * step; }
                     xf = Matrix3x2.CreateRotation(angle, _pivotUv); break;
@@ -1330,6 +1581,7 @@ public partial class UvCanvas : Control
                     xf = Matrix3x2.CreateScale(fx, fy, _pivotUv); break;
                 }
         }
+        // 시작 UV × 변환을 각 점에 쓰고 메시 속성 변경을 통지한다(Undo 기록은 놓을 때).
         foreach (var (id, topo, ids, init, _) in _xform)
         {
             var mesh = _shell.Document.Get(id).Mesh!;
@@ -1339,6 +1591,9 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>
+    /// 변형 드래그 끝. commit이면 노드별 명령을 Commit해 바뀐 것만 한 Undo 그룹으로 넣고, 취소면 모든 점을 시작 UV로 되돌린다.
+    /// </summary>
     private void EndTransform(bool commit)
     {
         _dragging = false; _dragPart = Part.None;
@@ -1357,6 +1612,11 @@ public partial class UvCanvas : Control
 
     // ---------------------------------------------------------------- 툴(Tweak / 브러시 / Cut-Sew / Move Shell)
 
+    /// <summary>
+    /// 캔버스 툴의 LMB 누름 처리. Tweak = 커서 아래 점(선택에 속하면 선택 전체) 드래그 시작, Move Shell = 커서 아래 점/면의 셸 드래그 시작,
+    /// Cut/Sew = 칠하기 시작(Ctrl = 꿰매기), 브러시 = 대상 노드의 모든(핀 제외; PinBrush는 전부) 점을 캡처하고 첫 스탬프 적용.
+    /// </summary>
+    /// <returns>툴이 누름을 처리했으면 true(아니면 일반 선택으로 넘어간다).</returns>
     private bool BeginToolPress(InputEventMouseButton mb)
     {
         var px = mb.Position;
@@ -1405,8 +1665,10 @@ public partial class UvCanvas : Control
         }
     }
 
+    /// <summary>PinBrush에서 Ctrl로 시작했으면 핀 해제 모드.</summary>
     private bool _brushUnpin;
 
+    /// <summary>커서 아래 면의 첫 하프에지 UV 점(점을 직접 집지 못했을 때 Move Shell 대상 찾기).</summary>
     private (SceneNode node, int point)? PickFacePoint(GVec2 px)
     {
         var uv = PxToUv(px);
@@ -1419,6 +1681,11 @@ public partial class UvCanvas : Control
         return null;
     }
 
+    /// <summary>
+    /// 브러시 스탬프 적용: 반지름 안의 점에 smoothstep 감쇠 가중치 w를 주어 툴별로 움직인다.
+    /// Grab = 직전 위치부터의 이동량 × w, Smear = 이동량 × w × 세기, Pinch = 브러시 중심 쪽으로 당김, Smooth = 이웃(셸 안 엣지로 이어진) UV 점 평균 쪽으로,
+    /// PinBrush = 핀 설정/해제(코너 PinUv와 위상 캐시 둘 다).
+    /// </summary>
     private void ApplyBrush(GVec2 px)
     {
         float r = BrushRadius; float strength = BrushStrength;
@@ -1434,6 +1701,7 @@ public partial class UvCanvas : Control
                 var uv = topo.Points[i].Uv;
                 float d = UvToPx(uv).DistanceTo(px);
                 if (d > r) continue;
+                // smoothstep(1 − d/r): 가장자리에서 부드럽게 0.
                 float w = 1f - d / r; w = w * w * (3 - 2 * w);
                 switch (_tool)
                 {
@@ -1463,6 +1731,9 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>
+    /// 브러시 스트로크 끝: 노드별 명령을 Commit해 바뀐 것만 한 Undo 그룹으로 넣고, 핀 등이 바뀌었을 수 있으므로 위상 캐시를 버린다.
+    /// </summary>
     private void EndBrush()
     {
         _brushing = false; _dragging = false;
@@ -1474,6 +1745,10 @@ public partial class UvCanvas : Control
         QueueRedraw();
     }
 
+    /// <summary>
+    /// Cut/Sew 칠하기: 커서 아래 엣지를 한 스트로크에 한 번만, 경계가 아니고 아직 원하는 상태가 아닐 때(자르기 = 심 아님, 꿰매기 = 심) 처리한다.
+    /// 엣지마다 Undo 가능한 <see cref="UvEditCommand"/>를 넣고 그 노드의 위상 캐시를 버린다.
+    /// </summary>
     private void CutSewAt(GVec2 px)
     {
         var hit = PickEdgeAny(px); if (hit == null) return;
@@ -1492,6 +1767,7 @@ public partial class UvCanvas : Control
     /// <summary>현재 캔버스 영역을 PNG로 저장한다(UV Snapshot).</summary>
     public Error SaveSnapshot(string path)
     {
+        // 화면 전체 이미지를 읽어 캔버스의 전역 사각형 부분만 잘라 저장한다(오버레이·조작기 포함 화면 그대로).
         var img = GetViewport().GetTexture().GetImage();
         var rect = GetGlobalRect();
         var region = img.GetRegion(new Rect2I((int)rect.Position.X, (int)rect.Position.Y, (int)rect.Size.X, (int)rect.Size.Y));

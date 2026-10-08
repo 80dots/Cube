@@ -19,43 +19,71 @@ namespace Cube.App.UI;
 /// 원래 옵션 필드를 그대로 두고 아래에 드래그 값 필드를 더한다. 옵션을 바꾸면 후속 단계와 기능을 되돌린 뒤 기능을 새 옵션으로 다시 실행하고,
 /// 후속 단계를 새 선택(예: 새 캡 면)에 같은 값으로 다시 적용한다. 드래그 값을 바꾸면 그 단계부터 다시 적용한다.
 /// </summary>
+/// <remarks>
+/// 감지 경로는 두 가지다. ⓐ 액션 실행: ActionRegistry.Invoking에서 실행 직전의 마지막 명령을 기억하고 Invoked에서 새 명령이 생겼는지 비교.
+/// ⓑ 툴 드래그 등 액션 밖에서 들어온 명령: UndoStack.Changed. 어떤 경로든 <see cref="ShowFor"/>가 명령 종류를 판별해 필드를 만든다.
+/// 팝업이 값을 다시 적용하는 동안(<c>_busy</c>)에는 스스로 넣은 명령 때문에 감지 로직이 다시 돌지 않게 막는다.
+/// 위치는 매 프레임 활성 뷰포트 좌하단(8px 여백)에 맞춘다.
+/// </remarks>
 public partial class ActionPopup : PanelContainer
 {
+    /// <summary>액션 레지스트리·문서·옵션 조회에 쓰는 셸.</summary>
     private Shell _shell = null!;
+    /// <summary>제목 버튼(누르면 필드 영역을 접고 펼침).</summary>
     private Button _header = null!;
+    /// <summary>2열(라벨 / 값 컨트롤) 필드 그리드.</summary>
     private GridContainer _grid = null!;
+    /// <summary>하단 보조 설명(후속 단계 목록, "No adjustable parameters" 등).</summary>
     private Label _note = null!;
+    /// <summary>사용자가 팝업을 접었는지(다음 표시에도 유지).</summary>
     private bool _collapsed;
+    /// <summary>제목(작업 이름).</summary>
     private string _title = "";
 
+    /// <summary>팝업이 다루는 마지막 작업의 종류(클래스 설명의 ①~④와 대응, None = 이름만 표시).</summary>
     private enum Kind { None, Option, Extrude, History, Transform }
+    /// <summary>현재 표시 중인 작업 종류.</summary>
     private Kind _kind;
     private ICommand? _command;          // 팝업이 가리키는 마지막 명령(Undo 대상)
     private string? _optionId;           // ① 옵션 키(Options(id))
     private string? _applyId;            // ① 다시 실행할 액션
     private List<(NodeId node, int[] faces)> _extrude = new(); // ② 면 Extrude 결과(캡 면)
+    /// <summary>② 현재 두께 값(0 = 두께 명령 없음).</summary>
     private float _thickness;
     private List<(NodeId node, int index)> _historyEntries = new(); // ③
+    /// <summary>③ 편집 중인 파라미터 사본(첫 이력 항목에서 복제, 바꾼 값을 같은 이름의 파라미터로 모든 대상 항목에 적용).</summary>
     private HistoryParams? _historyParams;
     private TransformNodesCommand? _transform; // ④
+    /// <summary>④ 표시·편집 중인 첫 노드 기준 이동(델타), 회전(° 델타), 스케일(비율).</summary>
     private NVec3 _tMove, _tRotate, _tScale = NVec3.One;
 
     /// <summary>① 기능 뒤에 이어진 조작기 드래그(후속 단계).</summary>
     private sealed class FollowUp
     {
+        /// <summary>단계 이름(명령 이름, 예: "Move", "Extrude Thickness").</summary>
         public string Name = "";
+        /// <summary>드래그 값 파라미터(사본, 팝업에서 편집).</summary>
         public HistoryParams Params = new();
         public bool Thickness;                                   // Extrude Thickness(면별 법선 오프셋)
+        /// <summary>다시 적용할 대상: 노드와 변형 연산(Op; Thickness 단계는 null).</summary>
         public readonly List<(NodeId node, ComponentTransformOp? op)> Targets = new();
         public ICommand? Command;                                // 이 단계가 넣은 명령(Undo 대상)
     }
+    /// <summary>현재 ① 기능에 붙은 후속 단계들(실행 순서).</summary>
     private readonly List<FollowUp> _follow = new();
 
     private bool _busy;                  // 팝업이 스스로 명령을 넣는 중
+    /// <summary>Invoking에서 기록한 (실행 중인 액션 ID, 실행 직전 마지막 명령). Invoked에서 소비한다.</summary>
     private (string id, ICommand? last)? _invoking;
+    /// <summary>노드별 구성 이력 항목 수 스냅샷. 다음 명령 뒤 늘어난 항목이 "새 이력 항목"이다.</summary>
     private readonly Dictionary<NodeId, int> _historyCounts = new();
+    /// <summary>다시 만들기 예약 여부(Rebuild가 지운다).</summary>
     private bool _rebuildQueued;
 
+    /// <summary>
+    /// 패널 UI(반투명 어두운 배경, 제목 버튼, 필드 그리드, 설명)를 만들고 액션 실행·Undo 변경 이벤트를 구독한다.
+    /// 처음에는 숨김 상태이며 다른 오버레이 위에 그리도록 ZIndex를 올린다.
+    /// </summary>
     public void Setup(Shell shell)
     {
         _shell = shell;
@@ -84,6 +112,7 @@ public partial class ActionPopup : PanelContainer
         SnapshotHistoryCounts();
     }
 
+    /// <summary>보이는 동안 크기를 최소 크기에 맞추고 활성 뷰포트 좌하단에 붙인다.</summary>
     public override void _Process(double delta)
     {
         if (!Visible) return;
@@ -97,6 +126,10 @@ public partial class ActionPopup : PanelContainer
 
     // ---------------------------------------------------------------- 컨텍스트 감지
 
+    /// <summary>
+    /// 액션 실행 직후. Undo/Redo면 숨기고, 액션이 새 명령을 만들지 않았으면(모드 전환 등) 이력 스냅샷만 갱신,
+    /// 새 명령이 있으면 그 액션 ID와 함께 <see cref="ShowFor"/>(옵션 액션 판별에 ID가 필요).
+    /// </summary>
     private void OnInvoked(string id)
     {
         var inv = _invoking; _invoking = null;
@@ -107,6 +140,10 @@ public partial class ActionPopup : PanelContainer
         ShowFor(last, id);
     }
 
+    /// <summary>
+    /// Undo 스택 변경(액션 밖의 툴 드래그 등). 액션 실행 중이면 Invoked가 처리하므로 무시.
+    /// 선택 명령이거나 Redo 가능 상태(=Undo가 일어남)면 숨긴다. ① 표시 중 조작기 드래그가 들어오면 후속 단계로 붙이고, 아니면 새 명령으로 표시.
+    /// </summary>
     private void OnUndoChanged()
     {
         if (_busy || _invoking != null) return;
@@ -118,12 +155,14 @@ public partial class ActionPopup : PanelContainer
         ShowFor(last, null);
     }
 
+    /// <summary>모든 메시 노드의 현재 구성 이력 항목 수를 기록한다(다음 비교의 기준점).</summary>
     private void SnapshotHistoryCounts()
     {
         _historyCounts.Clear();
         foreach (var n in _shell.Document.Nodes.Values) if (n.MeshShape is { } ms) _historyCounts[n.Id] = ms.History.Count;
     }
 
+    /// <summary>스냅샷 이후 새로 생긴 이력 항목(노드, 인덱스) 목록.</summary>
     private List<(NodeId node, int index)> NewHistoryEntries()
     {
         var list = new List<(NodeId, int)>();
@@ -136,15 +175,23 @@ public partial class ActionPopup : PanelContainer
         return list;
     }
 
+    /// <summary>CompoundCommand(Undo 그룹)를 재귀적으로 풀어 개별 명령 순서열로 만든다.</summary>
     private static IEnumerable<ICommand> Flatten(ICommand c)
     {
         if (c is CompoundCommand cc) { foreach (var x in cc.Items) foreach (var y in Flatten(x)) yield return y; }
         else yield return c;
     }
 
+    /// <summary>
+    /// 명령의 종류를 판별해 팝업 상태를 채우고 표시한다. 판별 순서: 옵션 액션(ID로 옵션 키가 있음) → 모두 ExtrudeFacesCommand →
+    /// 단일 TransformNodesCommand(첫 노드의 Before/After 차이로 델타 계산) → 편집 가능한 새 이력 항목 → 그 외(이름만).
+    /// </summary>
+    /// <param name="cmd">마지막으로 들어온 명령.</param>
+    /// <param name="actionId">그 명령을 만든 액션 ID(툴 드래그 등이면 null).</param>
     private void ShowFor(ICommand cmd, string? actionId)
     {
         _command = cmd; _baseCommand = cmd; // 기능 명령 = 후속 단계의 바탕(후속 단계가 없어도 UndoFollowUps가 이 값을 되돌려 준다)
+        // 이전 컨텍스트를 모두 초기화하고, 이 명령이 만든 새 이력 항목을 구한 뒤 스냅샷을 갱신한다.
         _kind = Kind.None; _optionId = null; _extrude.Clear(); _historyEntries.Clear(); _historyParams = null; _transform = null; _follow.Clear();
         _title = cmd.Name;
         var newEntries = NewHistoryEntries();
@@ -156,11 +203,13 @@ public partial class ActionPopup : PanelContainer
         {
             _kind = Kind.Option; _optionId = optId; _applyId = actionId; _title = _shell.Actions.Get(actionId!)?.Label ?? cmd.Name;
         }
+        // ② 면 Extrude: 각 명령의 새 캡 면을 기억해 두었다가 두께 적용 대상으로 쓴다.
         else if (flat.Count > 0 && flat.All(c => c is ExtrudeFacesCommand))
         {
             _kind = Kind.Extrude; _thickness = 0f; _title = "Extrude";
             foreach (ExtrudeFacesCommand e in flat) _extrude.Add((e.NodeIdPublic, e.NewFaces.ToArray()));
         }
+        // ④ 오브젝트 변형: 첫 노드 기준 이동/회전 차이와 스케일 비율.
         else if (flat.Count == 1 && flat[0] is TransformNodesCommand tn)
         {
             _kind = Kind.Transform; _transform = tn; _tMove = NVec3.Zero; _tRotate = NVec3.Zero; _tScale = NVec3.One;
@@ -172,6 +221,7 @@ public partial class ActionPopup : PanelContainer
                 _tScale = new NVec3(Ratio(a.X, b.X), Ratio(a.Y, b.Y), Ratio(a.Z, b.Z));
             }
         }
+        // ③ 편집 가능한 이력 항목이 있으면 첫 항목의 파라미터를 대표값으로 보여 준다.
         else
         {
             var editable = newEntries.Where(e => _shell.Document.Find(e.node)?.MeshShape is { } ms && e.index < ms.History.Count && ms.History[e.index].Editable).ToList();
@@ -187,13 +237,17 @@ public partial class ActionPopup : PanelContainer
         Visible = true;
     }
 
+    /// <summary>스케일 비율 a/b(b가 0에 가까우면 1).</summary>
     private static float Ratio(float a, float b) => MathF.Abs(b) > 1e-8f ? a / b : 1f;
 
+    /// <summary>팝업을 숨기고 컨텍스트 명령을 잊는다(Control.Hide를 가림).</summary>
     private new void Hide() { Visible = false; _command = null; _kind = Kind.None; }
 
+    /// <returns>해당 라벨 필드를 찾아 값을 설정했으면 true.</returns>
     /// <summary>DebugDriver: 라벨이 label인 필드(벡터면 axis 0/1/2 성분)를 value로 바꾼다.</summary>
     public bool DebugSet(string label, float value, int axis = 0)
     {
+        // 그리드 자식은 (라벨, 컨트롤) 쌍이 번갈아 있다.
         var kids = _grid.GetChildren();
         for (int i = 0; i + 1 < kids.Count; i += 2)
         {
@@ -209,6 +263,7 @@ public partial class ActionPopup : PanelContainer
         return false;
     }
 
+    /// <remarks>형식: <c>popup=[제목] 라벨=값 ...</c>(벡터는 쉼표 구분), 숨김이면 <c>popup=(hidden)</c>.</remarks>
     /// <summary>DebugDriver print용 요약.</summary>
     public string DebugSummary()
     {
@@ -224,8 +279,13 @@ public partial class ActionPopup : PanelContainer
 
     // ---------------------------------------------------------------- UI
 
+    /// <summary>제목 버튼 텍스트: 접힘 ▸ / 펼침 ▾ + 제목.</summary>
     private void UpdateHeader() => _header.Text = (_collapsed ? "▸ " : "▾ ") + _title;
 
+    /// <summary>
+    /// 현재 종류에 맞게 필드를 다시 만든다. ① 옵션 스펙 필드(바꾸면 ReapplyOption) + 후속 단계 파라미터(바꾸면 ReapplyFollowUps),
+    /// ② Thickness, ③ 이력 파라미터, ④ Move/Rotate/Scale 벡터. 끝나면 크기를 최소로 줄인다(지연 호출로 한 번 더).
+    /// </summary>
     private void Rebuild()
     {
         _rebuildQueued = false;
@@ -236,12 +296,14 @@ public partial class ActionPopup : PanelContainer
         {
             case Kind.Option:
                 {
+                    // 옵션 스펙과 액션별 저장 값. 필드 값은 OptionValues에서 읽고, 바꾸면 거기에 쓴 뒤 다시 실행한다.
                     var spec = _shell.OptionSpecFor(_optionId!);
                     var values = _shell.Options(_optionId!);
                     if (spec != null)
                         foreach (var f in spec.Fields)
                         {
                             var field = f;
+                            // 옵션 필드 종류 → 팝업 필드 종류. 스칼라는 X 성분만 쓴다.
                             AddField(field.Label, field.Kind switch
                             {
                                 OptionField.FieldKind.Bool => FieldType.Bool, OptionField.FieldKind.Int => FieldType.Int,
@@ -258,6 +320,7 @@ public partial class ActionPopup : PanelContainer
                         {
                             var prm = p;
                             var type = prm.Kind switch { HistoryParamKind.Int => FieldType.Int, HistoryParamKind.Bool => FieldType.Bool, HistoryParamKind.Vector3 => FieldType.Vec3, _ => FieldType.Float };
+                            // 파라미터가 하나이고 이름이 단계 이름의 마지막 단어와 같으면(예: "Extrude Thickness"/"Thickness") 단계 이름만 라벨로 쓴다.
                             string label = fu.Params.Items.Count == 1 && prm.Name == fu.Name.Split(' ').Last() ? fu.Name : $"{fu.Name}: {prm.Name}";
                             AddField(label, type, prm.Min, prm.Max, prm.Step, null, () => prm.Value, v => { prm.Value = v; ReapplyFollowUps(index); }, s);
                         }
@@ -289,19 +352,29 @@ public partial class ActionPopup : PanelContainer
         UpdateHeader();
         _grid.Visible = !_collapsed && _kind != Kind.None;
         _note.Visible = !_collapsed && _note.Text.Length > 0;
+        // 필드가 줄었을 때 패널이 이전 크기로 남지 않도록 즉시 + 다음 프레임에 최소 크기로 되돌린다.
         Size = Vector2.Zero; ResetSize();
         Callable.From(() => { Size = Vector2.Zero; ResetSize(); }).CallDeferred();
     }
 
+    /// <summary>Godot Vector3 → System.Numerics Vector3.</summary>
     private static NVec3 Conv(Vector3 v) => new(v.X, v.Y, v.Z);
 
+    /// <summary>팝업 필드의 편집 컨트롤 종류.</summary>
     private enum FieldType { Float, Int, Bool, Enum, Vec3 }
 
+    /// <summary>
+    /// 필드 한 줄(라벨 + 컨트롤)을 추가한다. 값은 모두 NVec3로 주고받는다(스칼라·불·열거는 X 성분).
+    /// 변경은 <see cref="Defer"/>로 프레임당 한 번만 set에 전달된다(스핀박스 연속 입력 시 다시 적용이 폭주하지 않게).
+    /// </summary>
+    /// <param name="get">현재 값을 읽는 함수.</param>
+    /// <param name="set">새 값을 적용하는 함수(보통 값 저장 + 다시 적용).</param>
     private void AddField(string label, FieldType type, double min, double max, double step, string[]? choices, Func<NVec3> get, Action<NVec3> set, float s)
     {
         _grid.AddChild(new Label { Text = label });
         var v = get();
         Control c;
+        // 범위가 ±1e9 밖이면 SpinBox 범위는 ±1e9로 자르되 그 너머 입력을 허용한다.
         double lo = Math.Max(min, -1e9), hi = Math.Min(max, 1e9);
         SpinBox Spin(float value, double st) => new() { MinValue = lo, MaxValue = hi, Step = st, Value = value, AllowGreater = max >= 1e9, AllowLesser = min <= -1e9, CustomMinimumSize = new Vector2(90 * s, 0), SelectAllOnFocus = true };
         switch (type)
@@ -342,6 +415,7 @@ public partial class ActionPopup : PanelContainer
 
     /// <summary>스핀박스 연속 변경을 한 프레임에 한 번만 적용한다.</summary>
     private Action? _pendingApply;
+    /// <summary>마지막 변경 동작만 기억했다가 다음 유휴 시점(CallDeferred)에 한 번 실행한다. 이미 예약돼 있으면 동작만 교체한다.</summary>
     private void Defer(Action a)
     {
         bool queued = _pendingApply != null;
@@ -351,6 +425,7 @@ public partial class ActionPopup : PanelContainer
 
     // ---------------------------------------------------------------- 다시 적용
 
+    /// <summary>팝업이 가리키는 명령이 아직 Undo 스택의 마지막이면 Undo한다. 아니면(다른 편집이 끼어듦) 안내 후 숨기고 false.</summary>
     private bool UndoOwn()
     {
         var undo = _shell.Document.Undo;
@@ -358,6 +433,10 @@ public partial class ActionPopup : PanelContainer
         return undo.Undo();
     }
 
+    /// <summary>
+    /// ① 옵션 값이 바뀌었을 때: 후속 단계 → 기능 명령 순으로 Undo, 같은 액션(*Apply)을 새 옵션으로 다시 실행하고,
+    /// 새 명령이 생겼으면 후속 단계를 새 선택에 다시 적용한다. 명령이 생기지 않으면 숨긴다.
+    /// </summary>
     private void ReapplyOption()
     {
         if (_optionId == null) return;
@@ -378,8 +457,13 @@ public partial class ActionPopup : PanelContainer
         finally { _busy = false; }
     }
 
+    /// <summary>② 팝업이 마지막으로 넣은 두께 명령(다음 변경 때 되돌릴 대상).</summary>
     private ICommand? _thicknessCmd;
 
+    /// <summary>
+    /// ② 두께 변경: 이전 두께 명령을 되돌리거나(없으면 Extrude가 여전히 마지막인지 확인) 두께가 0이 아니면
+    /// 각 노드의 캡 면에 ExtrudeThickness 명령을 한 Undo 그룹으로 넣는다.
+    /// </summary>
     private void ApplyExtrudeThickness()
     {
         var doc = _shell.Document;
@@ -390,6 +474,7 @@ public partial class ActionPopup : PanelContainer
             if (_thicknessCmd != null && ReferenceEquals(doc.Undo.LastCommand, _thicknessCmd)) doc.Undo.Undo();
             else if (!ReferenceEquals(doc.Undo.LastCommand, _command)) { Hide(); return; }
             _thicknessCmd = null;
+            // 두께 0이면 Extrude만 남긴 상태로 끝낸다.
             if (MathF.Abs(_thickness) < 1e-7f) { _command = doc.Undo.LastCommand; return; }
             using (doc.Undo.BeginGroup("Extrude Thickness"))
                 foreach (var (node, faces) in _extrude)
@@ -401,8 +486,13 @@ public partial class ActionPopup : PanelContainer
         finally { _busy = false; }
     }
 
+    /// <summary>③ 팝업이 마지막으로 넣은 이력 편집 명령(다음 변경 때 되돌릴 대상).</summary>
     private ICommand? _ownEdit;
 
+    /// <summary>
+    /// ③ 이력 파라미터 변경: 직전 팝업 편집을 되돌린 뒤, 대상 이력 항목마다 같은 이름의 파라미터 값을 바꾼 EditHistoryCommand를 한 그룹으로 넣는다.
+    /// 노드별 정점/면 수가 그대로면(위상 불변) 편집 전 선택을 복원한다.
+    /// </summary>
     private void ApplyHistory()
     {
         var doc = _shell.Document;
@@ -431,6 +521,7 @@ public partial class ActionPopup : PanelContainer
         finally { _busy = false; }
     }
 
+    /// <summary>④ 오브젝트 변형 변경: 원래 명령을 되돌리고, 노드별 Before에 델타(이동/회전 더하기, 스케일 곱하기)를 적용한 새 TransformNodesCommand를 넣는다.</summary>
     private void ApplyTransform()
     {
         var doc = _shell.Document; var tn = _transform; if (tn == null) return;
@@ -438,6 +529,7 @@ public partial class ActionPopup : PanelContainer
         try
         {
             if (!UndoOwn()) return;
+            // 각 노드의 원래 트랜스폼에 같은 델타를 적용한다(첫 노드 기준 델타를 모든 노드에 공통으로).
             var after = new Transform3[tn.Ids.Count];
             for (int i = 0; i < after.Length; i++)
             {
@@ -459,8 +551,10 @@ public partial class ActionPopup : PanelContainer
     /// <summary>새 명령이 조작기 드래그(두께/이동/회전/스케일)면 현재 ① 기능의 후속 단계로 붙인다.</summary>
     private bool TryAppendFollowUp(ICommand last)
     {
+        // 모든 하위 명령이 파라미터를 가진 MoveVerticesCommand(변형 Op 또는 Extrude Thickness)여야 후속 단계로 인정한다.
         var moves = Flatten(last).ToList();
         if (moves.Count == 0 || !moves.All(c => c is MoveVerticesCommand mv && mv.Params != null && (mv.Op != null || mv.Name == "Extrude Thickness"))) return false;
+        // 첫 후속 단계라면 지금의 명령이 기능 명령(바탕)이다.
         if (_follow.Count == 0) _baseCommand = _command;
         var first = (MoveVerticesCommand)moves[0];
         var fu = new FollowUp { Name = first.Name, Params = first.Params!.Clone(), Thickness = first.Name == "Extrude Thickness", Command = last };
@@ -474,6 +568,7 @@ public partial class ActionPopup : PanelContainer
     private bool UndoFollowUps(int from)
     {
         var undo = _shell.Document.Undo;
+        // 뒤에서부터 차례로 Undo한다. 중간에 다른 명령이 끼어 있으면 중단하고 숨긴다.
         for (int i = _follow.Count - 1; i >= from; i--)
         {
             var c = _follow[i].Command;
@@ -490,6 +585,7 @@ public partial class ActionPopup : PanelContainer
     /// <summary>후속 단계를 from부터 현재 선택(다시 실행한 기능의 결과)에 같은 값으로 다시 적용한다.</summary>
     private void RedoFollowUps(int from)
     {
+        // 다시 실행한 기능의 결과가 현재 선택(예: 새 캡 면/정점)이므로 그 선택에 값을 적용한다.
         var doc = _shell.Document; var sel = doc.Selection;
         for (int i = from; i < _follow.Count; i++)
         {
@@ -500,12 +596,14 @@ public partial class ActionPopup : PanelContainer
                 {
                     var mesh = doc.Find(node)?.Mesh; if (mesh == null) continue;
                     var comps = sel.GetComponents(node);
+                    // 두께 단계: 선택을 면으로 바꿔 법선 방향 오프셋.
                     if (fu.Thickness)
                     {
                         var faces = sel.Mode == SelectMode.Face ? comps.Faces.ToArray() : SelectionOps.Convert(mesh, comps, sel.Mode, SelectMode.Face).ToArray();
                         if (Tools.ExtrudeThickness.Make(doc, node, faces, fu.Params.Float("Thickness")) is { } tc) doc.Undo.Push(tc);
                         continue;
                     }
+                    // 변형 단계: 선택을 정점으로 바꿔 살아 있는 정점에 Op의 로컬 행렬(파라미터로 계산)을 곱한다.
                     if (op == null) continue;
                     var verts = (sel.Mode == SelectMode.Vertex ? comps.Verts : SelectionOps.Convert(mesh, comps, sel.Mode, SelectMode.Vertex)).Where(v => v >= 0 && v < mesh.VertexCount && mesh.Verts[v].Alive).Distinct().ToArray();
                     if (verts.Length == 0) continue;
@@ -514,6 +612,7 @@ public partial class ActionPopup : PanelContainer
                     var a = b.Select(pp => NVec3.Transform(pp, mat)).ToArray();
                     doc.Undo.Push(new MoveVerticesCommand(fu.Name, node, verts, b, a, op, fu.Params.Clone()));
                 }
+            // 이 단계가 실제로 명령을 만들었으면 기억하고 팝업이 가리키는 명령으로 삼는다.
             var last = doc.Undo.LastCommand;
             fu.Command = ReferenceEquals(last, before) ? null : last;
             if (fu.Command != null) _command = fu.Command;

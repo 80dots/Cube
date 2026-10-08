@@ -8,6 +8,11 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Fill Hole
 
     /// <summary>경계 엣지가 속한 구멍의 정점 루프(면 방향 반대 = 새 면 순서). 자기 교차 루프면 빈 목록.</summary>
+    /// <remarks>
+    /// 경계 엣지의 He0(면이 있는 쪽 하프에지)에서 출발해, 끝 정점에서 나가는 트윈 없는 하프에지(다음 경계)를 따라 한 바퀴 돈다.
+    /// 면 쪽 하프에지는 구멍을 반대로 돌므로 마지막에 뒤집어 새 면이 기존 면과 같은 방향(CCW)이 되게 한다.
+    /// 같은 정점을 두 번 지나면(나비넥타이형 구멍) 또는 다음 경계를 못 찾으면 빈 목록.
+    /// </remarks>
     public static List<int> HoleLoop(PolyMesh m, int boundaryEdge)
     {
         var result = new List<int>();
@@ -32,6 +37,10 @@ public static partial class MeshOps
     }
 
     /// <summary>Fill Hole: 선택 엣지(경계)가 속한 구멍마다 n각형을 채운다. 반환값은 새 면들.</summary>
+    /// <remarks>
+    /// 이미 채운 구멍의 경계 엣지는 done에 넣어 같은 구멍을 두 번 채우지 않는다. 새 면 코너 UV는 해당 정점에서 나가는 아무 하프에지의 UV,
+    /// 노멀은 Zero(호출자가 재계산).
+    /// </remarks>
     public static List<int> FillHoles(PolyMesh m, IEnumerable<int> edgeIds)
     {
         var result = new List<int>();
@@ -59,8 +68,13 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Triangulate / Quadrangulate
 
     /// <summary>Triangulate: n각형을 귀 자르기로 삼각형화한다. 반환값은 결과 삼각형들.</summary>
+    /// <remarks>
+    /// 면 법선으로 평면 기저(u, w)를 만들어 코너를 2D로 투영하고 <see cref="EarClipping.Triangulate"/>로 인덱스 삼중쌍을 얻는다.
+    /// 모든 계획을 먼저 세운 뒤 면을 지우고 삼각형으로 재생성한다(둘레 엣지 플래그 유지, 새 대각선은 플래그 없음).
+    /// </remarks>
     public static List<int> Triangulate(PolyMesh m, IEnumerable<int> faceIds)
     {
+        // 이미 삼각형인 면은 대상이 아님
         var result = new List<int>();
         var faces = AliveFaces(m, faceIds).Where(f => m.FaceDegree(f) > 3).ToList();
         if (faces.Count == 0) return result;
@@ -91,6 +105,7 @@ public static partial class MeshOps
     }
 
     /// <summary>Quadrangulate: 공유 엣지로 맞닿은 삼각형 쌍을 각도 임계 안에서 쿼드로 합친다. 반환값은 새 쿼드들.</summary>
+    /// <param name="angleDegrees">두 삼각형 법선 사이 각이 이 값보다 작을 때만 합친다.</param>
     public static List<int> Quadrangulate(PolyMesh m, IEnumerable<int> faceIds, float angleDegrees)
     {
         var result = new List<int>();
@@ -106,6 +121,7 @@ public static partial class MeshOps
             {
                 int e = m.Hes[he].Edge;
                 var (f0, f1) = m.EdgeFaces(e);
+                // 양쪽 모두 선택 삼각형인 내부 엣지만, f0 < f1 조건으로 엣지당 한 번만 후보에 넣는다(하프에지 두 개로 두 번 보이므로)
                 if (f1 < 0 || !set.Contains(f0) || !set.Contains(f1) || f0 > f1) continue;
                 var n0 = Vector3.Normalize(MeshNormals.FaceNormalUnnormalized(m, f0) + new Vector3(1e-12f)); var n1 = Vector3.Normalize(MeshNormals.FaceNormalUnnormalized(m, f1) + new Vector3(1e-12f));
                 if (Vector3.Dot(n0, n1) < cosT) continue;
@@ -113,6 +129,7 @@ public static partial class MeshOps
                 cands.Add((e, Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position)));
             }
         }
+        // 탐욕 병합: 긴 엣지부터, 이미 쓴 삼각형은 다시 쓰지 않는다
         var used = new HashSet<int>();
         foreach (var (e, _) in cands.Distinct().OrderByDescending(c => c.len))
         {
@@ -133,6 +150,11 @@ public static partial class MeshOps
     /// Mirror: 메시를 축 평면(axis 0=X/1=Y/2=Z, planeOffset 위치)에 대해 복제·반사해 덧붙인다. direction이 +면 양쪽이 없는 쪽(음수 쪽 원본을 양수로)…
     /// cut이면 반대편(keepPositive가 아닌 쪽) 원본 면을 먼저 지운다(Maya Symmetrize). mergeThreshold>0이면 평면 근처 정점을 합친다. 반환값은 새 면들.
     /// </summary>
+    /// <param name="axis">대칭 축(0=X, 1=Y, 2=Z).</param>
+    /// <param name="planeOffset">대칭 평면의 오브젝트 공간 위치(축 좌표).</param>
+    /// <param name="keepPositive">cut일 때 양수 쪽을 남길지(true) 음수 쪽을 남길지.</param>
+    /// <param name="cut">true면 버릴 쪽 면을 먼저 지운다(면 중심 기준).</param>
+    /// <param name="mergeThreshold">0보다 크면 평면에서 이 거리 안의 정점을 2배 임계로 병합해 이음매를 닫는다.</param>
     public static List<int> MirrorGeometry(PolyMesh m, int axis, float planeOffset, bool keepPositive, bool cut, float mergeThreshold)
     {
         if (cut)
@@ -146,10 +168,12 @@ public static partial class MeshOps
             }
             foreach (int f in remove) m.RemoveFace(f);
         }
+        // 현재 메시를 복제해 반사 행렬 T(−o)·S(축 −1)·T(o)로 덧붙인다(Append가 음의 행렬식이면 면 방향을 뒤집어 준다)
         var src = m.Clone();
         var scale = Vector3.One; SetAxis(ref scale, axis, -1f);
         var offset = Vector3.Zero; SetAxis(ref offset, axis, planeOffset);
         var reflect = Matrix4x4.CreateTranslation(-offset) * Matrix4x4.CreateScale(scale) * Matrix4x4.CreateTranslation(offset);
+        // 덧붙인 면은 기존 면 수 이후 슬롯에 생긴다(ID 재사용 없음)
         int before = m.FaceCount;
         Append(m, src, reflect);
         var result = new List<int>();
@@ -168,9 +192,11 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Cleanup
 
     /// <summary>Cleanup: 면적 0 면, 라미나(정점 집합이 같은 두 면), 고립 정점을 지운다. 반환값은 지운 면 수.</summary>
+    /// <param name="zeroAreaEps">면 넓이(법선 길이의 절반) 임계. 비정규 법선 길이² &lt; eps²이면 넓이 0으로 본다.</param>
     public static int Cleanup(PolyMesh m, float zeroAreaEps = 1e-10f)
     {
         int removed = 0;
+        // keys: 정렬된 정점 ID 목록 문자열 → 처음 본 면. 같은 키가 또 나오면 라미나 면으로 보고 지운다.
         var keys = new Dictionary<string, int>();
         var verts = new List<int>();
         for (int f = 0; f < m.FaceCount; f++)
@@ -182,6 +208,7 @@ public static partial class MeshOps
             if (keys.ContainsKey(key)) { m.RemoveFace(f); removed++; continue; }
             keys[key] = f;
         }
+        // 면 삭제 후 남은 고립 정점 정리
         for (int v = 0; v < m.VertexCount; v++) if (m.Verts[v].Alive) m.RemoveVertexIfIsolated(v);
         m.BumpTopology();
         return removed;
@@ -190,6 +217,10 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Conform (wrap onto surface)
 
     /// <summary>Conform: 정점들을 대상 메시 표면의 가장 가까운 점으로 옮긴다. targetToLocal = 대상 월드 → 이 메시 로컬.</summary>
+    /// <remarks>
+    /// 대상 메시를 모두 삼각형 팬으로 바꿔(로컬 좌표로 변환) 정점마다 전수 탐색으로 최근접점을 찾는다(O(V·T), 가속 구조 없음).
+    /// 위치만 바뀌므로 BumpGeometry.
+    /// </remarks>
     public static void ConformToSurface(PolyMesh m, IEnumerable<int> vertIds, PolyMesh target, Matrix4x4 targetToLocal)
     {
         var tris = new List<(Vector3 a, Vector3 b, Vector3 c)>();
@@ -221,6 +252,7 @@ public static partial class MeshOps
     /// <summary>삼각형 위 최근접점(Ericson, Real-Time Collision Detection).</summary>
     public static Vector3 ClosestPointOnTriangle(Vector3 p, Vector3 a, Vector3 b, Vector3 c)
     {
+        // 보로노이 영역 판정: 꼭짓점 a/b/c 영역, 엣지 ab/ac/bc 영역, 내부 순으로 검사하고 해당 영역의 최근접점을 돌려준다
         var ab = b - a; var ac = c - a; var ap = p - a;
         float d1 = Vector3.Dot(ab, ap), d2 = Vector3.Dot(ac, ap);
         if (d1 <= 0 && d2 <= 0) return a;
@@ -234,6 +266,7 @@ public static partial class MeshOps
         if (vb <= 0 && d2 >= 0 && d6 <= 0) { float w = d2 / (d2 - d6); return a + ac * w; }
         float va = d3 * d6 - d5 * d4;
         if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { float w = (d4 - d3) / ((d4 - d3) + (d5 - d6)); return b + (c - b) * w; }
+        // 내부: 무게중심 좌표(v2, w2)로 면 위 투영점
         float denom = 1f / (va + vb + vc);
         float v2 = vb * denom, w2 = vc * denom;
         return a + ab * v2 + ac * w2;
@@ -242,6 +275,7 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Normals (Mesh Display)
 
     /// <summary>Soften/Harden Edge(각도): 이면각이 angle보다 크면 하드, 아니면 소프트.</summary>
+    /// <remarks>경계 엣지와 넓이 0 면에 닿은 엣지는 소프트. 위상은 바꾸지 않는다(호출자가 노멀 재계산).</remarks>
     public static void SoftenHardenByAngle(PolyMesh m, IEnumerable<int> edgeIds, float angleDegrees)
     {
         float cosT = MathF.Cos(angleDegrees * MathF.PI / 180f);
@@ -261,6 +295,10 @@ public static partial class MeshOps
     }
 
     /// <summary>Conform(노멀): 연결 요소마다 면 대부분이 바깥(중심에서 멀어지는 쪽)을 향하도록 뒤집는다. 반환값은 뒤집은 요소 수.</summary>
+    /// <remarks>
+    /// 요소 중심에서 각 면 중심으로 가는 벡터와 (면적 가중) 법선의 내적 합이 음수면 대부분이 안쪽을 향한 것으로 보고
+    /// <see cref="ReverseFaces"/>로 그 요소 전체를 뒤집는다.
+    /// </remarks>
     public static int ConformNormals(PolyMesh m)
     {
         int flipped = 0;
@@ -275,6 +313,7 @@ public static partial class MeshOps
     }
 
     /// <summary>Lock Normals: 현재 코너 노멀의 평균을 정점 노멀로 잠근다.</summary>
+    /// <remarks>잠근 노멀은 PolyMesh.LockedNormals(정점 → 노멀)에 저장되고 MeshNormals.Recompute가 그 정점의 코너를 고정한다.</remarks>
     public static void LockNormals(PolyMesh m, IEnumerable<int> vertIds)
     {
         foreach (int v in AliveVerts(m, vertIds))
@@ -287,6 +326,7 @@ public static partial class MeshOps
     /// <summary>정점 잠금과 그 정점의 코너 고정(Bevel Harden Normals 등)을 모두 푼다.</summary>
     public static void UnlockNormals(PolyMesh m, IEnumerable<int> vertIds)
     {
+        // 죽은 정점이라도 잠금 표는 정리하고, 살아 있는 정점은 코너 고정(NormalLocked)도 해제한다
         foreach (int v in vertIds)
         {
             m.LockedNormals.Remove(v);
@@ -297,6 +337,7 @@ public static partial class MeshOps
     }
 
     /// <summary>Set Vertex Normal: 정점 노멀을 지정 방향으로 잠근다.</summary>
+    /// <remarks>영벡터 방향이면 아무것도 하지 않는다.</remarks>
     public static void SetVertexNormal(PolyMesh m, IEnumerable<int> vertIds, Vector3 normal)
     {
         if (normal.LengthSquared() < 1e-12f) return;
@@ -305,6 +346,7 @@ public static partial class MeshOps
     }
 
     /// <summary>Set to Face: 정점 노멀을 인접 면 법선 평균으로 잠근다(면을 넘겼으면 그 면들만).</summary>
+    /// <remarks>인접 면 법선을 정규화해 같은 가중치로 평균한다(면적 무관).</remarks>
     public static void SetNormalsToFace(PolyMesh m, IEnumerable<int> vertIds, IEnumerable<int>? faceFilter = null)
     {
         var filter = faceFilter == null ? null : new HashSet<int>(faceFilter);
@@ -319,6 +361,7 @@ public static partial class MeshOps
     }
 
     /// <summary>Average Normals: 정점의 모든 코너 노멀(하드 엣지 무시)을 평균해 잠근다.</summary>
+    /// <remarks>비정규 면 법선을 합하므로 면적 가중 평균이다.</remarks>
     public static void AverageNormals(PolyMesh m, IEnumerable<int> vertIds)
     {
         var faces = new List<int>();
@@ -334,6 +377,9 @@ public static partial class MeshOps
     // ------------------------------------------------------------ Slice (Multi-Cut) / Append to Polygon
 
     /// <summary>평면으로 메시를 자른다(Multi-Cut 슬라이스): 평면을 가로지르는 엣지를 나누고 같은 면의 새 정점끼리 잇는다. 반환값은 새 엣지들.</summary>
+    /// <param name="point">평면 위의 한 점(오브젝트 공간).</param>
+    /// <param name="normal">평면 법선(정규화하지 않아도 됨).</param>
+    /// <param name="faceFilter">지정하면 이 면들에 속한 엣지/면만 자른다.</param>
     public static List<int> SliceWithPlane(PolyMesh m, Vector3 point, Vector3 normal, IEnumerable<int>? faceFilter = null)
     {
         var result = new List<int>();
@@ -346,6 +392,7 @@ public static partial class MeshOps
             if (!m.Edges[e].Alive) continue;
             if (filter != null) { var (f0, f1) = m.EdgeFaces(e); if (!filter.Contains(f0) && (f1 < 0 || !filter.Contains(f1))) continue; }
             var (a, b) = m.EdgeVertices(e);
+            // 두 끝점의 부호 거리 da/db가 같은 부호면(평면 한쪽) 건너뛰고, 교차하면 t = da/(da−db)에서 엣지를 나눈다. 끝점에 너무 가까운 교차는 무시.
             float da = Vector3.Dot(m.Verts[a].Position - point, normal), db = Vector3.Dot(m.Verts[b].Position - point, normal);
             if ((da > 1e-7f && db > 1e-7f) || (da < -1e-7f && db < -1e-7f) || MathF.Abs(da - db) < 1e-12f) continue;
             float t = da / (da - db);
@@ -354,6 +401,7 @@ public static partial class MeshOps
             if (nv >= 0) newVerts.Add(nv);
         }
         if (newVerts.Count < 2) return result;
+        // 새 정점을 포함한 면마다 면 루프 순서의 새 정점을 두 개씩 짝지어 면을 가로지르는 엣지로 잇는다
         var set = new HashSet<int>(newVerts);
         var faces = new List<int>(); var loop = new List<int>();
         var seen = new HashSet<int>();
@@ -379,6 +427,10 @@ public static partial class MeshOps
     /// Append to Polygon: 경계 엣지에서 시작해 점들을 거쳐 돌아오는 새 면을 붙인다. 점은 새 정점 위치(또는 기존 정점 ID를 음수-1로 인코딩: -(id+1)).
     /// 반환값은 새 면 ID(-1 = 실패).
     /// </summary>
+    /// <remarks>
+    /// 실제 구현: points의 각 점은 existingVertexIds[i]가 살아 있는 정점 ID(≥ 0)면 그 정점을 쓰고, 아니면 points[i] 위치에 새 정점을 만든다.
+    /// 새 면 루프 = (b, a, 점들…) — 경계 엣지 a→b의 반대 방향으로 시작해 기존 면과 감김이 맞는다. 실패하면 새로 만든 고립 정점을 지운다.
+    /// </remarks>
     public static int AppendPolygon(PolyMesh m, int boundaryEdge, IReadOnlyList<Vector3> points, IReadOnlyList<int>? existingVertexIds = null)
     {
         if (boundaryEdge < 0 || boundaryEdge >= m.EdgeCount || !m.Edges[boundaryEdge].Alive || !m.IsBoundaryEdge(boundaryEdge)) return -1;
@@ -401,6 +453,10 @@ public static partial class MeshOps
 
     // ------------------------------------------------------------ Crease
 
+    /// <summary>
+    /// 엣지 크리즈 값을 설정한다(0..10으로 클램프). Catmull-Clark 서브디비전에서 크리즈 엣지는 날카롭게 유지되며 레벨마다 1씩 줄어든다.
+    /// 위상은 바꾸지 않는다.
+    /// </summary>
     public static void SetCrease(PolyMesh m, IEnumerable<int> edgeIds, float crease)
     {
         crease = Math.Clamp(crease, 0f, 10f);
