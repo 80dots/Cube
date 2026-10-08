@@ -17,6 +17,12 @@ public partial class CubeApp : Node
     public Document Document { get; private set; } = null!;
     public Settings Settings { get; private set; } = null!;
 
+    public override void _EnterTree()
+    {
+        // 로그 패널용: 가능한 한 먼저 로거를 등록해 시작 이후 모든 출력·경고·오류를 모은다
+        LogCapture.Install();
+    }
+
     public override void _Ready()
     {
         Instance = this;

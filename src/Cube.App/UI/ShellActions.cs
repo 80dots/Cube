@@ -164,6 +164,7 @@ public partial class Shell
         RegisterRigActions();
         RegisterSceneActions();
         RegisterAnimActions();
+        RegisterLogActions();
         RegisterMeshActions();
         RegisterRenderActions();
         RegisterBridgeActions();
@@ -617,7 +618,7 @@ public partial class Shell
             .Item("bridge.reload").Item("bridge.autoReload").Item("bridge.openFolder").Separator()
             .Item("bridge.settings");
 
-        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor").Item("windows.renderSettings").Item("windows.animationData");
+        Menus.Build(Add("Windows")).Item("windows.outliner").Item("windows.properties").Item("windows.uvEditor").Item("windows.materialEditor").Item("windows.renderSettings").Item("windows.animationData").Separator().Item("windows.log").Item("log.copy").Item("log.save").Item("log.clear");
         Menus.Build(Add("Help")).Item("help.about");
     }
 }

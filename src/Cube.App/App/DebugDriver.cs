@@ -319,6 +319,13 @@ public partial class DebugDriver : Node
                     scene.Free();
                     break;
                 }
+            case "logsave":   // logsave PATH: 로그 패널의 현재 필터로 파일 저장
+                GD.Print($"[Drive] logsave {UI.Shell.Instance.SaveLog(p[1])}");
+                break;
+            case "logcopy":   // 로그를 클립보드에 복사하고 줄 수를 찍는다
+                UI.Shell.Instance.Actions.Invoke("log.copy");
+                GD.Print($"[Drive] logcopy lines={DisplayServer.ClipboardGet().Count(c => c == '\n')} counts={LogCapture.Instance?.Counts}");
+                break;
             case "confirm":   // 열린 확인 다이얼로그의 OK(Discard)를 누른다
                 {
                     var dl = UI.Shell.Instance.FindChildren("*", "ConfirmationDialog", true, false).OfType<ConfirmationDialog>().FirstOrDefault(d => d.Visible);

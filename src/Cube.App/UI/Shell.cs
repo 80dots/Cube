@@ -67,6 +67,7 @@ public partial class Shell : Control
     public override void _Process(double delta)
     {
         if (_polyCountDirty) { _polyCountDirty = false; PolyCount.Recompute(Document); }
+        UpdateLog();
     }
     public Settings Settings => CubeApp.Instance.Settings;
 
@@ -146,7 +147,7 @@ public partial class Shell : Control
         PropertiesWindow.LastDock = new Docking.DockSlot(Docking.DockSideKind.Right, 0);
 
         HelpLine = new Label { Name = "HelpLine", Text = "Select a tool.", CustomMinimumSize = new Vector2(0, 20 * s) };
-        root.AddChild(Wrap(HelpLine, MayaTheme.PanelDark));
+        root.AddChild(Wrap(BuildHelpRow(s), MayaTheme.PanelDark));
         // Time Slider(가져온 애니메이션 재생): HelpLine 바로 위
         BuildTimeSlider(root, root.GetChildCount() - 1, s);
 
@@ -428,6 +429,7 @@ public partial class Shell : Control
         "uvSetEditor" => EnsureUvSetEditor(),
         "materialEditor" => EnsureMaterialEditor(),
         "animationData" => EnsureAnimationData(),
+        "log" => EnsureLog(),
         "renderSettings" => EnsureRenderSettings(),
         "tripo" => EnsureTripo(),
         "bridgeSettings" => EnsureBridgeSettings(),
@@ -444,7 +446,7 @@ public partial class Shell : Control
     public void ToggleMaximizeViewport()
     {
         _maximized = !_maximized;
-        foreach (var n in new Control[] { StatusLine.GetParent<Control>(), ShelfRow, _mainSplit.GetChild<Control>(0), HelpLine.GetParent<Control>() })
+        foreach (var n in new Control[] { StatusLine.GetParent<Control>(), ShelfRow, _mainSplit.GetChild<Control>(0), HelpLine.GetParent().GetParent<Control>() })
             n.Visible = !_maximized;
         Dock.SetMaximized(_maximized);
         UpdateTimeSliderVisibility();
