@@ -118,6 +118,8 @@ public partial class ViewportPanel : SubViewportContainer
         Hud.Position = new Vector2(-8 * s, 8 * s);
         Hud.GrowHorizontal = GrowDirection.Begin;
         AddChild(Hud);
+        // 뷰포트가 좁아져도 HUD·오버레이가 패널 밖(도킹된 패널 위)으로 넘쳐 그려지지 않게
+        ClipContents = true;
         Hud.Setup(this);
 
         if (_doc != null) { Scene.Bind(_doc); Display.Bind(_doc); }

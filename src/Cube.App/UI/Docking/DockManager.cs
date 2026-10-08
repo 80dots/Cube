@@ -18,6 +18,10 @@ public partial class DockSide : VSplitContainer
     public List<Control> Items => GetChildren().OfType<Control>().Where(c => c is DockGroup or DockRow).ToList();
     /// <summary>모든 그룹(행 안의 그룹 포함, 위→아래, 왼→오).</summary>
     public List<DockGroup> Groups => Items.SelectMany(i => i is DockRow r ? r.Groups : new List<DockGroup> { (DockGroup)i }).ToList();
+
+    // 그룹 사이 간격·빈 도크도 불투명하게(뒤가 비쳐 보이지 않게)
+    public override void _Ready() { ClipContents = true; Resized += QueueRedraw; }
+    public override void _Draw() => DrawRect(new Rect2(Vector2.Zero, Size), MayaTheme.PanelDark);
 }
 
 /// <summary>
@@ -38,7 +42,8 @@ public partial class DockRow : HSplitContainer
     /// <summary>뷰포트에 붙은(폭이 바뀌는) 그룹 번호.</summary>
     private int AdjacentIndex(int count) => GetParent() is DockSide { Kind: DockSideKind.Left } ? count - 1 : 0;
 
-    public override void _Ready() => SortChildren += OnSorted;
+    public override void _Ready() { SortChildren += OnSorted; ClipContents = true; Resized += QueueRedraw; }
+    public override void _Draw() => DrawRect(new Rect2(Vector2.Zero, Size), MayaTheme.PanelDark);
 
     /// <summary>현재 폭을 기억한다(그룹 추가·제거·레이아웃 복원 직후 등).</summary>
     public void RememberWidths() { _lastTotal = -1; }
@@ -115,6 +120,9 @@ public partial class DockGroup : TabContainer
         SizeFlagsVertical = SizeFlags.ExpandFill;
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         ClipTabs = true;
+        // 패널 내용이 그룹보다 커도 그룹 밖(이웃 그룹·뷰포트)으로 넘쳐 그리지 않게 자르고, 탭 줄 빈 곳도 칠한다
+        ClipContents = true;
+        AddThemeStyleboxOverride("tabbar_background", new StyleBoxFlat { BgColor = MayaTheme.PanelDark });
         var menu = new PopupMenu { Name = "DockMenu" };
         menu.AddItem("Float Panel", 0);
         menu.AddItem("Close Panel", 1);
