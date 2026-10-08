@@ -20,10 +20,83 @@ public partial class DockSide : VSplitContainer
     public List<DockGroup> Groups => Items.SelectMany(i => i is DockRow r ? r.Groups : new List<DockGroup> { (DockGroup)i }).ToList();
 }
 
-/// <summary>도크 안에서 탭 그룹 여러 개를 나란히(가로로) 놓는 행.</summary>
+/// <summary>
+/// 도크 안에서 탭 그룹 여러 개를 나란히(가로로) 놓는 행.
+/// 도크 폭이 바뀌면(도크와 뷰포트 사이 경계를 끌거나 창 크기 변경) 뷰포트에 붙은 그룹만 폭이 바뀌고 나머지 그룹은 폭을 유지한다
+/// (오른쪽 도크 = 맨 왼쪽 그룹, 왼쪽 도크 = 맨 오른쪽 그룹). SplitContainer는 모든 자식이 늘어나면 바뀐 폭을 나눠 주므로,
+/// 정렬이 끝날 때마다(SortChildren) 행 폭이 그대로면 나머지 그룹 폭을 기억하고, 행 폭이 바뀌었으면 기억한 폭이 되도록 경계 오프셋을 실측 보정한다.
+/// 행 안 경계를 끌면 행 폭은 그대로라 새 폭이 기억된다.
+/// </summary>
 public partial class DockRow : HSplitContainer
 {
     public List<DockGroup> Groups => GetChildren().OfType<DockGroup>().ToList();
+
+    private float _lastTotal = -1;
+    private readonly Dictionary<DockGroup, float> _keep = new();
+    private int _fixes;
+
+    /// <summary>뷰포트에 붙은(폭이 바뀌는) 그룹 번호.</summary>
+    private int AdjacentIndex(int count) => GetParent() is DockSide { Kind: DockSideKind.Left } ? count - 1 : 0;
+
+    public override void _Ready() => SortChildren += OnSorted;
+
+    /// <summary>현재 폭을 기억한다(그룹 추가·제거·레이아웃 복원 직후 등).</summary>
+    public void RememberWidths() { _lastTotal = -1; }
+
+    private void OnSorted()
+    {
+        var gs = Groups;
+        if (gs.Count < 2) { _lastTotal = Size.X; return; }
+        float total = Size.X;
+        int adj = AdjacentIndex(gs.Count);
+        bool known = gs.Where((g, i) => i != adj).All(g => _keep.ContainsKey(g));
+        // 레이아웃 복원 직후(폭이 아직 적용되는 중)에는 보정하지 않고 기억만 한다
+        if (!DockManager.Settled || _lastTotal < 0 || !known || Math.Abs(total - _lastTotal) < 0.5f || _dragging)
+        {
+            // 행 폭이 그대로(행 안 경계 드래그·그룹 변경): 지금 폭을 기억
+            _keep.Clear();
+            for (int i = 0; i < gs.Count; i++) if (i != adj) _keep[gs[i]] = gs[i].Size.X;
+            _lastTotal = total; _fixes = 0;
+            return;
+        }
+        // 행 폭이 바뀜: 뷰포트 쪽이 아닌 그룹은 기억한 폭으로 되돌린다(오프셋에 대해 위치가 선형이라 한 번에 맞음)
+        float sep = gs.Count > 1 ? gs[1].Position.X - (gs[0].Position.X + gs[0].Size.X) : 0;
+        float avail = total - sep * (gs.Count - 1);
+        var want = new float[gs.Count];
+        float fixedSum = 0;
+        for (int i = 0; i < gs.Count; i++) if (i != adj) { want[i] = _keep[gs[i]]; fixedSum += want[i]; }
+        float adjMin = gs[adj].GetCombinedMinimumSize().X;
+        if (avail - fixedSum < adjMin)
+        {
+            // 공간이 모자라면 나머지 그룹을 비율대로 줄인다
+            float scale = Math.Max(0, avail - adjMin) / Math.Max(1, fixedSum);
+            fixedSum = 0;
+            for (int i = 0; i < gs.Count; i++) if (i != adj) { want[i] = Math.Max(gs[i].GetCombinedMinimumSize().X, want[i] * scale); fixedSum += want[i]; }
+        }
+        want[adj] = Math.Max(adjMin, avail - fixedSum);
+        var offs = SplitOffsets.Length == gs.Count - 1 ? (int[])SplitOffsets.Clone() : new int[gs.Count - 1];
+        bool changed = false;
+        float end = 0;
+        for (int i = 0; i < gs.Count - 1; i++)
+        {
+            end += want[i];
+            float actualEnd = gs[i].Position.X + gs[i].Size.X;
+            int d = (int)MathF.Round(end - actualEnd);
+            if (d != 0) { offs[i] += d; changed = true; }
+            end += sep;
+        }
+        // 정렬 시그널 안에서 오프셋을 바꾸면 Godot이 재정렬 요청을 버리므로(정렬이 끝날 때 대기 플래그를 지움) 지연 적용한다.
+        // 적용 뒤 정렬에서 다시 확인한다(최대 몇 번)
+        if (changed && _fixes++ < 4) Callable.From(() => { if (IsInstanceValid(this)) SplitOffsets = offs; }).CallDeferred();
+        else { _lastTotal = total; _fixes = 0; }
+    }
+
+    private bool _dragging;
+    public override void _GuiInput(InputEvent e)
+    {
+        // 행 안 경계를 끄는 동안은 폭 보정을 하지 않는다(드래그가 곧 새 폭)
+        if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left } mb) _dragging = mb.Pressed;
+    }
 }
 
 /// <summary>
@@ -477,8 +550,13 @@ public partial class DockManager : Node
     }
 
     /// <summary>저장된 레이아웃을 복원한다. ensure(id)는 패널을 만들어(아직 없으면) 돌려준다(null = 복원하지 않는 패널).</summary>
+    /// <summary>레이아웃 복원이 끝나 도크 폭이 자리 잡았는지. 그 전에는 DockRow가 그룹 폭을 보정하지 않고 기억만 한다.</summary>
+    public static bool Settled { get; private set; }
+
     public void RestoreLayout(Func<string, FloatingPanel?> ensure)
     {
+        Settled = false;
+        GetTree().CreateTimer(0.5).Timeout += () => Settled = true;
         var d = _shell.Settings.Dock;
         _leftWidth = (d.LeftWidth > 0 ? d.LeftWidth : 220) * S;
         _rightWidth = (d.RightWidth > 0 ? d.RightWidth : 260) * S;
@@ -535,7 +613,8 @@ public partial class DockManager : Node
         static string G(DockGroup g) => "[" + string.Join("|", g.Panels.Select(p => p.PanelId + (g.GetCurrentTabControl() == p ? "*" : ""))) + "]";
         static string Side(DockSide s) => string.Join(" / ", s.Items.Select(i => i is DockRow r ? "(" + string.Join(" ", r.Groups.Select(G)) + ")" : G((DockGroup)i)));
         string groupsY = string.Join(",", Right.Groups.Select(g => $"{g.GlobalPosition.X:0},{g.GlobalPosition.Y:0}-{g.GlobalPosition.X + g.Size.X:0},{g.GlobalPosition.Y + g.Size.Y:0}"));
-        return $"rightX={Right.GlobalPosition.X:0} rightGroupsY={groupsY} offsets={_mainSplit.SplitOffsets[0]},{_rightSplit.SplitOffsets[0]} want={_leftWidth:0},{_rightWidth:0} L{(Left.Visible ? Left.Size.X.ToString("0") : "-")} {Side(Left)}  R{(Right.Visible ? Right.Size.X.ToString("0") : "-")} {Side(Right)}  floating={string.Join(",", _panels.Values.Where(p => !p.Docked && p.Visible).Select(p => p.PanelId))}";
+        string leftX = string.Join(",", Left.Groups.Select(g => $"{g.GlobalPosition.X:0}-{g.GlobalPosition.X + g.Size.X:0}"));
+        return $"leftGroupsX={leftX} rightX={Right.GlobalPosition.X:0} rightGroupsY={groupsY} offsets={_mainSplit.SplitOffsets[0]},{_rightSplit.SplitOffsets[0]} want={_leftWidth:0},{_rightWidth:0} L{(Left.Visible ? Left.Size.X.ToString("0") : "-")} {Side(Left)}  R{(Right.Visible ? Right.Size.X.ToString("0") : "-")} {Side(Right)}  floating={string.Join(",", _panels.Values.Where(p => !p.Docked && p.Visible).Select(p => p.PanelId))}";
     }
 }
 
