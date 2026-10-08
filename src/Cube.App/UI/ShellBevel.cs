@@ -9,7 +9,7 @@ namespace Cube.App.UI;
 
 /// <summary>
 /// Blender식 Bevel(Edit Mesh → Bevel): 옵션 창/Action Popup/구성 이력에 Blender의 모든 Bevel 옵션을 노출하고,
-/// Ctrl+B(엣지) / Shift+Ctrl+B(정점)는 마우스로 폭을 정하는 대화형 Bevel 툴(<see cref="BevelTool"/>)을 연다.
+/// Bevel (Interactive)/Bevel Vertices (Interactive)는 마우스로 폭을 정하는 대화형 Bevel 툴(<see cref="BevelTool"/>)을 연다(단축키 없음, 사용자 지시).
 /// </summary>
 public partial class Shell
 {

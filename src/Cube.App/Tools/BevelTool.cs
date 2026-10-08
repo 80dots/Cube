@@ -8,9 +8,8 @@ using NVec3 = System.Numerics.Vector3;
 namespace Cube.App.Tools;
 
 /// <summary>
-/// Blender식 대화형 Bevel(Ctrl+B 엣지 / Shift+Ctrl+B 정점). 마우스를 선택 중심에서 멀리/가까이 움직이면 폭이 바뀌고, 휠 = 세그먼트.
-/// 키: A 폭 / S 세그먼트 / P 프로파일 모양(이후 마우스가 그 값을 바꿈), V Affect, M Width Type, C Clamp, H Harden Normals, U Mark Seams, K Mark Sharp,
-/// O Miter Outer, I Miter Inner, N Intersection, Z Profile Type, 숫자 입력(Backspace로 지움). Shift = 세밀, Ctrl = 눈금 스냅.
+/// Blender식 대화형 Bevel(Edit Mesh → Bevel (Interactive), Edit Pie). 마우스를 선택 중심에서 멀리/가까이 움직이면 폭이 바뀌고, 휠 = 세그먼트,
+/// 숫자 입력 = 폭(Backspace로 지움). Shift = 세밀, Ctrl = 눈금 스냅. Blender 단축키(글자 키 토글)는 쓰지 않는다(사용자 지시) — 나머지 옵션은 확정 후 Action Popup에서.
 /// LMB/Enter = 확정(마지막 Bevel 옵션으로 저장되어 Action Popup에서 계속 조정), RMB/Esc = 취소. 미리보기는 원본을 복사해 매번 다시 계산한다.
 /// </summary>
 public sealed class BevelTool : ToolBase, IModalTool
@@ -186,23 +185,6 @@ public sealed class BevelTool : ToolBase, IModalTool
                 if (_typed.Length > 0) { ApplyTyped(); return true; }
                 Confirm(); return true;
             case Key.Backspace: if (_typed.Length > 0) { _typed = _typed[..^1]; ApplyTyped(keepText: true); } return true;
-            case Key.A: StartMode(Mode.Width); break;
-            case Key.S: StartMode(Mode.Segments); break;
-            case Key.P: StartMode(Mode.Profile); break;
-            case Key.V:
-                Restore();
-                _o = _o with { Affect = _o.Affect == BevelAffect.Edges ? BevelAffect.Vertices : BevelAffect.Edges };
-                if (!Collect()) { _o = _o with { Affect = _o.Affect == BevelAffect.Edges ? BevelAffect.Vertices : BevelAffect.Edges }; Collect(); }
-                break;
-            case Key.M: _o = _o with { WidthType = (BevelWidthType)(((int)_o.WidthType + 1) % 5) }; break;
-            case Key.C: _o = _o with { ClampOverlap = !_o.ClampOverlap }; break;
-            case Key.H: _o = _o with { HardenNormals = !_o.HardenNormals }; break;
-            case Key.U: _o = _o with { MarkSeams = !_o.MarkSeams }; break;
-            case Key.K: _o = _o with { MarkSharp = !_o.MarkSharp }; break;
-            case Key.O: _o = _o with { MiterOuter = (BevelMiter)(((int)_o.MiterOuter + 1) % 3) }; break;
-            case Key.I: _o = _o with { MiterInner = _o.MiterInner == BevelMiter.Arc ? BevelMiter.Sharp : BevelMiter.Arc }; break;
-            case Key.N: _o = _o with { Intersection = (BevelIntersection)(((int)_o.Intersection + 1) % 3) }; break;
-            case Key.Z: _o = _o with { ProfileType = _o.ProfileType == BevelProfileType.Custom ? BevelProfileType.Superellipse : BevelProfileType.Custom }; break;
             default:
                 {
                     // 숫자 입력: 0-9 . -
@@ -270,11 +252,8 @@ public sealed class BevelTool : ToolBase, IModalTool
         string Mark(Mode m, string s) => _mode == m ? $"[{s}{(_typed.Length > 0 ? " = " + _typed : "")}]" : s;
         string[] wt = { "Offset", "Width", "Depth", "Percent", "Absolute" };
         Ctx.SetHelp?.Invoke(
-            $"Bevel {(_o.Affect == BevelAffect.Vertices ? "Vertices" : "Edges")}:  {Mark(Mode.Width, $"(A)Width {_o.Width:0.###}{(_o.WidthType == BevelWidthType.Percent ? "%" : "")}")}  " +
-            $"{Mark(Mode.Segments, $"(S)Segments {_o.Segments}")}  {Mark(Mode.Profile, $"(P)Shape {_o.Shape:0.00}")}  " +
-            $"(M){wt[(int)_o.WidthType]}  (C)Clamp {(_o.ClampOverlap ? "on" : "off")}  (H)Harden {(_o.HardenNormals ? "on" : "off")}  " +
-            $"(U)Seams {(_o.MarkSeams ? "on" : "off")}  (K)Sharp {(_o.MarkSharp ? "on" : "off")}  (O)Outer {_o.MiterOuter}  (I)Inner {_o.MiterInner}  " +
-            $"(N){_o.Intersection}  (Z){_o.ProfileType}  (V)Affect  |  wheel segments, Shift fine, Ctrl snap, LMB/Enter OK, RMB/Esc cancel");
+            $"Bevel {(_o.Affect == BevelAffect.Vertices ? "Vertices" : "Edges")}:  {Mark(Mode.Width, $"Width {_o.Width:0.###}{(_o.WidthType == BevelWidthType.Percent ? "%" : "")} ({wt[(int)_o.WidthType]})")}  " +
+            $"Segments {_o.Segments}  Shape {_o.Shape:0.00}  |  move = width, wheel = segments, type a number, Shift fine, Ctrl snap, LMB/Enter OK, RMB/Esc cancel. Other options: Action Popup after confirming.");
     }
 
     /// <summary>확정: 원본으로 되돌린 뒤 옵션을 저장하고 Bevel 액션으로 실행(Undo·구성 이력·Action Popup).</summary>
