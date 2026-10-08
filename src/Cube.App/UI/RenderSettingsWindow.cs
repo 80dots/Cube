@@ -12,7 +12,8 @@ public partial class RenderSettingsWindow : FloatingPanel
     private Shell _shell = null!;
     private CheckBox _ibl = null!, _showBg = null!, _headlight = null!, _shadows = null!, _ssao = null!, _fxaa = null!;
     private OptionButton _hdri = null!, _tonemap = null!, _msaa = null!;
-    private SpinBox _intensity = null!, _rotation = null!, _exposure = null!;
+    private SpinBox _intensity = null!, _rotation = null!, _exposure = null!, _blurSpin = null!;
+    private HSlider _blurSlider = null!;
     private Label _custom = null!;
     private bool _building;
 
@@ -93,6 +94,22 @@ public partial class RenderSettingsWindow : FloatingPanel
         _intensity = Spin(ibl, "Intensity", 0, 8, 0.05, R.IblIntensity, v => R.IblIntensity = v);
         _rotation = Spin(ibl, "Rotation", -360, 360, 5, R.IblRotation, v => R.IblRotation = v, "°");
         _showBg = Check(ibl, "Show HDRI as background", R.ShowBackground, v => R.ShowBackground = v);
+        // 배경 흐림 0(끔)~9단계: 슬라이더와 숫자 칸이 함께 움직인다(조명은 원본 HDRI 그대로)
+        ibl.AddChild(new Label { Text = "Background blur", TooltipText = "Blur the HDRI only where it is shown as the background (0 = sharp, 9 = very blurry). Lighting and reflections keep the sharp HDRI." });
+        var blurRow = new HBoxContainer { CustomMinimumSize = new Vector2(200 * s, 0) };
+        _blurSlider = new HSlider { MinValue = 0, MaxValue = Core.IO.PanoramaBlur.MaxLevel, Step = 1, Value = R.BackgroundBlur, TickCount = Core.IO.PanoramaBlur.MaxLevel + 1, TicksOnBorders = true, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ShrinkCenter, FocusMode = Control.FocusModeEnum.None };
+        _blurSpin = new SpinBox { MinValue = 0, MaxValue = Core.IO.PanoramaBlur.MaxLevel, Step = 1, Value = R.BackgroundBlur, Rounded = true };
+        void SetBlur(double v)
+        {
+            if (_building) return;
+            int lv = (int)Math.Round(v);
+            _building = true; _blurSlider.Value = lv; _blurSpin.Value = lv; _building = false;
+            if (R.BackgroundBlur == lv) return;
+            R.BackgroundBlur = lv; Apply();
+        }
+        _blurSlider.ValueChanged += SetBlur; _blurSpin.ValueChanged += SetBlur;
+        blurRow.AddChild(_blurSlider); blurRow.AddChild(_blurSpin);
+        ibl.AddChild(blurRow);
         var note = new Label { Text = "Built-in HDRIs: Poly Haven, CC0 (1k). IBL affects Shaded/Textured/Lit modes.", AutowrapMode = TextServer.AutowrapMode.WordSmart };
         note.AddThemeColorOverride("font_color", MayaTheme.TextDim);
         box.AddChild(note);
@@ -147,6 +164,7 @@ public partial class RenderSettingsWindow : FloatingPanel
         _hdri.Selected = R.Hdri == HdriLibrary.Custom ? _hdri.ItemCount - 1 : Math.Max(0, Array.FindIndex(HdriLibrary.BuiltIn, b => b.id == R.Hdri));
         _custom.Text = System.IO.Path.GetFileName(R.HdriPath ?? "");
         _intensity.Value = R.IblIntensity; _rotation.Value = R.IblRotation; _exposure.Value = R.Exposure;
+        _blurSlider.Value = R.BackgroundBlur; _blurSpin.Value = R.BackgroundBlur;
         _tonemap.Selected = R.Tonemap; _msaa.Selected = R.Msaa;
         _building = false;
     }

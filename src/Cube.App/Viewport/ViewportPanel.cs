@@ -128,7 +128,7 @@ public partial class ViewportPanel : SubViewportContainer
 
     private Godot.Environment _env = null!;
     private Sky? _sky;
-    private PanoramaSkyMaterial? _skyMat;
+    private ShaderMaterial? _skyMat;
 
     /// <summary>Settings.Render(IBL HDRI/세기/회전/배경, 톤 매핑/노출, SSAO, MSAA/FXAA, 헤드라이트/그림자)를 이 패널에 적용한다.</summary>
     public void ApplyRenderSettings()
@@ -138,8 +138,12 @@ public partial class ViewportPanel : SubViewportContainer
         bool ibl = tex != null;
         if (ibl)
         {
-            _skyMat ??= new PanoramaSkyMaterial { Filter = true };
-            _skyMat.Panorama = tex;
+            // PanoramaSkyMaterial 대신 하늘 셰이더: 배경 패스만 흐린 파노라마(Background Blur), 조명용 큐브맵 패스는 원본
+            _skyMat ??= new ShaderMaterial { Shader = HdriBlur.SkyShader };
+            _skyMat.SetShaderParameter("source", tex);
+            var blurred = HdriBlur.Blurred(tex!, r.BackgroundBlur);
+            _skyMat.SetShaderParameter("blurred", blurred);
+            _skyMat.SetShaderParameter("use_blur", blurred != null);
             _sky ??= new Sky { SkyMaterial = _skyMat, RadianceSize = Sky.RadianceSizeEnum.Size256, ProcessMode = Sky.ProcessModeEnum.Realtime };
             _env.Sky = _sky;
         }

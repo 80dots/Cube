@@ -45,6 +45,8 @@ public sealed class RenderSettings
     [JsonPropertyName("iblIntensity")] public float IblIntensity { get; set; } = 0.6f;
     [JsonPropertyName("iblRotation")] public float IblRotation { get; set; }
     [JsonPropertyName("showBackground")] public bool ShowBackground { get; set; }
+    /// <summary>HDRI 배경 흐림 단계 0(끔)~9. 배경으로 그릴 때만 적용되고 조명(앰비언트·반사)은 원본 HDRI를 쓴다.</summary>
+    [JsonPropertyName("backgroundBlur")] public int BackgroundBlur { get; set; }
     /// <summary>0 Linear, 1 Reinhard, 2 Filmic, 3 ACES, 4 AgX.</summary>
     [JsonPropertyName("tonemap")] public int Tonemap { get; set; }
     [JsonPropertyName("exposure")] public float Exposure { get; set; } = 1f;
