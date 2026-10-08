@@ -81,6 +81,8 @@ public sealed class ViewportDisplay
     {
         Mode = mode;
         _panel.HeadLight.Visible = mode != ShadingMode.Lit && CubeApp.Instance.Settings.Render.Headlight;
+        // Use All Lights(7)만 씬 라이트로 비춘다. 다른 모드는 기본 조명(헤드라이트)만(Maya Default Lighting)
+        _panel.Scene.SetSceneLights(mode == ShadingMode.Lit);
         RefreshAll();
         ModeChanged?.Invoke();
     }
@@ -107,7 +109,8 @@ public sealed class ViewportDisplay
 
         s.ShowSurface = Mode != ShadingMode.Wireframe;
         var matDef = _doc?.FindMaterial(mv.Node.MaterialId);
-        s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : matDef != null ? MaterialCache.Get(matDef) : null;
+        // Smooth Shade All(5)은 텍스처 없이 머티리얼 값만, Textured(6)/Use All Lights(7)는 텍스처까지(Maya와 같음)
+        s.SurfaceMaterial = Mode == ShadingMode.UvGrid ? UvGridMaterial : matDef != null ? MaterialCache.Get(matDef, textured: Mode != ShadingMode.Shaded) : null;
         mv.MappedTexture = matDef != null ? MaterialCache.LoadTexture(matDef.TexturePath) : null;
         var wd = UI.Shell.Instance?.WeightDisplay;
         s.WeightOf = wd is { } w && w.node == id ? w.weight : null;

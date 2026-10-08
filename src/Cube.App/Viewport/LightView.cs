@@ -50,9 +50,17 @@ public partial class LightView : Node3D
         _light!.LightColor = col;
         _light.LightEnergy = l.Intensity;
         _light.ShadowEnabled = CubeApp.Instance.Settings.Render.Shadows;
+        // 씬 라이트는 그 패널이 Use All Lights(7) 모드일 때만 비춘다(SceneView.SceneLightsOn)
+        _light.Visible = FindScene(this)?.SceneLightsOn ?? true;
         if (_light is OmniLight3D o) o.OmniRange = l.Range;
         if (_light is SpotLight3D s) { s.SpotRange = l.Range; s.SpotAngle = l.SpotAngle * 0.5f; }
         BuildIcon(l);
+    }
+
+    private static SceneView? FindScene(Node n)
+    {
+        for (Node? c = n.GetParent(); c != null; c = c.GetParent()) if (c is SceneView sv) return sv;
+        return null;
     }
 
     private void BuildIcon(LightShape l)

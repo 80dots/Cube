@@ -158,6 +158,14 @@ public partial class SceneView : Node3D
     }
 
     /// <summary>모든 조인트의 본(자식 위치)을 다시 그린다(바뀌지 않은 조인트는 JointView가 건너뛴다).</summary>
+    /// <summary>씬 라이트(LightView의 Godot 라이트)를 켤지: Use All Lights 모드에서만 켠다. 아이콘은 항상 보인다.</summary>
+    public bool SceneLightsOn { get; private set; }
+    public void SetSceneLights(bool on)
+    {
+        SceneLightsOn = on;
+        foreach (var lv in _lightViews.Values) lv.Refresh();
+    }
+
     public void RefreshJoints() { foreach (var jv in _jointViews.Values) jv.Refresh(); }
 
     /// <summary>스킨 메시 전체의 변형 위치를 다시 계산한다(조인트 이동 등).</summary>

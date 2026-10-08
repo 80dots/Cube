@@ -57,14 +57,15 @@ public static class PieMenus
         var doc = shell.Document;
         var active = doc.Find(doc.Selection.ActiveObject);
         int current = active?.MaterialId ?? -1;
+        // 항목마다 구 썸네일(Material Editor와 같은 방식, Shell.PieThumbnail)
         var list = new List<PieItem>
         {
-            new("lambert1" + (current == 0 ? " •" : ""), "material.assign.0") { Run = () => shell.AssignMaterialToSelection(0) },
+            new("lambert1" + (current == 0 ? " •" : ""), "material.assign.0") { Run = () => shell.AssignMaterialToSelection(0), Icon = shell.PieThumbnail(null) },
         };
         foreach (var m in doc.Materials)
         {
             int id = m.Id;
-            list.Add(new PieItem(m.Name + (current == id ? " •" : ""), "material.assign." + id) { Run = () => shell.AssignMaterialToSelection(id) });
+            list.Add(new PieItem(m.Name + (current == id ? " •" : ""), "material.assign." + id) { Run = () => shell.AssignMaterialToSelection(id), Icon = shell.PieThumbnail(m) });
         }
         list.Add(Item(shell, "windows.materialEditor", "Material Editor..."));
         return list;

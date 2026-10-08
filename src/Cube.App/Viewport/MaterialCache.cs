@@ -11,7 +11,7 @@ namespace Cube.App.Viewport;
 /// </summary>
 public static class MaterialCache
 {
-    private static readonly Dictionary<int, (ShaderMaterial mat, string key)> _cache = new();
+    private static readonly Dictionary<(int id, bool textured), (ShaderMaterial mat, string key)> _cache = new();
     private static readonly Dictionary<string, Shader> _shaders = new();
     private static Texture2D? _defaultMatcap;
     private static readonly Dictionary<string, Texture2D?> _images = new();
@@ -128,25 +128,35 @@ void fragment() {
         return sb.ToString();
     }
 
-    public static ShaderMaterial Get(MaterialDef def)
+    /// <summary>
+    /// 머티리얼의 뷰포트용 ShaderMaterial. textured=false(Smooth Shade All, Maya 5)는 같은 셰이더에 모든 텍스처를 끈 변형을 따로 캐시한다
+    /// (색·노멀 강도·메탈릭 등 값은 그대로, 이미지 맵만 끔).
+    /// </summary>
+    public static ShaderMaterial Get(MaterialDef def, bool textured = true)
     {
         string key = ShaderKey(def);
-        if (!_cache.TryGetValue(def.Id, out var entry) || entry.key != key)
+        var ck = (def.Id, textured);
+        if (!_cache.TryGetValue(ck, out var entry) || entry.key != key)
         {
             entry = (new ShaderMaterial { Shader = ShaderFor(def) }, key);
-            _cache[def.Id] = entry;
+            _cache[ck] = entry;
         }
+        _textured = textured;
         Apply(entry.mat, def);
+        _textured = true;
         return entry.mat;
     }
 
-    public static void Invalidate(int id) => _cache.Remove(id);
+    /// <summary>Apply 중 텍스처 사용 여부(Get이 설정).</summary>
+    private static bool _textured = true;
+
+    public static void Invalidate(int id) { _cache.Remove((id, true)); _cache.Remove((id, false)); }
 
     private static Color C(System.Numerics.Vector3 v) => new(v.X, v.Y, v.Z);
 
     private static void Tex(ShaderMaterial m, MaterialDef d, string key, string uniform)
     {
-        var t = LoadTexture(d.Tex(key));
+        var t = _textured ? LoadTexture(d.Tex(key)) : null;
         m.SetShaderParameter("use_" + uniform + "_tex", t != null);
         if (t != null) m.SetShaderParameter(uniform + "_tex", t);
     }
@@ -154,7 +164,7 @@ void fragment() {
     private static void Apply(ShaderMaterial m, MaterialDef d)
     {
         m.SetShaderParameter("albedo", C(d.Color));
-        var tex = LoadTexture(d.TexturePath);
+        var tex = _textured ? LoadTexture(d.TexturePath) : null;
         m.SetShaderParameter("use_texture", tex != null);
         if (tex != null) m.SetShaderParameter("albedo_tex", tex);
         m.SetShaderParameter("alpha", d.GetF("alpha"));

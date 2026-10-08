@@ -26,6 +26,7 @@ public partial class Shell : Control
     public HBoxContainer UvShelf { get; private set; } = null!;
     public HBoxContainer RigShelf { get; private set; } = null!;
     public HBoxContainer LightShelf { get; private set; } = null!;
+    public HBoxContainer RenderShelf { get; private set; } = null!;
     private readonly List<(Button button, string action)> _shelfButtons = new();
     public VBoxContainer ToolBox { get; private set; } = null!;
     /// <summary>Outliner를 담은 도킹 가능한 패널(기본: 왼쪽 도크).</summary>
@@ -104,6 +105,7 @@ public partial class Shell : Control
         UvShelf = MakeShelfTab("UV");
         RigShelf = MakeShelfTab("Rigging");
         LightShelf = MakeShelfTab("Light");
+        RenderShelf = MakeShelfTab("Render");
         ShelfRow.AddChild(Shelf);
         ShelfRow.AddChild(new VSeparator());
         var bridgePanel = new PanelContainer { Name = "BridgePanel" };
@@ -386,6 +388,11 @@ public partial class Shell : Control
             new[] { ("display.lit", "All Lights", "view_lit"), ("render.headlight", "Headlight", "light_headlight"), ("render.shadows", "Shadows", "light_shadows") },
             new[] { ("render.ibl", "IBL", "light_ibl"), ("render.background", "HDRI BG", "light_background"), ("render.nextHdri", "Next HDRI", "light_next_hdri") },
             new[] { ("select.lights", "Select Lights", "light_select"), ("windows.renderSettings", "Render Settings", "render_settings") });
+        Fill(RenderShelf,
+            new[] { ("windows.renderSettings", "Settings", "render_settings"), ("render.ibl", "IBL", "light_ibl"), ("render.background", "HDRI BG", "light_background"), ("render.nextHdri", "Next HDRI", "light_next_hdri"), ("render.headlight", "Headlight", "light_headlight"), ("render.shadows", "Shadows", "light_shadows") },
+            new[] { ("render.ssao", "SSAO", "render_ssao"), ("render.glow", "Glow", "render_glow"), ("render.ssr", "SSR", "render_ssr"), ("render.ssil", "SSIL", "render_ssil"), ("render.sdfgi", "SDFGI", "render_sdfgi") },
+            new[] { ("render.fog", "Fog", "render_fog"), ("render.volumetricFog", "Vol. Fog", "render_volfog"), ("render.adjust", "Color Adj.", "render_adjust"), ("render.dof", "DOF", "render_dof"), ("render.autoExposure", "Auto Exp.", "render_autoexp") },
+            new[] { ("render.fxaa", "FXAA", "render_fxaa"), ("render.smaa", "SMAA", "render_smaa"), ("render.taa", "TAA", "render_taa"), ("render.debanding", "Debanding", "render_debanding"), ("render.postReset", "All Off", "render_off") });
         Document.Selection.Changed += RefreshShelf;
         Document.Selection.ModeChanged += RefreshShelf;
         Tools.ToolChanged += _ => RefreshShelf();

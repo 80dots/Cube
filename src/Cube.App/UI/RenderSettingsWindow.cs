@@ -18,6 +18,8 @@ public partial class RenderSettingsWindow : FloatingPanel
     private bool _building;
 
     private static RenderSettings R => CubeApp.Instance.Settings.Render;
+    /// <summary>Post Effects 컨트롤: Rebuild에서 Settings 값을 다시 읽는 함수들.</summary>
+    private readonly List<Action> _refreshers = new();
 
     public void Setup(Shell shell)
     {
@@ -125,10 +127,67 @@ public partial class RenderSettingsWindow : FloatingPanel
         _tonemap = Option(color, "Tone mapping", new[] { "Linear", "Reinhard", "Filmic", "ACES", "AgX" }, R.Tonemap, i => R.Tonemap = i);
         _exposure = Spin(color, "Exposure", 0.05, 8, 0.05, R.Exposure, v => R.Exposure = v);
 
+        // ---- Post Effects(Godot Environment / CameraAttributes): 메뉴·셸프 토글과 같은 값
+        void CheckG(GridContainer g, string label, Func<bool> get, Action<bool> set, string? tip = null)
+        {
+            var c = Check(g, label, get(), set);
+            if (tip != null) c.TooltipText = tip;
+            _refreshers.Add(() => c.ButtonPressed = get());
+        }
+        void SpinG(GridContainer g, string label, double min, double max, double step, Func<float> get, Action<float> set, string suffix = "")
+        {
+            var sb = Spin(g, label, min, max, step, get(), set, suffix);
+            _refreshers.Add(() => sb.Value = get());
+        }
+        var glow = Group("Post Effects — Glow (bloom)");
+        CheckG(glow, "Glow", () => R.Glow, v => R.Glow = v, "Bright areas bleed light (HDR glow/bloom)");
+        SpinG(glow, "Intensity", 0, 8, 0.05, () => R.GlowIntensity, v => R.GlowIntensity = v);
+        SpinG(glow, "Bloom", 0, 1, 0.01, () => R.GlowBloom, v => R.GlowBloom = v);
+        SpinG(glow, "HDR threshold", 0, 4, 0.05, () => R.GlowThreshold, v => R.GlowThreshold = v);
+        var glowBlend = Option(glow, "Blend mode", new[] { "Additive", "Screen", "Softlight", "Replace", "Mix" }, R.GlowBlend, i => R.GlowBlend = i);
+        _refreshers.Add(() => glowBlend.Selected = R.GlowBlend);
+
+        var ss = Group("Post Effects — Reflections & Global Illumination");
+        CheckG(ss, "Screen-space reflections (SSR)", () => R.Ssr, v => R.Ssr = v, "Reflections of on-screen objects on glossy surfaces");
+        SpinG(ss, "SSR max steps", 8, 512, 8, () => R.SsrMaxSteps, v => R.SsrMaxSteps = (int)v);
+        CheckG(ss, "Screen-space indirect light (SSIL)", () => R.Ssil, v => R.Ssil = v, "Light bouncing between nearby surfaces (screen space)");
+        SpinG(ss, "SSIL intensity", 0, 16, 0.1, () => R.SsilIntensity, v => R.SsilIntensity = v);
+        CheckG(ss, "SDFGI (global illumination)", () => R.Sdfgi, v => R.Sdfgi = v, "Signed-distance-field global illumination (heavier)");
+
+        var fog = Group("Post Effects — Fog");
+        CheckG(fog, "Fog", () => R.Fog, v => R.Fog = v);
+        SpinG(fog, "Fog density", 0, 1, 0.001, () => R.FogDensity, v => R.FogDensity = v);
+        fog.AddChild(new Label { Text = "Fog color" });
+        var fogCol = new ColorPickerButton { Color = new Color(R.FogColor[0], R.FogColor[1], R.FogColor[2]), CustomMinimumSize = new Vector2(140 * s, 0), EditAlpha = false };
+        fogCol.ColorChanged += c => { if (_building) return; R.FogColor = new[] { c.R, c.G, c.B }; Apply(); };
+        fog.AddChild(fogCol);
+        _refreshers.Add(() => fogCol.Color = new Color(R.FogColor[0], R.FogColor[1], R.FogColor[2]));
+        CheckG(fog, "Volumetric fog", () => R.VolumetricFog, v => R.VolumetricFog = v, "3D fog that scatters light (lit by scene lights / IBL)");
+        SpinG(fog, "Volumetric density", 0, 1, 0.005, () => R.VolumetricFogDensity, v => R.VolumetricFogDensity = v);
+
+        var adj = Group("Post Effects — Color Adjustment");
+        CheckG(adj, "Color adjustment", () => R.Adjust, v => R.Adjust = v);
+        SpinG(adj, "Brightness", 0.01, 8, 0.01, () => R.Brightness, v => R.Brightness = v);
+        SpinG(adj, "Contrast", 0.01, 8, 0.01, () => R.Contrast, v => R.Contrast = v);
+        SpinG(adj, "Saturation", 0, 8, 0.01, () => R.Saturation, v => R.Saturation = v);
+
+        var cam = Group("Post Effects — Camera");
+        CheckG(cam, "Depth of field: far blur", () => R.DofFar, v => R.DofFar = v);
+        SpinG(cam, "Far distance", 0, 10000, 0.1, () => R.DofFarDistance, v => R.DofFarDistance = v, " m");
+        SpinG(cam, "Far transition", 0, 10000, 0.1, () => R.DofFarTransition, v => R.DofFarTransition = v, " m");
+        CheckG(cam, "Depth of field: near blur", () => R.DofNear, v => R.DofNear = v);
+        SpinG(cam, "Near distance", 0, 10000, 0.05, () => R.DofNearDistance, v => R.DofNearDistance = v, " m");
+        SpinG(cam, "Near transition", 0, 10000, 0.05, () => R.DofNearTransition, v => R.DofNearTransition = v, " m");
+        SpinG(cam, "Blur amount", 0, 1, 0.01, () => R.DofAmount, v => R.DofAmount = v);
+        CheckG(cam, "Auto exposure", () => R.AutoExposure, v => R.AutoExposure = v, "Adapts exposure to scene brightness over time");
+
         // ---- Quality
         var q = Group("Anti-aliasing");
         _msaa = Option(q, "MSAA", new[] { "Off", "2x", "4x", "8x" }, R.Msaa, i => R.Msaa = i);
         _fxaa = Check(q, "FXAA", R.Fxaa, v => R.Fxaa = v);
+        CheckG(q, "SMAA (overrides FXAA)", () => R.Smaa, v => R.Smaa = v);
+        CheckG(q, "TAA (temporal)", () => R.Taa, v => R.Taa = v);
+        CheckG(q, "Debanding", () => R.Debanding, v => R.Debanding = v, "Dither to hide color banding in gradients");
 
         var buttons = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
         var reset = new Button { Text = "Reset to Defaults", FocusMode = Control.FocusModeEnum.None };
@@ -166,6 +225,7 @@ public partial class RenderSettingsWindow : FloatingPanel
         _intensity.Value = R.IblIntensity; _rotation.Value = R.IblRotation; _exposure.Value = R.Exposure;
         _blurSlider.Value = R.BackgroundBlur; _blurSpin.Value = R.BackgroundBlur;
         _tonemap.Selected = R.Tonemap; _msaa.Selected = R.Msaa;
+        foreach (var r in _refreshers) r();
         _building = false;
     }
 

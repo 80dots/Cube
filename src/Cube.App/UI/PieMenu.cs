@@ -9,6 +9,8 @@ public sealed record PieItem(string Label, string ActionId, bool Enabled = true)
     public Func<List<PieItem>>? Sub { get; init; }
     /// <summary>ActionId 대신 직접 실행할 동작(동적 항목용).</summary>
     public Action? Run { get; init; }
+    /// <summary>항목 왼쪽에 그릴 아이콘(머티리얼 썸네일 등).</summary>
+    public Texture2D? Icon { get; init; }
 }
 
 /// <summary>
@@ -63,10 +65,10 @@ public partial class PieMenu : Control
     {
         _rects.Clear();
         float s = CubeApp.Instance.UiScale;
-        float padX = 10 * s, h = 24 * s;
+        float padX = 10 * s, h = (_items.Any(it => it.Icon != null) ? IconPx + 6 : 24) * s;
         for (int i = 0; i < _items.Count; i++)
         {
-            float w = _font.GetStringSize(_items[i].Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2;
+            float w = ItemWidth(_items[i], padX, s);
             Vector2 pos;
             if (i < 8)
             {
@@ -90,7 +92,7 @@ public partial class PieMenu : Control
                 if (perCol < 6 && perColAbove > perCol) { perCol = perColAbove; startY = aboveSpace - perCol * (h + 4 * s); if (startY < 4 * s) startY = 4 * s; }
                 int cols = (overflow + perCol - 1) / perCol;
                 float colW = 0;
-                for (int j = 8; j < _items.Count; j++) colW = MathF.Max(colW, _font.GetStringSize(_items[j].Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2);
+                for (int j = 8; j < _items.Count; j++) colW = MathF.Max(colW, ItemWidth(_items[j], padX, s));
                 float gap = 8 * s;
                 int k = i - 8, col = k / perCol, row = k % perCol;
                 float blockW = cols * colW + (cols - 1) * gap;
@@ -100,6 +102,12 @@ public partial class PieMenu : Control
             _rects.Add(new Rect2(pos, new Vector2(w, h)));
         }
     }
+
+    /// <summary>아이콘 크기(UI 배율 1 기준 px).</summary>
+    private const float IconPx = 34;
+
+    private float ItemWidth(PieItem it, float padX, float s)
+        => _font.GetStringSize(it.Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2 + (it.Icon != null ? (IconPx + 6) * s : 0);
 
     /// <summary>마우스 위치로 하이라이트 갱신.</summary>
     public void UpdatePointer(Vector2 local)
@@ -180,7 +188,17 @@ public partial class PieMenu : Control
             DrawStyleBox(style, r);
             var col = !enabled ? dim : hover ? Colors.White : text;
             var size = _font.GetStringSize(_items[i].Label, HorizontalAlignment.Left, -1, _fontSize);
-            DrawString(_font, new Vector2(r.Position.X + (r.Size.X - size.X) / 2, r.Position.Y + (r.Size.Y + size.Y) / 2 - _font.GetDescent(_fontSize)), _items[i].Label, HorizontalAlignment.Left, -1, _fontSize, col);
+            float textX = r.Position.X + (r.Size.X - size.X) / 2;
+            if (_items[i].Icon is { } icon)
+            {
+                // 아이콘은 왼쪽, 글자는 그 오른쪽(남는 폭 가운데)
+                float ip = IconPx * s;
+                var ir = new Rect2(r.Position.X + 4 * s, r.Position.Y + (r.Size.Y - ip) / 2, ip, ip);
+                DrawTextureRect(icon, ir, false, enabled ? Colors.White : new Color(1, 1, 1, 0.4f));
+                float rest = r.Size.X - (ip + 8 * s);
+                textX = r.Position.X + ip + 8 * s + (rest - size.X) / 2;
+            }
+            DrawString(_font, new Vector2(textX, r.Position.Y + (r.Size.Y + size.Y) / 2 - _font.GetDescent(_fontSize)), _items[i].Label, HorizontalAlignment.Left, -1, _fontSize, col);
         }
     }
 }

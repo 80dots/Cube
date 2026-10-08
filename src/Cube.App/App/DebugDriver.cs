@@ -533,6 +533,13 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] {p[0]} {id} {p[2]} = {(p[0] == "matset" ? after.Get(p[2]).ToString() : after.Tex(p[2]) ?? "(none)")}");
                     break;
                 }
+            case "matpie":   // matpie: Assign Material 서브 파이(썸네일 포함)를 활성 뷰포트 가운데에 연다
+                {
+                    var vp = UI.Shell.Instance.Viewport;
+                    vp.Pie.Open(UI.PieMenus.MaterialItems(UI.Shell.Instance), vp.Size / 2, sticky: true, title: "Assign Material ▸");
+                    GD.Print($"[Drive] matpie open={vp.Pie.IsOpen}");
+                    break;
+                }
             case "mkpng":
                 {
                     // mkpng PATH R G B [SIZE] : 테스트용 그라디언트 PNG(R/G/B 0..255 기준색, 가로로 밝기 0→1)

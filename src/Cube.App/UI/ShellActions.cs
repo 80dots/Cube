@@ -612,7 +612,10 @@ public partial class Shell
         Menus.Build(Add("Render"))
             .Item("windows.renderSettings").Separator()
             .Item("render.ibl").Item("render.background").Item("render.nextHdri").Separator()
-            .Item("render.headlight").Item("render.shadows");
+            .Item("render.headlight").Item("render.shadows").Separator()
+            .Submenu("Post Effects", m => m.Item("render.ssao").Item("render.glow").Item("render.ssr").Item("render.ssil").Item("render.sdfgi").Separator()
+                .Item("render.fog").Item("render.volumetricFog").Separator().Item("render.adjust").Item("render.dof").Item("render.autoExposure").Separator().Item("render.postReset"))
+            .Submenu("Anti-aliasing", m => m.Item("render.fxaa").Item("render.smaa").Item("render.taa").Separator().Item("render.debanding"));
 
         Menus.Build(Add("Bridge"))
             .Item("bridge.blenderAll").Item("bridge.blenderSelected").Separator().Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()

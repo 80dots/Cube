@@ -56,6 +56,39 @@ public sealed class RenderSettings
     /// <summary>0 off, 1 2x, 2 4x, 3 8x.</summary>
     [JsonPropertyName("msaa")] public int Msaa { get; set; } = 2;
     [JsonPropertyName("fxaa")] public bool Fxaa { get; set; }
+
+    // ---- Post Effects(Godot Environment / CameraAttributes / Viewport, v0.0.48)
+    [JsonPropertyName("glow")] public bool Glow { get; set; }
+    [JsonPropertyName("glowIntensity")] public float GlowIntensity { get; set; } = 0.8f;
+    [JsonPropertyName("glowBloom")] public float GlowBloom { get; set; } = 0.1f;
+    [JsonPropertyName("glowThreshold")] public float GlowThreshold { get; set; } = 1f;
+    /// <summary>0 Additive, 1 Screen, 2 Softlight, 3 Replace, 4 Mix.</summary>
+    [JsonPropertyName("glowBlend")] public int GlowBlend { get; set; } = 2;
+    [JsonPropertyName("ssr")] public bool Ssr { get; set; }
+    [JsonPropertyName("ssrMaxSteps")] public int SsrMaxSteps { get; set; } = 64;
+    [JsonPropertyName("ssil")] public bool Ssil { get; set; }
+    [JsonPropertyName("ssilIntensity")] public float SsilIntensity { get; set; } = 1f;
+    [JsonPropertyName("sdfgi")] public bool Sdfgi { get; set; }
+    [JsonPropertyName("fog")] public bool Fog { get; set; }
+    [JsonPropertyName("fogDensity")] public float FogDensity { get; set; } = 0.01f;
+    [JsonPropertyName("fogColor")] public float[] FogColor { get; set; } = { 0.55f, 0.6f, 0.68f };
+    [JsonPropertyName("volumetricFog")] public bool VolumetricFog { get; set; }
+    [JsonPropertyName("volumetricFogDensity")] public float VolumetricFogDensity { get; set; } = 0.03f;
+    [JsonPropertyName("adjust")] public bool Adjust { get; set; }
+    [JsonPropertyName("brightness")] public float Brightness { get; set; } = 1f;
+    [JsonPropertyName("contrast")] public float Contrast { get; set; } = 1f;
+    [JsonPropertyName("saturation")] public float Saturation { get; set; } = 1f;
+    [JsonPropertyName("dofFar")] public bool DofFar { get; set; }
+    [JsonPropertyName("dofFarDistance")] public float DofFarDistance { get; set; } = 8f;
+    [JsonPropertyName("dofFarTransition")] public float DofFarTransition { get; set; } = 4f;
+    [JsonPropertyName("dofNear")] public bool DofNear { get; set; }
+    [JsonPropertyName("dofNearDistance")] public float DofNearDistance { get; set; } = 1.5f;
+    [JsonPropertyName("dofNearTransition")] public float DofNearTransition { get; set; } = 1f;
+    [JsonPropertyName("dofAmount")] public float DofAmount { get; set; } = 0.1f;
+    [JsonPropertyName("autoExposure")] public bool AutoExposure { get; set; }
+    [JsonPropertyName("taa")] public bool Taa { get; set; }
+    [JsonPropertyName("smaa")] public bool Smaa { get; set; }
+    [JsonPropertyName("debanding")] public bool Debanding { get; set; }
 }
 
 /// <summary>Bridge(외부 앱 연동) 설정: 실행 파일 경로, Tripo3D API 키, 자동 다시 읽기.</summary>

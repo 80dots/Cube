@@ -161,10 +161,54 @@ public partial class ViewportPanel : SubViewportContainer
         _env.TonemapExposure = r.Exposure;
         _env.SsaoEnabled = r.Ssao;
         Viewport.Msaa3D = r.Msaa switch { 0 => Godot.Viewport.Msaa.Disabled, 1 => Godot.Viewport.Msaa.Msaa2X, 2 => Godot.Viewport.Msaa.Msaa4X, _ => Godot.Viewport.Msaa.Msaa8X };
-        Viewport.ScreenSpaceAA = r.Fxaa ? Godot.Viewport.ScreenSpaceAAEnum.Fxaa : Godot.Viewport.ScreenSpaceAAEnum.Disabled;
+        Viewport.ScreenSpaceAA = r.Smaa ? Godot.Viewport.ScreenSpaceAAEnum.Smaa : r.Fxaa ? Godot.Viewport.ScreenSpaceAAEnum.Fxaa : Godot.Viewport.ScreenSpaceAAEnum.Disabled;
+        ApplyPostEffects(r);
         HeadLight.Visible = r.Headlight && Display.Mode != ShadingMode.Lit;
         HeadLight.ShadowEnabled = r.Shadows;
         foreach (var lv in Scene.LightViews.Values) lv.Refresh();
+    }
+
+    private CameraAttributesPractical? _camAttr;
+
+    /// <summary>Post Effects(Render Settings → Post Effects, Render 메뉴/셸프): Godot Environment·CameraAttributes·Viewport 기능을 켠다.</summary>
+    private void ApplyPostEffects(App.RenderSettings r)
+    {
+        _env.GlowEnabled = r.Glow;
+        _env.GlowIntensity = r.GlowIntensity;
+        _env.GlowBloom = r.GlowBloom;
+        _env.GlowHdrThreshold = r.GlowThreshold;
+        _env.GlowBlendMode = (Godot.Environment.GlowBlendModeEnum)Math.Clamp(r.GlowBlend, 0, 4);
+        _env.SsrEnabled = r.Ssr;
+        _env.SsrMaxSteps = Math.Clamp(r.SsrMaxSteps, 8, 512);
+        _env.SsilEnabled = r.Ssil;
+        _env.SsilIntensity = r.SsilIntensity;
+        _env.SdfgiEnabled = r.Sdfgi;
+        _env.FogEnabled = r.Fog;
+        _env.FogDensity = r.FogDensity;
+        _env.FogSkyAffect = 0.5f; // HDRI 배경이 완전히 덮이지 않게
+        if (r.FogColor is { Length: >= 3 } fc) _env.FogLightColor = new Color(fc[0], fc[1], fc[2]);
+        _env.VolumetricFogEnabled = r.VolumetricFog;
+        _env.VolumetricFogDensity = r.VolumetricFogDensity;
+        _env.AdjustmentEnabled = r.Adjust;
+        _env.AdjustmentBrightness = r.Brightness;
+        _env.AdjustmentContrast = r.Contrast;
+        _env.AdjustmentSaturation = r.Saturation;
+        bool camFx = r.DofFar || r.DofNear || r.AutoExposure;
+        if (camFx)
+        {
+            _camAttr ??= new CameraAttributesPractical();
+            _camAttr.DofBlurFarEnabled = r.DofFar;
+            _camAttr.DofBlurFarDistance = r.DofFarDistance;
+            _camAttr.DofBlurFarTransition = r.DofFarTransition;
+            _camAttr.DofBlurNearEnabled = r.DofNear;
+            _camAttr.DofBlurNearDistance = r.DofNearDistance;
+            _camAttr.DofBlurNearTransition = r.DofNearTransition;
+            _camAttr.DofBlurAmount = r.DofAmount;
+            _camAttr.AutoExposureEnabled = r.AutoExposure;
+        }
+        Camera.Attributes = camFx ? _camAttr : null;
+        Viewport.UseTaa = r.Taa;
+        Viewport.UseDebanding = r.Debanding;
     }
 
     /// <summary>front/side/back/left 같은 측면 프리셋 뷰에서는 그리드를 뷰 평면에 세운다(Maya와 동일). 텀블하면 바닥으로 돌아간다.</summary>
