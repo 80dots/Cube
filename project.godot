@@ -37,3 +37,5 @@ project/assembly_name="Cube"
 [rendering]
 
 rendering_device/driver.windows="d3d12"
+rendering_device/vsync/frame_queue_size=1
+rendering_device/vsync/swapchain_image_count=2

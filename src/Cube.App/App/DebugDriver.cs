@@ -31,6 +31,7 @@ public partial class DebugDriver : Node
 
     public override void _Process(double delta)
     {
+        UiPerf.Tick();
         if (_wait > 0) { _wait--; return; }
         while (_steps.Count > 0 && _wait == 0)
         {
@@ -39,7 +40,7 @@ public partial class DebugDriver : Node
             try { Exec(parts); }
             catch (Exception ex) { GD.PrintErr($"[Drive] '{step}': {ex.Message}"); }
             // 주입된 입력 이벤트는 다음 입력 플러시에서 처리되므로 입력 스텝 뒤에는 한 프레임 양보한다
-            if (parts[0] is "move" or "gmove" or "gdrag" or "grab" or "press" or "dblclick" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
+            if (parts[0] is "move" or "gmove" or "gdrag" or "grab" or "grip" or "dragger" or "press" or "dblclick" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
         }
         if (_steps.Count == 0 && _wait == 0) { GD.Print("[Drive] done"); QueueFree(); }
     }
@@ -63,6 +64,43 @@ public partial class DebugDriver : Node
                 _pos = new Vector2(float.Parse(p[1]), float.Parse(p[2])) - (Viewport?.GlobalPosition ?? Vector2.Zero);
                 Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });
                 break;
+            case "gdragn":  // gdragn X Y N: 전역 좌표까지 N프레임에 걸쳐 한 프레임에 한 번씩 이동(실제 드래그처럼; 성능 측정용)
+                {
+                    var target = new Vector2(float.Parse(p[1]), float.Parse(p[2])) - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    int n = Math.Max(1, int.Parse(p[3]));
+                    var start = _pos;
+                    var rest = _steps.ToList(); _steps.Clear();
+                    for (int i = 1; i <= n; i++) { var g = ToGlobal(start.Lerp(target, i / (float)n)); _steps.Enqueue($"gmove {g.X.ToString(System.Globalization.CultureInfo.InvariantCulture)} {g.Y.ToString(System.Globalization.CultureInfo.InvariantCulture)}"); }
+                    foreach (var s in rest) _steps.Enqueue(s);
+                    break;
+                }
+            case "perf":    // perf start LABEL | perf stop: --uiperf 측정 구간
+                if (p[1] == "start") UiPerf.Start(p.Length > 2 ? p[2] : "drag"); else UiPerf.Stop();
+                break;
+            case "grip":    // grip PANELID: 떠 있는 패널의 우하단 크기 조절 그립 위로 커서를 옮긴다
+                {
+                    var panel = UI.Shell.Instance.FindChildren("*", "", true, false).OfType<UI.FloatingPanel>().FirstOrDefault(f => f.PanelId == p[1]);
+                    if (panel == null) { GD.Print($"[Drive] grip: no panel {p[1]}"); break; }
+                    var g = panel.GlobalPosition + panel.Size - new Vector2(7, 7) * CubeApp.Instance.UiScale;
+                    _pos = g - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });
+                    GD.Print($"[Drive] grip {p[1]} at {g}");
+                    break;
+                }
+            case "dragger": // dragger NAME [I]: 스플리터(MainSplit/RightSplit/LeftDock/RightDock/DockRow)의 I번째 경계 위로 커서를 옮긴다
+                {
+                    var sc = UI.Shell.Instance.FindChildren(p[1], "SplitContainer", true, false).OfType<SplitContainer>().FirstOrDefault(c => c.IsVisibleInTree());
+                    if (sc == null) { GD.Print($"[Drive] dragger: no split {p[1]}"); break; }
+                    int i = p.Length > 2 ? int.Parse(p[2]) : 0;
+                    var kids = sc.GetChildren().OfType<Control>().Where(c => c.Visible && !c.TopLevel).ToList();
+                    if (i + 1 >= kids.Count) { GD.Print($"[Drive] dragger: {p[1]} has {kids.Count} children"); break; }
+                    var a = kids[i].GetGlobalRect(); var b = kids[i + 1].GetGlobalRect();
+                    var g = sc.Vertical ? new Vector2(a.GetCenter().X, (a.End.Y + b.Position.Y) / 2) : new Vector2((a.End.X + b.Position.X) / 2, a.GetCenter().Y);
+                    _pos = g - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });
+                    GD.Print($"[Drive] dragger {p[1]}[{i}] at {g} (gap {(sc.Vertical ? b.Position.Y - a.End.Y : b.Position.X - a.End.X):0})");
+                    break;
+                }
             case "gdrag":   // gdrag X Y: 버튼을 누른 채 전역 좌표까지 8단계로 이동
                 {
                     var target = new Vector2(float.Parse(p[1]), float.Parse(p[2])) - (Viewport?.GlobalPosition ?? Vector2.Zero);
