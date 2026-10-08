@@ -46,7 +46,7 @@ public partial class PaintWeightsWindow : FloatingPanel
         root.AddChild(Slider("Value", 0, 1, 0.01, tool.Value, out _value, out _valueLabel, v => _tool.Value = v, s));
         root.AddChild(Slider("Radius", 0.01, 5, 0.01, tool.Radius, out _radius, out _radiusLabel, v => _tool.Radius = v, s));
 
-        var buttons = new HBoxContainer();
+        var buttons = new HFlowContainer(); // 좁아지면 줄바꿈
         var flood = new Button { Text = "Flood", FocusMode = Control.FocusModeEnum.None, TooltipText = "Apply the value to every vertex" };
         flood.Pressed += () => _tool.Flood();
         buttons.AddChild(flood);

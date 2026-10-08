@@ -14,7 +14,8 @@ public partial class UvEditorWindow : FloatingPanel
     private readonly Dictionary<string, Button> _modeButtons = new();
     private readonly List<(Button b, string action)> _actionButtons = new();
     private OptionButton _background = null!;
-    private MenuBar _menuBar = null!;
+    /// <summary>메뉴 줄: 패널이 좁으면 다음 줄로 넘어가도록 MenuBar 대신 메뉴 버튼들을 흐름 컨테이너에 둔다.</summary>
+    private HFlowContainer _menuBar = null!;
 
     public void Setup(Shell shell)
     {
@@ -25,18 +26,22 @@ public partial class UvEditorWindow : FloatingPanel
         DockChanged += () => GetTree().CreateTimer(0.2).Timeout += () => { if (IsInstanceValid(Canvas)) Canvas.FrameAll(); }; // 도크 폭·행 경계 적용(타이머)이 끝난 뒤
         var host = shell.GetViewport().GetVisibleRect().Size;
         Size = new Vector2(MathF.Min(860 * s, host.X * 0.8f), MathF.Min(720 * s, host.Y * 0.85f));
-        MinPanelSize = new Vector2(520 * s, 390 * s);
+        MinPanelSize = new Vector2(260 * s, 300 * s); // 툴바·메뉴가 줄바꿈되므로 좁게 줄일 수 있다
 
         Canvas = new UvCanvas();
         Canvas.Setup(shell);
 
-        _menuBar = new MenuBar { Flat = true };
+        _menuBar = new HFlowContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        _menuBar.AddThemeConstantOverride("h_separation", 0);
+        _menuBar.AddThemeConstantOverride("v_separation", 0);
         BuildMenus();
         Content.AddChild(_menuBar);
 
         int icon = (int)(18 * s);
-        var bar = new HBoxContainer();
-        bar.AddThemeConstantOverride("separation", (int)(2 * s));
+        // 툴바: 패널 폭이 모자라면 버튼이 다음 줄(2줄, 3줄…)로 넘어가 모두 보인다
+        var bar = new HFlowContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        bar.AddThemeConstantOverride("h_separation", (int)(2 * s));
+        bar.AddThemeConstantOverride("v_separation", (int)(2 * s));
         foreach (var (key, iconName, action, tip) in new[] {
             ("object", "mode_object", "mode.object", "Object Mode"), ("uv", "mode_uv", "mode.uv", "UV Mode (F12)"),
             ("edge", "mode_edge", "mode.edge", "Edge Mode (F10)"), ("face", "mode_face", "mode.face", "Face Mode (F11)"),
@@ -82,10 +87,9 @@ public partial class UvEditorWindow : FloatingPanel
     {
         PopupMenu Add(string title)
         {
-            var pm = new PopupMenu { Name = "Uv" + title.Replace(" ", "").Replace("/", "") };
-            _menuBar.AddChild(pm);
-            _menuBar.SetMenuTitle(_menuBar.GetChildCount() - 1, title);
-            return pm;
+            var mb = new MenuButton { Text = title, Flat = true, FocusMode = Control.FocusModeEnum.None, SwitchOnHover = true, Name = "Uv" + title.Replace(" ", "").Replace("/", "") };
+            _menuBar.AddChild(mb);
+            return mb.GetPopup();
         }
         var M = _shell.Menus;
         M.Build(Add("Edit")).Item("uv.copy").Item("uv.paste").Item("edit.delete", "Delete").Separator().Item("uv.pin").Item("uv.invertPins").Item("uv.unpin").Item("uv.unpinAll");

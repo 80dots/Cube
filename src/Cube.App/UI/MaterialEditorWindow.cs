@@ -60,7 +60,7 @@ public partial class MaterialEditorWindow : FloatingPanel
         btnNew.Pressed += NewMaterial;
         newRow.AddChild(btnNew);
         left.AddChild(newRow);
-        var row2 = new HBoxContainer();
+        var row2 = new HFlowContainer(); // 좁아지면 줄바꿈
         var btnDel = new Button { Text = "Delete", FocusMode = Control.FocusModeEnum.None };
         btnDel.Pressed += () => { if (_selectedId > 0) _shell.Document.Undo.Push(new DeleteMaterialCommand(_selectedId)); };
         row2.AddChild(btnDel);
