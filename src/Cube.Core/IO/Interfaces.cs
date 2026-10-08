@@ -21,6 +21,8 @@ public sealed record ImportResult(bool Ok, string Message, IReadOnlyList<SceneNo
 {
     /// <summary>파일에 들어 있던 애니메이션(트랙의 Node는 Nodes 트리의 노드 ID; 호출자가 문서에 넣는다).</summary>
     public IReadOnlyList<AnimationClip> Animations { get; init; } = Array.Empty<AnimationClip>();
+    /// <summary>가져온 머티리얼(ID 배정됨, 아직 문서에 없음; 노드의 MaterialId가 가리킨다. 호출자가 문서에 넣는다).</summary>
+    public IReadOnlyList<MaterialDef> Materials { get; init; } = Array.Empty<MaterialDef>();
     public static ImportResult Fail(string msg) => new(false, msg, Array.Empty<SceneNode>());
 }
 

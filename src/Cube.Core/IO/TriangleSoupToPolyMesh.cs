@@ -16,6 +16,8 @@ public static class TriangleSoupToPolyMesh
         public Vector2[]? Uvs;
         public required int[] Indices;
         public int Material;
+        /// <summary>정점별 용접 태그(예: 스킨 가중치 해시). 위치가 같아도 태그가 다르면 합치지 않는다(맞닿은 다른 부품이 한 정점이 되어 가중치를 잃는 것 방지).</summary>
+        public long[]? WeldTag;
     }
 
     public sealed record Stats(int Welded, int Faces, int SkippedFaces, int HardEdges, int MergedQuads);
@@ -24,19 +26,30 @@ public static class TriangleSoupToPolyMesh
 
     /// <summary>vertexMap[surface][soupIndex] = 폴리 정점 ID(-1 = 미사용). 스킨 가중치 등 정점별 속성을 옮길 때 쓴다.</summary>
     public static PolyMesh Convert(IReadOnlyList<Surface> surfaces, ImportOptions options, out Stats stats, out int[][] vertexMap)
+        => Convert(surfaces, options, out stats, out vertexMap, out _);
+
+    /// <summary>
+    /// vertexSource[polyVertex] = 그 정점을 만든 (surface, soupIndex). 비매니폴드 면을 살리려고 복제한 정점도 포함하므로
+    /// 정점별 속성(스킨 가중치)은 vertexMap이 아니라 이것으로 옮겨야 빠지는 정점이 없다.
+    /// </summary>
+    public static PolyMesh Convert(IReadOnlyList<Surface> surfaces, ImportOptions options, out Stats stats, out int[][] vertexMap, out (int Surface, int Index)[] vertexSource)
     {
+        var source = new List<(int, int)>();
         var mesh = new PolyMesh();
         vertexMap = surfaces.Select(s => Enumerable.Repeat(-1, s.Positions.Length).ToArray()).ToArray();
         var vmap = vertexMap;
-        var weld = new Dictionary<(long, long, long), int>();
+        var weld = new Dictionary<(long, long, long, long), int>();
         float inv = options.WeldThreshold > 0 ? 1f / options.WeldThreshold : 1e6f;
         int welded = 0, skipped = 0, faces = 0;
 
-        int VertexFor(Vector3 p)
+        int NewVertex(Vector3 p, int si, int idx) { source.Add((si, idx)); return mesh.AddVertex(p); }
+        int VertexFor(Surface s, int si, int idx)
         {
-            var key = ((long)MathF.Round(p.X * inv), (long)MathF.Round(p.Y * inv), (long)MathF.Round(p.Z * inv));
+            var p = s.Positions[idx];
+            long tag = s.WeldTag != null && idx < s.WeldTag.Length ? s.WeldTag[idx] : 0;
+            var key = ((long)MathF.Round(p.X * inv), (long)MathF.Round(p.Y * inv), (long)MathF.Round(p.Z * inv), tag);
             if (weld.TryGetValue(key, out int v)) { welded++; return v; }
-            v = mesh.AddVertex(p);
+            v = NewVertex(p, si, idx);
             weld[key] = v;
             return v;
         }
@@ -48,13 +61,13 @@ public static class TriangleSoupToPolyMesh
             for (int t = 0; t + 2 < s.Indices.Length; t += 3)
             {
                 int i0 = s.Indices[t], i1 = s.Indices[t + 1], i2 = s.Indices[t + 2];
-                int a = VertexFor(s.Positions[i0]), b = VertexFor(s.Positions[i1]), c = VertexFor(s.Positions[i2]);
+                int a = VertexFor(s, si, i0), b = VertexFor(s, si, i1), c = VertexFor(s, si, i2);
                 if (a == b || b == c || a == c) { skipped++; continue; }
                 int f = mesh.AddFace(new[] { a, b, c }, s.Material);
                 if (f < 0)
                 {
                     // 비매니폴드(같은 방향 엣지 등): 정점을 분리해서라도 면을 살린다
-                    int a2 = mesh.AddVertex(s.Positions[i0]), b2 = mesh.AddVertex(s.Positions[i1]), c2 = mesh.AddVertex(s.Positions[i2]);
+                    int a2 = NewVertex(s.Positions[i0], si, i0), b2 = NewVertex(s.Positions[i1], si, i1), c2 = NewVertex(s.Positions[i2], si, i2);
                     f = mesh.AddFace(new[] { a2, b2, c2 }, s.Material);
                     if (f < 0) { skipped++; continue; }
                     a = a2; b = b2; c = c2;
@@ -91,6 +104,7 @@ public static class TriangleSoupToPolyMesh
         MeshNormals.Recompute(mesh);
         mesh.BumpTopology();
         stats = new Stats(welded, faces, skipped, hard, merged);
+        vertexSource = source.ToArray();
         return mesh;
     }
 

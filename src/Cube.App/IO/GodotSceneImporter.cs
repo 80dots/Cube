@@ -31,7 +31,7 @@ public abstract class GodotSceneImporterBase : IImporter
             if (scene == null) return ImportResult.Fail("GenerateScene returned null.");
             long tScene = sw.ElapsedMilliseconds;
             var nodes = new List<SceneNode>();
-            var ictx = new ImportCtx(doc, options);
+            var ictx = new ImportCtx(doc, options, path);
             // 루트 자체가 메시를 가지면 루트도 노드로, 아니면 루트의 자식들을 최상위로
             if (scene is Node3D rootN3 && HasMesh(rootN3)) nodes.Add(Convert(rootN3, ictx));
             else foreach (var child in scene.GetChildren()) if (child is Node3D c3) nodes.Add(Convert(c3, ictx));
@@ -40,9 +40,10 @@ public abstract class GodotSceneImporterBase : IImporter
             long tSkins = sw.ElapsedMilliseconds;
             var clips = AnimationImport.Extract(scene, ictx.NodeMap, ictx.BoneNodes);
             GD.Print($"[ImportPerf] {System.IO.Path.GetFileName(path)}: append {tAppend} ms, generateScene {tScene - tAppend} ms, convert {tConvert - tScene} ms (meshes {ictx.Meshes}), skins {tSkins - tConvert} ms, animations {sw.ElapsedMilliseconds - tSkins} ms ({clips.Count} clips, {clips.Sum(c => c.KeyCount)} keys)");
-            string msg = $"Imported {ictx.Meshes} mesh(es)" + (ictx.Joints > 0 ? $", {ictx.Joints} joint(s), {ictx.Skins} skin(s)" : "")
+            int mats = ictx.Materials.Created.Count;
+            string msg = $"Imported {ictx.Meshes} mesh(es)" + (mats > 0 ? $", {mats} material(s)" : "") + (ictx.Joints > 0 ? $", {ictx.Joints} joint(s), {ictx.Skins} skin(s)" : "")
                 + (clips.Count > 0 ? $", {clips.Count} animation(s)" : "") + $" from {System.IO.Path.GetFileName(path)}";
-            return new ImportResult(true, msg, nodes) { Animations = clips };
+            return new ImportResult(true, msg, nodes) { Animations = clips, Materials = ictx.Materials.Created };
         }
         catch (Exception ex) { return ImportResult.Fail(ex.Message); }
         finally { scene?.Free(); }
@@ -74,7 +75,8 @@ public abstract class GodotSceneImporterBase : IImporter
         public readonly Dictionary<Node, SceneNode> NodeMap = new();
         /// <summary>트리 조립 후 조인트 ID·바인드 행렬을 채울 스킨 메시.</summary>
         public readonly List<(SceneNode mesh, SkinCluster skin, List<SceneNode> joints)> Pending = new();
-        public ImportCtx(Document doc, ImportOptions options) { Doc = doc; Options = options; }
+        public readonly ImportedMaterials Materials;
+        public ImportCtx(Document doc, ImportOptions options, string path) { Doc = doc; Options = options; Materials = new ImportedMaterials(doc, path); }
 
         /// <summary>최상위 노드들에 ID를 먼저 배정한 뒤(문서에 넣어도 유지됨) 스킨의 조인트 ID와 바인드 행렬을 채운다.</summary>
         public void ResolveSkins(IEnumerable<SceneNode> tops)
@@ -117,7 +119,7 @@ public abstract class GodotSceneImporterBase : IImporter
             }
             ctx.BoneNodes[skel] = bones;
         }
-        var surfaces = CollectSurfaces(g, out var skinData);
+        var surfaces = CollectSurfaces(g, out var skinData, out var surfaceMats);
         if (surfaces.Count > 0)
         {
             Skeleton3D? skelNode = null;
@@ -137,18 +139,25 @@ public abstract class GodotSceneImporterBase : IImporter
                     skinData.BindToBone = map;
                     BakeBindToRest(g, sk, skinData, surfaces);
                 }
+                SetWeldTags(skinData, surfaces);
             }
-            var swm = System.Diagnostics.Stopwatch.StartNew();
-            var mesh = TriangleSoupToPolyMesh.Convert(surfaces, ctx.Options, out var st, out var vmap);
-            if (swm.ElapsedMilliseconds > 200) GD.Print($"[ImportPerf]   mesh {g.Name}: {surfaces.Sum(x => x.Indices.Length) / 3} tris → {swm.ElapsedMilliseconds} ms (merged quads {st.MergedQuads})");
-            var shape = new MeshShape(mesh);
-            node.Shape = shape;
-            ctx.Meshes++;
-            if (skinData != null && skelNode != null && ctx.BoneNodes.TryGetValue(skelNode, out var boneNodes))
+            // 머티리얼은 오브젝트 단위라 서피스를 머티리얼별로 묶어 하나면 이 노드에, 여럿이면 머티리얼별 자식 메시로 나눈다
+            var groups = new List<(int mat, List<int> surfaces)>();
+            for (int i = 0; i < surfaces.Count; i++)
             {
-                var skin = BuildSkin(skinData, boneNodes, vmap, mesh, out var jointNodes);
-                if (skin != null) { shape.Skin = skin; ctx.Pending.Add((node, skin, jointNodes)); ctx.Skins++; }
+                int mat = ctx.Materials.IdFor(surfaceMats[i]);
+                int gi = groups.FindIndex(x => x.mat == mat);
+                if (gi < 0) { groups.Add((mat, new List<int>())); gi = groups.Count - 1; }
+                groups[gi].surfaces.Add(i);
             }
+            if (groups.Count == 1) BuildMeshShape(node, groups[0].mat, groups[0].surfaces, surfaces, skinData, skelNode, ctx);
+            else
+                foreach (var (mat, idxs) in groups)
+                {
+                    var part = new SceneNode { Name = ctx.Unique(node.Name + "_" + SafeName(ctx.Materials.NameOf(mat))) };
+                    BuildMeshShape(part, mat, idxs, surfaces, skinData, skelNode, ctx);
+                    node.AttachChild(part);
+                }
         }
         foreach (var child in g.GetChildren())
             if (child is Node3D c3)
@@ -157,6 +166,53 @@ public abstract class GodotSceneImporterBase : IImporter
                 node.AttachChild(cn);
             }
         return node;
+    }
+
+    /// <summary>서피스 묶음 하나를 PolyMesh로 바꿔 target에 메시·머티리얼·스킨을 붙인다.</summary>
+    private static void BuildMeshShape(SceneNode target, int materialId, List<int> idxs, List<TriangleSoupToPolyMesh.Surface> all, SkinData? skinData, Skeleton3D? skelNode, ImportCtx ctx)
+    {
+        var subset = idxs.Select(i => all[i]).ToList();
+        foreach (var su in subset) su.Material = 0; // 면 머티리얼 번호는 쓰지 않는다(머티리얼은 오브젝트 단위)
+        var swm = System.Diagnostics.Stopwatch.StartNew();
+        var mesh = TriangleSoupToPolyMesh.Convert(subset, ctx.Options, out var st, out _, out var vsrc);
+        if (swm.ElapsedMilliseconds > 200) GD.Print($"[ImportPerf]   mesh {target.Name}: {subset.Sum(x => x.Indices.Length) / 3} tris → {swm.ElapsedMilliseconds} ms (merged quads {st.MergedQuads})");
+        var shape = new MeshShape(mesh);
+        target.Shape = shape;
+        target.MaterialId = materialId;
+        ctx.Meshes++;
+        if (skinData != null && skelNode != null && ctx.BoneNodes.TryGetValue(skelNode, out var boneNodes))
+        {
+            var per = idxs.Select(i => i < skinData.PerSurface.Count ? skinData.PerSurface[i] : (Array.Empty<int>(), Array.Empty<float>(), 0)).ToList();
+            var skin = BuildSkin(skinData, per, boneNodes, vsrc, mesh, out var jointNodes);
+            if (skin != null) { shape.Skin = skin; ctx.Pending.Add((target, skin, jointNodes)); ctx.Skins++; }
+        }
+    }
+
+    /// <summary>스킨 영향(본, 가중치)이 다른 정점은 위치가 같아도 용접하지 않도록 태그를 단다(맞닿은 다른 부품이 한 정점이 되면 한쪽 가중치를 잃어 재생 때 고정됨).</summary>
+    private static void SetWeldTags(SkinData sd, List<TriangleSoupToPolyMesh.Surface> surfaces)
+    {
+        var pairs = new List<(int bone, int w)>();
+        for (int s = 0; s < surfaces.Count && s < sd.PerSurface.Count; s++)
+        {
+            var (bones, weights, stride) = sd.PerSurface[s];
+            if (stride <= 0) continue;
+            var surf = surfaces[s];
+            var tags = new long[surf.Positions.Length];
+            for (int v = 0; v < tags.Length && (v + 1) * stride <= bones.Length; v++)
+            {
+                pairs.Clear();
+                for (int k = 0; k < stride; k++)
+                {
+                    int w = (int)MathF.Round(weights[v * stride + k] * 1000f);
+                    if (w > 0) pairs.Add((bones[v * stride + k], w));
+                }
+                pairs.Sort();
+                ulong h = 1469598103934665603UL;
+                foreach (var (b, w) in pairs) { h = (h ^ (uint)b) * 1099511628211UL; h = (h ^ (uint)w) * 1099511628211UL; }
+                tags[v] = (long)(h | 1); // 0은 '태그 없음'
+            }
+            surf.WeldTag = tags;
+        }
     }
 
     /// <summary>
@@ -229,7 +285,7 @@ public abstract class GodotSceneImporterBase : IImporter
         public List<(int[] bones, float[] weights, int stride)> PerSurface = new();
     }
 
-    private static SkinCluster? BuildSkin(SkinData sd, SceneNode[] boneNodes, int[][] vmap, PolyMesh mesh, out List<SceneNode> jointNodes)
+    private static SkinCluster? BuildSkin(SkinData sd, List<(int[] bones, float[] weights, int stride)> perSurface, SceneNode[] boneNodes, (int Surface, int Index)[] vsrc, PolyMesh mesh, out List<SceneNode> jointNodes)
     {
         // 본 인덱스 → 스킨 조인트 인덱스(조인트 ID는 트리 조립 후 ResolveSkins에서 채운다)
         var skin = new SkinCluster();
@@ -245,25 +301,22 @@ public abstract class GodotSceneImporterBase : IImporter
         }
         skin.EnsureSize(mesh.VertexCount);
         bool any = false;
-        for (int s = 0; s < sd.PerSurface.Count && s < vmap.Length; s++)
+        // 폴리 정점마다 그 정점을 만든 수프 정점의 가중치(비매니폴드 복제 정점도 빠짐없이)
+        for (int v = 0; v < vsrc.Length && v < mesh.VertexCount; v++)
         {
-            var (bones, weights, stride) = sd.PerSurface[s];
-            if (stride <= 0) continue;
-            int soupCount = Math.Min(vmap[s].Length, bones.Length / stride);
-            for (int i = 0; i < soupCount; i++)
+            var (s, i) = vsrc[v];
+            if (s < 0 || s >= perSurface.Count) continue;
+            var (bones, weights, stride) = perSurface[s];
+            if (stride <= 0 || (i + 1) * stride > bones.Length) continue;
+            var list = new List<(int, float)>();
+            for (int k = 0; k < stride; k++)
             {
-                int v = vmap[s][i];
-                if (v < 0 || (v < skin.Weights.Length && skin.Weights[v] != null)) continue;
-                var list = new List<(int, float)>();
-                for (int k = 0; k < stride; k++)
-                {
-                    float w = weights[i * stride + k];
-                    if (w <= 0f) continue;
-                    int j = Joint(bones[i * stride + k]);
-                    if (j >= 0) list.Add((j, w));
-                }
-                if (list.Count > 0) { skin.Weights[v] = list; any = true; }
+                float w = weights[i * stride + k];
+                if (w <= 0f) continue;
+                int j = Joint(bones[i * stride + k]);
+                if (j >= 0) list.Add((j, w));
             }
+            if (list.Count > 0) { skin.Weights[v] = list; any = true; }
         }
         if (!any) return null;
         Core.Rig.SkinOps.NormalizeAll(mesh, skin);
@@ -272,9 +325,10 @@ public abstract class GodotSceneImporterBase : IImporter
 
     private static string SafeName(string s) => string.IsNullOrWhiteSpace(s) ? "node" : s;
 
-    private static List<TriangleSoupToPolyMesh.Surface> CollectSurfaces(Node3D g, out SkinData? skinData)
+    private static List<TriangleSoupToPolyMesh.Surface> CollectSurfaces(Node3D g, out SkinData? skinData, out List<Material?> materials)
     {
         skinData = null;
+        materials = new List<Material?>();
         var list = new List<TriangleSoupToPolyMesh.Surface>();
         Mesh? mesh = g switch
         {
@@ -316,6 +370,7 @@ public abstract class GodotSceneImporterBase : IImporter
                 Indices = indices,
                 Material = s,
             });
+            materials.Add((g as MeshInstance3D)?.GetSurfaceOverrideMaterial(s) ?? mesh.SurfaceGetMaterial(s));
         }
         return list;
     }

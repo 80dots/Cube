@@ -306,10 +306,13 @@ public partial class DebugDriver : Node
                                     gmin = gmin.Min(acc); gmax = gmax.Max(acc);
                                 }
                             }
-                            var sn = CubeApp.Instance.Document.SkinnedNodes().FirstOrDefault();
-                            var mv = sn != null ? UI.Shell.Instance.Viewport.Scene.GetMeshView(sn.Id) : null;
+                            // 가져오기가 머티리얼별로 메시를 나누므로 모든 스킨 메시의 변형 위치를 합친다
                             var dmin = new System.Numerics.Vector3(1e9f); var dmax = -dmin;
-                            if (mv?.Deformed != null) foreach (var dp in mv.Deformed) { dmin = System.Numerics.Vector3.Min(dmin, dp); dmax = System.Numerics.Vector3.Max(dmax, dp); }
+                            foreach (var sn in CubeApp.Instance.Document.SkinnedNodes())
+                            {
+                                var mv = UI.Shell.Instance.Viewport.Scene.GetMeshView(sn.Id);
+                                if (mv?.Deformed != null) foreach (var dp in mv.Deformed) { dmin = System.Numerics.Vector3.Min(dmin, dp); dmax = System.Numerics.Vector3.Max(dmax, dp); }
+                            }
                             GD.Print($"[Drive] skincheck mesh godot=<{gmin.X:F3},{gmin.Y:F3},{gmin.Z:F3}>..<{gmax.X:F3},{gmax.Y:F3},{gmax.Z:F3}> cube=<{dmin.X:F3},{dmin.Y:F3},{dmin.Z:F3}>..<{dmax.X:F3},{dmax.Y:F3},{dmax.Z:F3}>");
                         }
                     }

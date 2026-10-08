@@ -51,6 +51,7 @@ public sealed class FileActions
             var sw = System.Diagnostics.Stopwatch.StartNew();
             using (_doc.Undo.BeginGroup("Import"))
             {
+                foreach (var m in result.Materials) _doc.Undo.Push(new AddMaterialCommand(m));
                 _doc.Undo.Push(new ImportNodesCommand(result.Nodes));
                 if (result.Animations.Count > 0) _doc.Undo.Push(new SetAnimationsCommand("Import Animations", result.Animations));
             }

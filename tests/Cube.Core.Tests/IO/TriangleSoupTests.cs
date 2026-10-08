@@ -103,4 +103,30 @@ public class TriangleSoupTests
         for (int a = 0; a < 10000; a++) hashes.Add(PairKeyComparer.Instance.GetHashCode(((long)a << 32) | (uint)(a + 1)));
         Assert.True(hashes.Count > 9900);
     }
+
+    [Fact]
+    public void WeldTag_KeepsTouchingPartsApart_AndVertexSourceCoversEveryVertex()
+    {
+        // 정점 하나를 공유하는 두 삼각형(다른 부품): 태그가 다르면 용접하지 않는다
+        var pos = new[] { new Vector3(0, 0, 0), new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(0, 0, 0), new Vector3(-1, 0, 0), new Vector3(0, -1, 0) };
+        var soup = new TriangleSoupToPolyMesh.Surface { Positions = pos, Indices = new[] { 0, 1, 2, 3, 4, 5 }, WeldTag = new long[] { 1, 1, 1, 2, 2, 2 } };
+        var m = TriangleSoupToPolyMesh.Convert(new[] { soup }, ImportOptions.Default, out _, out _, out var src);
+        Assert.Equal(6, m.AliveVertexCount);
+        soup.WeldTag = null;
+        m = TriangleSoupToPolyMesh.Convert(new[] { soup }, ImportOptions.Default, out _, out _, out src);
+        Assert.Equal(5, m.AliveVertexCount);
+        Assert.Equal(m.VertexCount, src.Length);
+        Assert.All(src, x => Assert.InRange(x.Index, 0, 5));
+    }
+
+    [Fact]
+    public void NonManifoldDuplicates_HaveVertexSource()
+    {
+        // 같은 방향 엣지를 가진 세 번째 삼각형은 정점을 복제해 살린다 → 복제 정점도 출처가 있어야 한다(스킨 가중치 누락 방지)
+        var pos = new[] { new Vector3(0, 0, 0), new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(0, 0, 0), new Vector3(1, 0, 0), new Vector3(0, 0, 1) };
+        var soup = new TriangleSoupToPolyMesh.Surface { Positions = pos, Indices = new[] { 0, 1, 2, 3, 4, 5 } };
+        var m = TriangleSoupToPolyMesh.Convert(new[] { soup }, ImportOptions.Default with { MergeTriangleQuads = false }, out _, out var vmap, out var src);
+        Assert.Equal(m.VertexCount, src.Length);
+        for (int v = 0; v < m.VertexCount; v++) Assert.Equal(pos[src[v].Index], m.Verts[v].Position);
+    }
 }
