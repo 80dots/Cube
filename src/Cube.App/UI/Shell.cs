@@ -200,9 +200,10 @@ public partial class Shell : Control
 
         Document.Selection.ModeChanged += RefreshModeButtons;
         Document.Undo.Changed += RefreshUndoButtons;
-        Document.Changed += _ => UpdateTitle();
+        // 재생 포즈(PoseChanged)는 문서 데이터가 아니므로 제목(dirty 표시)·Poly Count를 건드리지 않는다(재생 중 매 프레임 호출됨)
+        Document.Changed += c => { if (c.Kind != ChangeKind.PoseChanged) UpdateTitle(); };
         // Poly Count HUD: 문서/선택이 바뀔 때마다 다시 센다(프레임마다 세지 않음)
-        Document.Changed += _ => _polyCountDirty = true;
+        Document.Changed += c => { if (c.Kind != ChangeKind.PoseChanged) _polyCountDirty = true; };
         Document.Selection.Changed += () => _polyCountDirty = true;
         Document.Selection.ModeChanged += () => _polyCountDirty = true;
         _polyCountDirty = true;

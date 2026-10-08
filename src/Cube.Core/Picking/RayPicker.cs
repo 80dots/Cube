@@ -51,6 +51,49 @@ public static class RayPicker
         return t > 1e-6f;
     }
 
+    /// <summary>슬랩 방식 레이-AABB 교차(t ≥ 0). 방향 성분이 0이면 그 축은 원점이 범위 안일 때만 통과. 박스는 약간 넓혀 경계 삼각형을 놓치지 않는다.</summary>
+    public static bool RayIntersectsBox(in Ray r, Vector3 min, Vector3 max)
+    {
+        float pad = MathF.Max(1e-5f, (max - min).Length() * 1e-4f);
+        min -= new Vector3(pad); max += new Vector3(pad);
+        float tmin = 0f, tmax = float.MaxValue;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            float o = axis == 0 ? r.Origin.X : axis == 1 ? r.Origin.Y : r.Origin.Z;
+            float d = axis == 0 ? r.Direction.X : axis == 1 ? r.Direction.Y : r.Direction.Z;
+            float lo = axis == 0 ? min.X : axis == 1 ? min.Y : min.Z;
+            float hi = axis == 0 ? max.X : axis == 1 ? max.Y : max.Z;
+            if (MathF.Abs(d) < 1e-12f) { if (o < lo || o > hi) return false; continue; }
+            float inv = 1f / d;
+            float t0 = (lo - o) * inv, t1 = (hi - o) * inv;
+            if (t0 > t1) (t0, t1) = (t1, t0);
+            tmin = MathF.Max(tmin, t0); tmax = MathF.Min(tmax, t1);
+            if (tmin > tmax) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 대상의 로컬 AABB를 화면에 투영한 사각형(여유 thresholdPx)에 픽셀이 들어가는지. 코너 하나라도 카메라 뒤면 보수적으로 true.
+    /// 정점/엣지 피킹이 메시마다 모든 점·선을 투영하기 전에 대상을 걸러내는 용도.
+    /// </summary>
+    public static bool ScreenBoundsMayContain(PickTarget tg, CameraProjection cam, Vector2 px, float thresholdPx)
+    {
+        var r = tg.Render;
+        if (r.PointCount == 0) return false;
+        var mn = r.BoundsMin; var mx = r.BoundsMax;
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        for (int i = 0; i < 8; i++)
+        {
+            var c = new Vector3((i & 1) == 0 ? mn.X : mx.X, (i & 2) == 0 ? mn.Y : mx.Y, (i & 4) == 0 ? mn.Z : mx.Z);
+            var sp = cam.Project(Vector3.Transform(c, tg.World), out _);
+            if (sp == null) return true;
+            minX = MathF.Min(minX, sp.Value.X); maxX = MathF.Max(maxX, sp.Value.X);
+            minY = MathF.Min(minY, sp.Value.Y); maxY = MathF.Max(maxY, sp.Value.Y);
+        }
+        return px.X >= minX - thresholdPx && px.X <= maxX + thresholdPx && px.Y >= minY - thresholdPx && px.Y <= maxY + thresholdPx;
+    }
+
     private static Ray ToLocal(in Ray r, PickTarget tg)
     {
         var o = Vector3.Transform(r.Origin, tg.WorldInverse);
@@ -64,6 +107,8 @@ public static class RayPicker
         var lr = ToLocal(worldRay, tg);
         var r = tg.Render;
         worldDist = float.MaxValue; tri = -1; worldPos = default;
+        // 레이가 로컬 AABB를 비껴가면 삼각형을 돌지 않는다(메시가 많은 씬의 호버/가림 검사 비용)
+        if (r.TriangleCount == 0 || !RayIntersectsBox(lr, r.BoundsMin, r.BoundsMax)) return false;
         float bestT = float.MaxValue;
         for (int i = 0; i < r.TriangleCount; i++)
         {
@@ -117,6 +162,7 @@ public static class RayPicker
         foreach (var tg in targets)
         {
             var r = tg.Render;
+            if (!ScreenBoundsMayContain(tg, cam, px, thresholdPx)) continue;
             for (int i = 0; i < r.PointCount; i++)
             {
                 var w = Vector3.Transform(r.PointPositions[i], tg.World);
@@ -141,6 +187,7 @@ public static class RayPicker
         foreach (var tg in targets)
         {
             var r = tg.Render;
+            if (!ScreenBoundsMayContain(tg, cam, px, thresholdPx)) continue;
             for (int i = 0; i < r.LineCount; i++)
             {
                 var wa = Vector3.Transform(r.LinePositions[i * 2], tg.World);

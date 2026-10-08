@@ -27,10 +27,13 @@ public static class MeshTessellator
         RenderMeshData.Ensure(ref r.Normals, corners);
         RenderMeshData.Ensure(ref r.Uvs, corners);
         RenderMeshData.Ensure(ref r.CornerToHalfEdge, corners);
+        RenderMeshData.Ensure(ref r.CornerToVertex, corners);
         RenderMeshData.Ensure(ref r.Indices, tris * 3);
         RenderMeshData.Ensure(ref r.TriToFace, tris);
         RenderMeshData.Ensure(ref r.FaceCenters, aliveFaces);
         RenderMeshData.Ensure(ref r.FaceCenterToFace, aliveFaces);
+        RenderMeshData.Ensure(ref r.FaceCenterCornerStart, aliveFaces);
+        RenderMeshData.Ensure(ref r.FaceCenterDegree, aliveFaces);
 
         int ci = 0, ii = 0, ti = 0, fci = 0;
         for (int f = 0; f < m.Faces.Count; f++)
@@ -44,11 +47,11 @@ public static class MeshTessellator
                 var he = m.Hes[_loop[i]];
                 var p = m.Verts[he.Vertex].Position;
                 r.Positions[ci] = p; r.Normals[ci] = he.Normal; r.Uvs[ci] = he.Uv0;
-                r.CornerToHalfEdge[ci] = _loop[i];
+                r.CornerToHalfEdge[ci] = _loop[i]; r.CornerToVertex[ci] = he.Vertex;
                 centroid += p;
                 ci++;
             }
-            r.FaceCenters[fci] = centroid / n; r.FaceCenterToFace[fci] = f; fci++;
+            r.FaceCenters[fci] = centroid / n; r.FaceCenterToFace[fci] = f; r.FaceCenterCornerStart[fci] = baseCorner; r.FaceCenterDegree[fci] = n; fci++;
 
             if (n == 3)
             {
@@ -94,13 +97,14 @@ public static class MeshTessellator
         int aliveEdges = m.AliveEdgeCount;
         RenderMeshData.Ensure(ref r.LinePositions, aliveEdges * 2);
         RenderMeshData.Ensure(ref r.LineToEdge, aliveEdges);
+        RenderMeshData.Ensure(ref r.LineVertices, aliveEdges * 2);
         int li = 0, le = 0;
         for (int e = 0; e < m.Edges.Count; e++)
         {
             if (!m.Edges[e].Alive) continue;
             var (a, b) = m.EdgeVertices(e);
-            r.LinePositions[li++] = m.Verts[a].Position;
-            r.LinePositions[li++] = m.Verts[b].Position;
+            r.LineVertices[li] = a; r.LinePositions[li++] = m.Verts[a].Position;
+            r.LineVertices[li] = b; r.LinePositions[li++] = m.Verts[b].Position;
             r.LineToEdge[le++] = e;
         }
         r.LineVertexCount = li;
@@ -116,29 +120,56 @@ public static class MeshTessellator
             r.PointPositions[pi] = m.Verts[v].Position; r.PointToVertex[pi] = v; pi++;
         }
         r.PointCount = pi;
+        UpdateBounds(r);
+        r.PositionVersion++;
         return r;
+    }
+
+    /// <summary>점 배열에서 로컬 AABB를 다시 잰다.</summary>
+    public static void UpdateBounds(RenderMeshData r)
+    {
+        if (r.PointCount == 0) { r.BoundsMin = r.BoundsMax = Vector3.Zero; return; }
+        var mn = r.PointPositions[0]; var mx = mn;
+        var pts = r.PointPositions;
+        for (int i = 1; i < r.PointCount; i++) { mn = Vector3.Min(mn, pts[i]); mx = Vector3.Max(mx, pts[i]); }
+        r.BoundsMin = mn; r.BoundsMax = mx;
     }
 
     /// <summary>위상은 그대로이고 위치만 바뀐 경우 배열의 위치 값만 갱신한다(드래그 프리뷰).</summary>
     public static void UpdatePositions(PolyMesh m, RenderMeshData r) => UpdatePositions(m, r, null);
 
-    /// <summary>위치 갱신. positions가 주어지면(스킨 변형 등) 정점 ID로 그 배열을 쓴다.</summary>
+    /// <summary>
+    /// 위치 갱신. positions가 주어지면(스킨 변형 등) 정점 ID로 그 배열을 쓴다.
+    /// Build가 남긴 코너→정점/선분→정점/면 중심→코너 범위 캐시만 읽으므로 메시 위상 구조를 다시 걷지 않는다(재생 중 매 프레임 호출).
+    /// </summary>
     public static void UpdatePositions(PolyMesh m, RenderMeshData r, Vector3[]? positions)
     {
-        Vector3 P(int v) => positions != null && v < positions.Length ? positions[v] : m.Verts[v].Position;
-        for (int i = 0; i < r.CornerCount; i++) r.Positions[i] = P(m.Hes[r.CornerToHalfEdge[i]].Vertex);
-        for (int i = 0; i < r.LineCount; i++)
+        // 정점 ID → 위치 표(메시 위치 또는 변형 위치). 정점 수만큼 한 번만 채워 두고 모든 배열이 이를 읽는다
+        int vc = m.Verts.Count;
+        if (_vpos == null || _vpos.Length < vc) _vpos = new Vector3[Math.Max(vc, 64)];
+        var vp = _vpos;
+        if (positions != null && positions.Length >= vc) Array.Copy(positions, vp, vc);
+        else
         {
-            var (a, b) = m.EdgeVertices(r.LineToEdge[i]);
-            r.LinePositions[i * 2] = P(a); r.LinePositions[i * 2 + 1] = P(b);
+            var verts = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(m.Verts);
+            for (int v = 0; v < vc; v++) vp[v] = positions != null && v < positions.Length ? positions[v] : verts[v].Position;
         }
-        for (int i = 0; i < r.PointCount; i++) r.PointPositions[i] = P(r.PointToVertex[i]);
+        var pos = r.Positions; var c2v = r.CornerToVertex;
+        for (int i = 0; i < r.CornerCount; i++) pos[i] = vp[c2v[i]];
+        var lp = r.LinePositions; var lv = r.LineVertices;
+        for (int i = 0; i < r.LineVertexCount; i++) lp[i] = vp[lv[i]];
+        var pp = r.PointPositions; var p2v = r.PointToVertex;
+        for (int i = 0; i < r.PointCount; i++) pp[i] = vp[p2v[i]];
+        var fc = r.FaceCenters; var fs = r.FaceCenterCornerStart; var fd = r.FaceCenterDegree;
         for (int i = 0; i < r.FaceCenterCount; i++)
         {
-            if (positions == null) { r.FaceCenters[i] = m.FaceCentroid(r.FaceCenterToFace[i]); continue; }
-            int start = m.Faces[r.FaceCenterToFace[i]].HalfEdge, he = start; var sum = Vector3.Zero; int n = 0;
-            do { sum += P(m.Hes[he].Vertex); n++; he = m.Hes[he].Next; } while (he != start);
-            r.FaceCenters[i] = sum / Math.Max(n, 1);
+            int start = fs[i], n = fd[i]; var sum = Vector3.Zero;
+            for (int k = 0; k < n; k++) sum += pos[start + k];
+            fc[i] = sum / Math.Max(n, 1);
         }
+        UpdateBounds(r);
+        r.PositionVersion++;
     }
+
+    [ThreadStatic] private static Vector3[]? _vpos;
 }
