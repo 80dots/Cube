@@ -176,7 +176,9 @@ public sealed class CombineCommand : ICommand
             }
             MeshNormals.Recompute(mesh);
             // 결과는 단위 트랜스폼(원점)의 새 노드. 삭제 명령은 이 시점의 문서 상태로 만든다.
-            _combined = new SceneNode { Name = doc.UniqueName(name + "1"), Shape = new MeshShape(mesh) };
+            // 머티리얼은 오브젝트 단위이므로 첫 원본의 머티리얼을 이어받는다(전에는 lambert1로 초기화됐다, v0.0.57)
+            var firstMat = _sources.Select(doc.Find).FirstOrDefault(n => n?.Mesh != null)?.MaterialId ?? default;
+            _combined = new SceneNode { Name = doc.UniqueName(name + "1"), Shape = new MeshShape(mesh), MaterialId = firstMat };
             _delete = new DeleteNodesCommand(doc, _sources);
         }
         _delete!.Do(doc);

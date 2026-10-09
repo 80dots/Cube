@@ -232,4 +232,17 @@ public class ModelingAuditRegressionTests
         if (op is "reverse" or "extract" or "append")
             Assert.All(Enumerable.Range(0, m.Hes.Count).Where(h => m.Hes[h].Alive), h => { Assert.True(m.Hes[h].PinUv, "pin"); Assert.True(m.Hes[h].NormalLocked, "locked"); });
     }
+
+    /// <summary>Combine 결과는 첫 원본의 머티리얼을 이어받는다(전에는 lambert1로 바뀌었다).</summary>
+    [Fact]
+    public void Combine_KeepsFirstSourceMaterial()
+    {
+        var doc = new Cube.Core.Scene.Document();
+        var a = Cube.Core.Commands.CreatePrimitiveCommand.Cube(doc); doc.Undo.Push(a);
+        var b = Cube.Core.Commands.CreatePrimitiveCommand.Sphere(doc); doc.Undo.Push(b);
+        a.Node.MaterialId = 7; b.Node.MaterialId = 3;
+        var cmd = new Cube.Core.Commands.CombineCommand(new[] { a.Node.Id, b.Node.Id });
+        doc.Undo.Push(cmd);
+        Assert.Equal(7, cmd.Result!.MaterialId);
+    }
 }
