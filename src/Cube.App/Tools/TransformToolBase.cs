@@ -33,6 +33,8 @@ public abstract class TransformToolBase : SelectTool
     public GizmoBase? GizmoPublic => Gizmo;
     /// <summary>조작기 핸들을 잡고 드래그 중인지.</summary>
     protected bool Dragging { get; private set; }
+    /// <summary>조작기를 드래그 중인지(외부 공개용; 셸이 드래그 중 단축키를 막는 데 쓴다).</summary>
+    public bool IsDragging => Dragging;
     /// <summary>드래그 중인 조작기 부분(축/평면/중앙 등).</summary>
     protected GizmoPart DragPart { get; private set; }
     /// <summary>드래그를 시작한 화면 위치(뷰포트 로컬 픽셀).</summary>
@@ -111,8 +113,9 @@ public abstract class TransformToolBase : SelectTool
     /// <summary>활성 패널이 바뀌면 진행 중 드래그를 커밋하고 조작기를 새 패널로 옮긴다.</summary>
     protected override void OnViewportChanged(ViewportPanel panel)
     {
-        base.OnViewportChanged(panel);
+        // 드래그 커밋을 base(SelectTool: Cancel 호출 → 드래그 되돌림)보다 먼저 한다
         if (Dragging) EndDrag(commit: true);
+        base.OnViewportChanged(panel);
         AttachGizmo(panel);
         RefreshGizmo();
     }

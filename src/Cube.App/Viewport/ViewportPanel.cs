@@ -421,7 +421,13 @@ public partial class ViewportPanel : SubViewportContainer
     public override void _GuiInput(InputEvent e)
     {
         // 마우스 이벤트마다 마지막 위치 기록, 처음 들어오면 활성 패널로. 버튼을 누르면 키보드 포커스도 가져온다
-        if (e is InputEventMouse me) { LastMouseLocal = me.Position; if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); } }
+        if (e is InputEventMouse me)
+        {
+            LastMouseLocal = me.Position;
+            if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); }
+            // 드래그 중에 들어와 미뤄 둔 활성화: 버튼을 모두 놓은 뒤 첫 이동에서 활성 패널이 된다
+            else if (_activatePending && me.ButtonMask == 0) { _activatePending = false; Activated?.Invoke(); }
+        }
         if (e is InputEventMouseButton { Pressed: true }) { GrabFocus(); Activated?.Invoke(); }
         bool modal = ModalTool?.Invoke() == true;
         // 모달 툴: 휠과 Alt 없는 마우스 버튼은 줌/파이보다 먼저 툴로(Blender Bevel의 휠 = 세그먼트, RMB = 취소)
@@ -482,6 +488,9 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>열린 파이를 닫고 하이라이트된 항목을 돌려준다(Space 파이를 키를 뗄 때 실행하기 위해). 닫혀 있으면 null.</summary>
     public UI.PieItem? ReleasePie() => Pie.IsOpen ? Pie.Release() : null;
 
+    /// <summary>버튼을 누른 채 들어와 활성화를 미뤘는지(버튼을 놓은 뒤 첫 마우스 이동에서 활성화).</summary>
+    private bool _activatePending;
+
     /// <summary>마우스가 이 패널 위에 있는지(MouseEnter/Exit 알림과 마우스 이벤트로 갱신).</summary>
     public bool IsMouseOver { get; private set; }
 
@@ -490,8 +499,10 @@ public partial class ViewportPanel : SubViewportContainer
     {
         if (what == NotificationResized) UiPerf.Count("vpResize");
         if (what == NotificationApplicationFocusOut) { Navigation.Cancel(); Pie?.Close(); }
-        if (what == NotificationMouseEnter) { IsMouseOver = true; Activated?.Invoke(); }
-        if (what == NotificationMouseExit) IsMouseOver = false;
+        // 버튼을 누른 채(다른 패널에서 시작한 조작기·마키·내비게이션 드래그) 들어오면 활성 패널을 바꾸지 않는다.
+        // 예전에는 4분할에서 조작기를 끌다 옆 패널로 넘어가면 활성 패널이 바뀌며 드래그가 취소되어 이동이 되돌아갔다.
+        if (what == NotificationMouseEnter) { IsMouseOver = true; if (Input.GetMouseButtonMask() == 0) Activated?.Invoke(); else _activatePending = true; }
+        if (what == NotificationMouseExit) { IsMouseOver = false; _activatePending = false; }
     }
 
     /// <summary>핫키 "viewport" 컨텍스트: 마우스가 위에 있거나 포커스를 가진 경우.</summary>

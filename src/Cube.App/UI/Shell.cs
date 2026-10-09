@@ -263,7 +263,7 @@ public partial class Shell : Control
         Layout.ActiveChanged += p => ToolContext.Viewport = p;
 
         // 핫키 라우터: 마우스가 어느 뷰포트 위에 있을 때만 viewport 컨텍스트 단축키가 동작
-        Hotkeys = new ShellInput { Name = "ShellInput", Actions = Actions, IsViewportContext = () => Layout.AnyHovered };
+        Hotkeys = new ShellInput { Name = "ShellInput", Actions = Actions, IsViewportContext = () => Layout.AnyHovered, IsBusy = () => Tools.Current is Tools.TransformToolBase { IsDragging: true } };
         Hotkeys.SpaceDown += OnSpaceDown;
         Hotkeys.SpaceUp += OnSpaceUp;
         AddChild(Hotkeys);

@@ -62,6 +62,13 @@ public partial class ShellInput : Node
     /// <summary>Space 누름을 이쪽에서 가로챘는지. 뗄 때 같은 경우에만 <see cref="SpaceUp"/>을 보낸다.</summary>
     private bool _spaceHeld;
 
+    /// <summary>
+    /// 조작기 드래그 중인지(Shell이 설정). true면 Esc 외의 단축키를 실행하지 않는다(Maya와 같음).
+    /// 예전에는 드래그 중 Z(Undo)·Delete·Ctrl+D 등이 실행되어 드래그 시작 시 캡처한 상태와 문서가 어긋났고, 삭제된 노드로 커밋하다 예외가 났다.
+    /// 홀드 키(X/V/J 스냅)는 그 전에 HeldKeys에 기록되므로 영향이 없다.
+    /// </summary>
+    public Func<bool>? IsBusy;
+
     /// <summary>모달 툴 키 처리기(true = 처리함, 단축키로 보내지 않음). 모달 툴이 켜질 때 설정하고 끝날 때 비운다.</summary>
     public Func<InputEventKey, bool>? Modal;
 
@@ -103,6 +110,8 @@ public partial class ShellInput : Node
         }
         // 모달 툴(대화형 Bevel 등)이 켜져 있으면 키를 먼저 넘긴다
         if (Modal != null && Modal(k)) { GetViewport().SetInputAsHandled(); return; }
+        // 조작기 드래그 중: Esc(툴이 드래그를 취소)만 통과시키고 나머지 단축키는 삼킨다
+        if (IsBusy?.Invoke() == true && k.Keycode != Key.Escape) { GetViewport().SetInputAsHandled(); return; }
         // 수식어 없는 Space는 액션 대신 탭/홀드 판정용 이벤트로 넘긴다
         if (k.Keycode == Key.Space && !k.CtrlPressed && !k.AltPressed && !k.ShiftPressed)
         {
