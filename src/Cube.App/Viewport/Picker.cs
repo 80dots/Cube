@@ -134,12 +134,12 @@ public sealed class Picker
         return !parent.IsNone;
     }
 
-    /// <summary>라이트 아이콘 피킹(아이콘 중심 12px).</summary>
+    /// <summary>라이트 아이콘 피킹: 아이콘 중심 12px 또는 아이콘 선(스포트 원뿔·방향 화살표 등) 6px 이내.</summary>
     /// <returns>가장 가까운 보이는 라이트 노드 히트(컴포넌트 -1), 없으면 null.</returns>
     public PickHit? PickLight(NVec2 p)
     {
         var proj = Projection();
-        float best = 12f * Scale; PickHit? hit = null;
+        float best = 12f * Scale, lineTol = 6f * Scale; PickHit? hit = null;
         foreach (var (id, lv) in _panel.Scene.LightViews)
         {
             if (!lv.Visible) continue;
@@ -147,6 +147,15 @@ public sealed class Picker
             var sp = proj.Project(w, out float depth);
             if (sp == null) continue;
             float d = NVec2.Distance(sp.Value, p);
+            // 아이콘 선분까지의 화면 거리(중심보다 조금 불리하게: 중심 임계 12px 대비 선 임계 6px로 환산)
+            foreach (var (a, b) in lv.IconSegmentsWorld())
+            {
+                var pa = proj.Project(a.ToNumerics(), out _); var pb = proj.Project(b.ToNumerics(), out _);
+                if (pa == null || pb == null) continue;
+                float t = RayPicker.ClosestParam(pa.Value, pb.Value, p);
+                float dl = NVec2.Distance(pa.Value + (pb.Value - pa.Value) * t, p);
+                if (dl <= lineTol) d = MathF.Min(d, dl * (12f / 6f));
+            }
             if (d < best) { best = d; hit = new PickHit(id, -1, depth, w); }
         }
         return hit;
