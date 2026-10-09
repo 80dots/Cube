@@ -297,4 +297,44 @@ public class UvAuditStressTests
         var (mn1, mx1) = UvOps.Bounds(t.Points.Select(p => p.Uv));
         Assert.True(Vector2.Distance((mn0 + mx0) * 0.5f, (mn1 + mx1) * 0.5f) < 0.1f);
     }
+    /// <summary>
+    /// 심과 핀은 UV 세트마다 따로다: 복사 세트에서 투영(심 전부 해제)·핀 설정을 해도 원래 세트로 돌아오면 원래 심·핀이 복원되고,
+    /// UvSetsCommand Undo와 .cube 저장→열기 뒤에도 세트별로 유지된다(예전에는 메시 하나에 공유되어 다른 세트의 편집이 덮어썼다).
+    /// </summary>
+    [Fact]
+    public void UvSets_KeepSeamsAndPinsPerSet_ThroughSwitchUndoAndSaveLoad()
+    {
+        var doc = new Core.Scene.Document();
+        var m = MeshBuilder.Cube();
+        UvOps.AutoWrap(m);
+        int seams0 = Enumerable.Range(0, m.EdgeCount).Count(e => m.Edges[e].Seam);
+        Assert.True(seams0 > 0);
+        var node = new Core.Scene.SceneNode { Name = "cube", Shape = new Core.Scene.MeshShape(m) };
+        doc.AddNode(node, doc.Root);
+        // 복사 세트로 전환 → 전체 평면 투영(심 해제) + 핀
+        doc.Undo.Push(new Core.Commands.UvSetsCommand("copy", node.Id, mm => mm.SwitchUvSet(mm.AddUvSet("lm", true))));
+        UvOps.PlanarProject(m, AliveFaces(m), Vector3.UnitY);
+        var t = UvTopology.Build(m); UvOps.SetPins(m, t, new[] { 0 }, true);
+        Assert.Equal(0, Enumerable.Range(0, m.EdgeCount).Count(e => m.Edges[e].Seam));
+        // map1로 돌아오면 원래 심, 핀 없음
+        doc.Undo.Push(new Core.Commands.UvSetsCommand("switch", node.Id, mm => mm.SwitchUvSet(0)));
+        Assert.Equal(seams0, Enumerable.Range(0, m.EdgeCount).Count(e => m.Edges[e].Seam));
+        Assert.DoesNotContain(m.Hes, h => h.PinUv);
+        // Undo(전환 취소) → lm 세트의 심 0·핀 복원
+        doc.Undo.Undo();
+        Assert.Equal(1, m.CurrentUvSet);
+        Assert.Equal(0, Enumerable.Range(0, m.EdgeCount).Count(e => m.Edges[e].Seam));
+        Assert.Contains(m.Hes, h => h.PinUv);
+        // 저장 → 열기 → map1로 전환하면 심이 돌아온다
+        var json = Core.IO.CubeFileFormat.Serialize(doc);
+        var doc2 = new Core.Scene.Document(); Core.IO.CubeFileFormat.Deserialize(doc2, json);
+        var m2 = doc2.MeshNodes().First().Mesh!;
+        Assert.Equal(1, m2.CurrentUvSet);
+        Assert.Equal(0, Enumerable.Range(0, m2.EdgeCount).Count(e => m2.Edges[e].Seam));
+        Assert.Contains(m2.Hes, h => h.PinUv);
+        m2.SwitchUvSet(0);
+        Assert.Equal(seams0, Enumerable.Range(0, m2.EdgeCount).Count(e => m2.Edges[e].Seam));
+        Assert.DoesNotContain(m2.Hes, h => h.PinUv);
+        Assert.Empty(MeshValidator.Check(m2));
+    }
 }

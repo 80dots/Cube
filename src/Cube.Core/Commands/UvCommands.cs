@@ -91,20 +91,21 @@ public sealed class UvSetsCommand : ICommand
     /// <summary>대상 노드와 구조 변경 동작.</summary>
     private readonly NodeId _node; private readonly Action<PolyMesh> _apply;
     /// <summary>변경 전/후 스냅샷. _after가 null이면 첫 실행.</summary>
-    private (List<UvSet> sets, int current, Vector2[] uvs)? _before, _after;
+    private (List<UvSet> sets, int current, Vector2[] uvs, bool[] seams, bool[] pins)? _before, _after;
     /// <summary>명령 이름.</summary>
     public string Name { get; }
     /// <summary>이름, 노드, 변경 동작을 받는다.</summary>
     public UvSetsCommand(string name, NodeId node, Action<PolyMesh> apply) { Name = name; _node = node; _apply = apply; }
 
     /// <summary>세트 목록(복제), 현재 세트 인덱스, 현재 코너 UV를 묶어 스냅샷을 만든다.</summary>
-    private static (List<UvSet>, int, Vector2[]) Snap(PolyMesh m) => (m.UvSets.Select(s => s.Clone()).ToList(), m.CurrentUvSet, m.SnapshotUvs());
-    /// <summary>스냅샷으로 세트 목록·현재 인덱스·코너 UV를 되돌린다(세트는 다시 복제해 공유 방지).</summary>
-    private static void Restore(PolyMesh m, (List<UvSet> sets, int current, Vector2[] uvs) s)
+    private static (List<UvSet>, int, Vector2[], bool[], bool[]) Snap(PolyMesh m) => (m.UvSets.Select(s => s.Clone()).ToList(), m.CurrentUvSet, m.SnapshotUvs(), m.SnapshotSeams(), m.SnapshotPins());
+    /// <summary>스냅샷으로 세트 목록·현재 인덱스·코너 UV·심·핀을 되돌린다(세트는 다시 복제해 공유 방지). 심/핀도 세트마다 다르므로 함께 되돌린다.</summary>
+    private static void Restore(PolyMesh m, (List<UvSet> sets, int current, Vector2[] uvs, bool[] seams, bool[] pins) s)
     {
         m.UvSets.Clear(); foreach (var x in s.sets) m.UvSets.Add(x.Clone());
         m.CurrentUvSet = s.current;
-        for (int i = 0; i < s.uvs.Length && i < m.HalfEdgeCount; i++) { var h = m.Hes[i]; h.Uv0 = s.uvs[i]; m.Hes[i] = h; }
+        for (int i = 0; i < s.uvs.Length && i < m.HalfEdgeCount; i++) { var h = m.Hes[i]; h.Uv0 = s.uvs[i]; h.PinUv = i < s.pins.Length && s.pins[i]; m.Hes[i] = h; }
+        for (int e = 0; e < s.seams.Length && e < m.EdgeCount; e++) { var ed = m.Edges[e]; ed.Seam = s.seams[e]; m.Edges[e] = ed; }
     }
 
     /// <summary>첫 실행이면 전 스냅샷 → apply → 후 스냅샷, Redo면 후 스냅샷 복원.</summary>
