@@ -388,6 +388,12 @@ public partial class ViewportPanel : SubViewportContainer
         foreach (int v in comps.Verts) verts.Add(v);
         foreach (int e in comps.Edges) { var (a, b) = mesh.EdgeVertices(e); verts.Add(a); verts.Add(b); }
         foreach (int f in comps.Faces) { mesh.GetFaceVertices(f, tmp); foreach (var v in tmp) verts.Add(v); }
+        // UV 모드: 선택 UV 점의 정점(예전에는 무시되어 UV 모드 F가 오브젝트 전체를 프레임했다)
+        if (sel.Mode == Core.Selection.SelectMode.Uv && comps.Uvs.Count > 0)
+        {
+            var topo = mv.UvTopo;
+            foreach (int p in comps.Uvs) if (p >= 0 && p < topo.Points.Count) verts.Add(topo.Points[p].Vertex);
+        }
         if (verts.Count == 0) return ObjectAabb(id);
         Aabb? box = null;
         foreach (int v in verts)
