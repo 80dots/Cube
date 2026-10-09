@@ -191,12 +191,14 @@ public partial class AnimationPlayback : Node
     /// <summary>정지 후 클립 끝으로.</summary>
     public void GoEnd() { Pause(); SetTime(Clip?.Length ?? 0); }
 
-    /// <summary>현재 시간 다음(d=1)/이전(d=-1) 키로 이동. 선택 노드가 있으면 그 노드의 키만.</summary>
+    /// <summary>현재 시간 다음(d=1)/이전(d=-1) 키로 이동. 선택 노드가 있으면 그 노드의 키만(선택 노드에 키가 없으면 전체 트랙).</summary>
     public void StepKey(int d)
     {
         // 대상 키 시간을 모아(선택 노드 기준) 현재 시간보다 eps 이상 뒤/앞인 가장 가까운 키를 찾는다
         var clip = Clip; if (clip == null) return;
         var times = KeyTimes(clip, SelectedNodes()).ToList();
+        // 선택 노드에 키가 없으면(가져온 직후 트랙 없는 루트가 선택된 경우 등) 모든 트랙의 키로 이동한다
+        if (times.Count == 0) times = KeyTimes(clip, new HashSet<NodeId>()).ToList();
         if (times.Count == 0) return;
         const float eps = 1e-4f;
         float? target = d > 0 ? times.Where(x => x > Time + eps).DefaultIfEmpty(float.NaN).Min() : times.Where(x => x < Time - eps).DefaultIfEmpty(float.NaN).Max();

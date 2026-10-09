@@ -63,4 +63,19 @@ public class AnimationTests
         Assert.Equal(Rest.Translation, e.Translation);
         Assert.Equal(2f, e.Scale.Y, 4);
     }
+
+    /// <summary>가운데 클립을 지운 뒤 Undo하면 원래 순서 자리로 돌아와야 한다(전에는 끝에 붙었다). Redo/Undo 반복도 같은 순서.</summary>
+    [Fact]
+    public void SetAnimationsCommand_UndoDelete_RestoresOrder()
+    {
+        var doc = new Document();
+        var a = new AnimationClip { Name = "a" }; var b = new AnimationClip { Name = "b" }; var c = new AnimationClip { Name = "c" };
+        doc.Animations.AddRange(new[] { a, b, c });
+        doc.Undo.Push(new SetAnimationsCommand("Delete Clip", Array.Empty<AnimationClip>(), new[] { b, a }));
+        Assert.Equal(new[] { c }, doc.Animations);
+        doc.Undo.Undo();
+        Assert.Equal(new[] { a, b, c }, doc.Animations);
+        doc.Undo.Redo(); doc.Undo.Undo();
+        Assert.Equal(new[] { a, b, c }, doc.Animations);
+    }
 }
