@@ -118,6 +118,7 @@ public partial class UvEditorWindow : FloatingPanel
         PopupMenu Add(string title)
         {
             var mb = new MenuButton { Text = title, Flat = true, FocusMode = Control.FocusModeEnum.None, SwitchOnHover = true, Name = "Uv" + title.Replace(" ", "").Replace("/", "") };
+            mb.SetDisableShortcuts(true); // accelerator는 표시 전용(키는 셸 단축키가 처리; Shell.MenuBar와 같은 이유)
             _menuBar.AddChild(mb);
             return mb.GetPopup();
         }

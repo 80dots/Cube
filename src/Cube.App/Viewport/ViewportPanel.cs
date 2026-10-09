@@ -315,15 +315,17 @@ public partial class ViewportPanel : SubViewportContainer
         CameraController.Frame(total.Value, Aspect);
     }
 
-    /// <summary>A: 모든 노드(메시·라이트·조인트)의 월드 AABB에 카메라를 맞춘다(아무것도 없으면 원점 주변 12×12 영역).</summary>
+    /// <summary>A: 보이는 모든 메시·조인트·라이트의 월드 AABB에 카메라를 맞춘다(아무것도 없으면 원점 주변 12×12 영역).</summary>
+    /// <remarks>예전에는 메시만 보아 조인트/라이트만 있는 씬에서 원점 영역을 프레임했고, 숨긴 메시도 포함했다.</remarks>
     public void FrameAll()
     {
         if (_doc == null) return;
         Aabb? total = null;
         foreach (var n in _doc.Nodes.Values)
         {
-            if (n.IsRoot || !n.Visible) continue;
-            var aabb = OwnAabb(n);
+            if (n.IsRoot || n.Shape == null) continue;
+            if (Scene.GetView(n.Id) is not { } v || !v.IsVisibleInTree()) continue;
+            var aabb = ShapeAabb(n.Id);
             if (aabb == null) continue;
             total = total == null ? aabb : total.Value.Merge(aabb.Value);
         }
@@ -331,48 +333,40 @@ public partial class ViewportPanel : SubViewportContainer
     }
 
     /// <summary>
-    /// 오브젝트(와 그 자손)의 월드 AABB. Maya처럼 그룹·라이트·조인트를 골라 F를 눌러도 그것을 프레임한다
-    /// (전에는 메시가 아니면 null이라 라이트/조인트/빈 그룹을 골라도 장면 전체를 프레임했음).
+    /// 오브젝트의 월드 AABB(F 프레임). 메시는 렌더 점(변형·스킨 표시 위치 반영), 조인트·라이트는 월드 위치 한 점,
+    /// 셰이프가 없는 그룹 노드는 자손들의 AABB 합. 대상이 없으면 null.
     /// </summary>
+    /// <remarks>예전에는 메시만 다뤄 조인트·라이트·그룹을 선택하고 F를 누르면 씬 전체를 프레임했다.</remarks>
     private Aabb? ObjectAabb(NodeId id)
     {
-        var node = _doc?.Find(id);
-        if (node == null) return MeshAabb(id);
+        if (ShapeAabb(id) is { } own) return own;
+        var n = _doc?.Find(id);
+        if (n == null || n.Shape != null) return null;
         Aabb? box = null;
-        // 노드 자신과 모든 자손의 AABB를 합친다
-        void Walk(Core.Scene.SceneNode n)
-        {
-            var b = OwnAabb(n);
-            if (b != null) box = box == null ? b : box.Value.Merge(b.Value);
-            foreach (var c in n.Children) Walk(c);
-        }
-        Walk(node);
+        foreach (var d in n.Descendants())
+            if (ShapeAabb(d.Id) is { } b) box = box == null ? b : box.Value.Merge(b);
         return box;
     }
 
-    /// <summary>노드 자신만의 월드 AABB: 메시 = 정점, 라이트·조인트 = 위치 주변 작은 상자(아이콘/구 크기), 빈 트랜스폼 = null.</summary>
-    private Aabb? OwnAabb(Core.Scene.SceneNode n)
-    {
-        if (n.MeshShape != null) return MeshAabb(n.Id);
-        if (n.Light == null && !n.IsJoint) return null;
-        var p = n.WorldMatrix.Translation.ToGodot();
-        float r = n.Joint is { } j ? MathF.Max(j.Radius * 2f, 0.1f) : 0.4f;
-        return new Aabb(p - new Vector3(r, r, r), new Vector3(r, r, r) * 2f);
-    }
-
-    /// <summary>메시 뷰의 렌더 점(정점)들을 월드로 변환해 감싼 AABB(변형·스킨 표시 위치 반영). 메시가 없거나 비면 null.</summary>
-    private Aabb? MeshAabb(NodeId id)
+    /// <summary>노드 자신의 셰이프(메시 렌더 점 / 조인트·라이트 위치)만의 월드 AABB. 셰이프가 없으면 null.</summary>
+    private Aabb? ShapeAabb(NodeId id)
     {
         var mv = Scene.GetMeshView(id);
-        if (mv == null || mv.Render.PointCount == 0) return null;
-        var xf = mv.GlobalTransform;
-        Aabb? box = null;
-        for (int i = 0; i < mv.Render.PointCount; i++)
+        if (mv != null)
         {
-            var p = xf * mv.Render.PointPositions[i].ToGodot();
-            box = box == null ? new Aabb(p, Vector3.Zero) : box.Value.Expand(p);
+            if (mv.Render.PointCount == 0) return null;
+            var xf = mv.GlobalTransform;
+            Aabb? box = null;
+            for (int i = 0; i < mv.Render.PointCount; i++)
+            {
+                var p = xf * mv.Render.PointPositions[i].ToGodot();
+                box = box == null ? new Aabb(p, Vector3.Zero) : box.Value.Expand(p);
+            }
+            return box;
         }
-        return box;
+        var n = _doc?.Find(id);
+        if (n != null && (n.IsJoint || n.IsLight) && Scene.GetView(id) is { } v) return new Aabb(v.GlobalPosition, Vector3.Zero);
+        return null;
     }
 
     /// <summary>
@@ -394,6 +388,12 @@ public partial class ViewportPanel : SubViewportContainer
         foreach (int v in comps.Verts) verts.Add(v);
         foreach (int e in comps.Edges) { var (a, b) = mesh.EdgeVertices(e); verts.Add(a); verts.Add(b); }
         foreach (int f in comps.Faces) { mesh.GetFaceVertices(f, tmp); foreach (var v in tmp) verts.Add(v); }
+        // UV 모드: 선택 UV 점의 정점(예전에는 무시되어 UV 모드 F가 오브젝트 전체를 프레임했다)
+        if (sel.Mode == Core.Selection.SelectMode.Uv && comps.Uvs.Count > 0)
+        {
+            var topo = mv.UvTopo;
+            foreach (int p in comps.Uvs) if (p >= 0 && p < topo.Points.Count) verts.Add(topo.Points[p].Vertex);
+        }
         if (verts.Count == 0) return ObjectAabb(id);
         Aabb? box = null;
         foreach (int v in verts)
@@ -427,7 +427,13 @@ public partial class ViewportPanel : SubViewportContainer
     public override void _GuiInput(InputEvent e)
     {
         // 마우스 이벤트마다 마지막 위치 기록, 처음 들어오면 활성 패널로. 버튼을 누르면 키보드 포커스도 가져온다
-        if (e is InputEventMouse me) { LastMouseLocal = me.Position; if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); } }
+        if (e is InputEventMouse me)
+        {
+            LastMouseLocal = me.Position;
+            if (!IsMouseOver) { IsMouseOver = true; Activated?.Invoke(); }
+            // 드래그 중에 들어와 미뤄 둔 활성화: 버튼을 모두 놓은 뒤 첫 이동에서 활성 패널이 된다
+            else if (_activatePending && me.ButtonMask == 0) { _activatePending = false; Activated?.Invoke(); }
+        }
         if (e is InputEventMouseButton { Pressed: true }) { GrabFocus(); Activated?.Invoke(); }
         bool modal = ModalTool?.Invoke() == true;
         // 모달 툴: 휠과 Alt 없는 마우스 버튼은 줌/파이보다 먼저 툴로(Blender Bevel의 휠 = 세그먼트, RMB = 취소)
@@ -488,6 +494,9 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>열린 파이를 닫고 하이라이트된 항목을 돌려준다(Space 파이를 키를 뗄 때 실행하기 위해). 닫혀 있으면 null.</summary>
     public UI.PieItem? ReleasePie() => Pie.IsOpen ? Pie.Release() : null;
 
+    /// <summary>버튼을 누른 채 들어와 활성화를 미뤘는지(버튼을 놓은 뒤 첫 마우스 이동에서 활성화).</summary>
+    private bool _activatePending;
+
     /// <summary>마우스가 이 패널 위에 있는지(MouseEnter/Exit 알림과 마우스 이벤트로 갱신).</summary>
     public bool IsMouseOver { get; private set; }
 
@@ -496,8 +505,10 @@ public partial class ViewportPanel : SubViewportContainer
     {
         if (what == NotificationResized) UiPerf.Count("vpResize");
         if (what == NotificationApplicationFocusOut) { Navigation.Cancel(); Pie?.Close(); }
-        if (what == NotificationMouseEnter) { IsMouseOver = true; Activated?.Invoke(); }
-        if (what == NotificationMouseExit) IsMouseOver = false;
+        // 버튼을 누른 채(다른 패널에서 시작한 조작기·마키·내비게이션 드래그) 들어오면 활성 패널을 바꾸지 않는다.
+        // 예전에는 4분할에서 조작기를 끌다 옆 패널로 넘어가면 활성 패널이 바뀌며 드래그가 취소되어 이동이 되돌아갔다.
+        if (what == NotificationMouseEnter) { IsMouseOver = true; if (Input.GetMouseButtonMask() == 0) Activated?.Invoke(); else _activatePending = true; }
+        if (what == NotificationMouseExit) { IsMouseOver = false; _activatePending = false; }
     }
 
     /// <summary>핫키 "viewport" 컨텍스트: 마우스가 위에 있거나 포커스를 가진 경우.</summary>

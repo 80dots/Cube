@@ -176,3 +176,52 @@ public sealed class TransformNodesCommand : ICommand
         }
     }
 }
+
+/// <summary>노드 가시성 변경(Display → Hide Selection / Show Selection / Show All). 숨긴 노드는 자손과 함께 보이지 않고 피킹·프레임에서 빠진다.</summary>
+/// <remarks>숨길 때 그 노드들을 오브젝트 선택에서 뺀다(Maya Hide Selection과 같음). 그 선택 변경도 이 명령이 함께 Undo한다.</remarks>
+public sealed class SetVisibilityCommand : ICommand
+{
+    /// <summary>대상 노드(실제로 값이 바뀌는 것만)와 같은 순서의 이전 가시성, 바꿀 값.</summary>
+    private readonly NodeId[] _ids; private readonly bool[] _before; private readonly bool _visible;
+    /// <summary>실행 전/후 선택 스냅샷(숨긴 노드를 선택에서 빼므로).</summary>
+    private SelectionSnapshot? _selBefore, _selAfter;
+    /// <summary>명령 이름("Hide"/"Show").</summary>
+    public string Name { get; }
+
+    /// <summary>노드들을 <paramref name="visible"/>로 바꾸는 명령. 이미 그 값인 노드와 루트는 뺀다.</summary>
+    public SetVisibilityCommand(Document doc, IEnumerable<NodeId> ids, bool visible)
+    {
+        _visible = visible;
+        Name = visible ? "Show" : "Hide";
+        _ids = ids.Distinct().Where(id => doc.Find(id) is { IsRoot: false } n && n.Visible != visible).ToArray();
+        _before = _ids.Select(id => doc.Get(id).Visible).ToArray();
+    }
+
+    /// <summary>바뀔 노드가 없는지(Undo 스택에 넣지 않는다).</summary>
+    public bool IsEmpty => _ids.Length == 0;
+
+    /// <summary>가시성을 바꾸고 VisibilityChanged를 통지한다. 숨기면 그 노드들을 오브젝트 선택에서 뺀다.</summary>
+    public void Do(Document doc)
+    {
+        _selBefore ??= doc.Selection.Capture();
+        foreach (var id in _ids) { var n = doc.Find(id); if (n == null) continue; n.Visible = _visible; doc.Notify(new DocChange(ChangeKind.VisibilityChanged, id)); }
+        if (_selAfter == null)
+        {
+            if (!_visible && doc.Selection.Mode == SelectMode.Object)
+            {
+                var hidden = new HashSet<NodeId>(_ids);
+                var keep = doc.Selection.Objects.Where(o => !hidden.Contains(o)).ToList();
+                if (keep.Count != doc.Selection.Objects.Count) doc.Selection.SelectObjects(keep);
+            }
+            _selAfter = doc.Selection.Capture();
+        }
+        else doc.Selection.Restore(_selAfter);
+    }
+
+    /// <summary>이전 가시성과 선택을 되돌린다.</summary>
+    public void Undo(Document doc)
+    {
+        for (int i = 0; i < _ids.Length; i++) { var n = doc.Find(_ids[i]); if (n == null) continue; n.Visible = _before[i]; doc.Notify(new DocChange(ChangeKind.VisibilityChanged, _ids[i])); }
+        if (_selBefore != null) doc.Selection.Restore(_selBefore);
+    }
+}

@@ -33,6 +33,8 @@ public abstract class TransformToolBase : SelectTool
     public GizmoBase? GizmoPublic => Gizmo;
     /// <summary>조작기 핸들을 잡고 드래그 중인지.</summary>
     protected bool Dragging { get; private set; }
+    /// <summary>조작기를 드래그 중인지(외부 공개용; 셸이 드래그 중 단축키를 막는 데 쓴다).</summary>
+    public bool IsDragging => Dragging;
     /// <summary>드래그 중인 조작기 부분(축/평면/중앙 등).</summary>
     protected GizmoPart DragPart { get; private set; }
     /// <summary>드래그를 시작한 화면 위치(뷰포트 로컬 픽셀).</summary>
@@ -61,6 +63,8 @@ public abstract class TransformToolBase : SelectTool
     private ComponentTransformOp? _lastOp;
     /// <summary>마지막 적용 변형의 파라미터(Translate/Angle/Scale). 히스토리 항목 파라미터로 복제되어 들어간다.</summary>
     private HistoryParams? _lastParams;
+    /// <summary>점 스냅 collapse(Retain Component Spacing off)로 끝났으면 그 월드 목표점. 커밋 시 'Target' 히스토리 항목(절대 위치)으로 기록한다.</summary>
+    private NVec3? _collapseTarget;
     /// <summary>Ctrl 드래그: 선택 조인트만 움직이고 자식의 월드 트랜스폼은 유지(자식 로컬 보정).</summary>
     private bool _isolate;
     /// <summary>Ctrl 드래그 시 보정할 자식 조인트 목록: (자식, 시작 Local, 시작 월드 행렬). 이 월드를 유지하도록 로컬을 다시 푼다.</summary>
@@ -109,8 +113,9 @@ public abstract class TransformToolBase : SelectTool
     /// <summary>활성 패널이 바뀌면 진행 중 드래그를 커밋하고 조작기를 새 패널로 옮긴다.</summary>
     protected override void OnViewportChanged(ViewportPanel panel)
     {
-        base.OnViewportChanged(panel);
+        // 드래그 커밋을 base(SelectTool: Cancel 호출 → 드래그 되돌림)보다 먼저 한다
         if (Dragging) EndDrag(commit: true);
+        base.OnViewportChanged(panel);
         AttachGizmo(panel);
         RefreshGizmo();
     }
@@ -405,7 +410,7 @@ public abstract class TransformToolBase : SelectTool
         {
             // 컴포넌트: 노드별 명령을 한 Undo 그룹으로 묶는다
             using var g = doc.Undo.BeginGroup(Label);
-            foreach (var (id, verts, init, _, _) in ComponentTargets)
+            foreach (var (id, verts, init, _, worldInv) in ComponentTargets)
             {
                 var mesh = doc.Get(id).Mesh!;
                 var after = new NVec3[verts.Length];
@@ -414,6 +419,20 @@ public abstract class TransformToolBase : SelectTool
                 // 파생 툴(Extrude 두께 등)이 자체 명령을 주면 그것을 사용
                 var custom = MakeComponentCommand(id, verts, init, after);
                 if (custom != null) { if (!custom.IsNoop) doc.Undo.Push(custom, alreadyApplied: true); continue; }
+                // 점 스냅 collapse: 모든 정점을 한 점으로 모은 결과는 이동 델타로 재생할 수 없으므로 절대 목표점(월드) 파라미터로 기록한다
+                // (예전에는 Move 델타로 기록되어 Action Popup/히스토리 편집 시 모였던 정점이 다시 흩어졌다)
+                if (_collapseTarget is { } ct)
+                {
+                    var ids = verts; var inv = worldInv;
+                    var cc = new MoveVerticesCommand(Label, id, verts, init, after, null, new HistoryParams(HistoryParam.V("Target", ct)), (m, prm) =>
+                    {
+                        var local = NVec3.Transform(prm["Target"].Value, inv);
+                        foreach (int v in ids) { if (v >= m.VertexCount || !m.Verts[v].Alive) continue; var vx = m.Verts[v]; vx.Position = local; m.Verts[v] = vx; }
+                        return true;
+                    });
+                    if (!cc.IsNoop) doc.Undo.Push(cc, alreadyApplied: true);
+                    continue;
+                }
                 // 기본: 마지막 op를 이 노드의 월드 행렬로 복제해 이동/회전/스케일 히스토리 항목으로 기록
                 ComponentTransformOp? op = null;
                 if (_lastOp != null) op = new ComponentTransformOp { Type = _lastOp.Type, Pivot = _lastOp.Pivot, Axis = _lastOp.Axis, BasisX = _lastOp.BasisX, BasisY = _lastOp.BasisY, BasisZ = _lastOp.BasisZ, MeshWorld = doc.Get(id).WorldMatrix };
@@ -423,7 +442,7 @@ public abstract class TransformToolBase : SelectTool
         }
         // 캡처 상태 정리
         ObjectTargets.Clear(); ComponentTargets.Clear(); _childComp.Clear(); _isolate = false;
-        _lastOp = null; _lastParams = null;
+        _lastOp = null; _lastParams = null; _collapseTarget = null;
         RefreshGizmo();
     }
 
@@ -451,6 +470,7 @@ public abstract class TransformToolBase : SelectTool
     protected void ApplyTranslation(NVec3 worldDelta)
     {
         var doc = Ctx.Doc;
+        _collapseTarget = null;
         _lastOp = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Move, Pivot = PivotWorld };
         _lastParams = _lastOp.DefaultParams(worldDelta, 0, NVec3.One);
         // 오브젝트: 부모 공간 델타를 Translation에 더함
@@ -548,6 +568,7 @@ public abstract class TransformToolBase : SelectTool
     /// <remarks>오브젝트는 피벗의 월드 위치가 목표점에 오도록 Translation을 옮기고, 컴포넌트는 모든 정점을 목표점(로컬)으로 옮긴다.</remarks>
     {
         var doc = Ctx.Doc;
+        _collapseTarget = worldTarget;
         _lastOp = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Move, Pivot = PivotWorld };
         _lastParams = _lastOp.DefaultParams(worldTarget - PivotWorld, 0, NVec3.One);
         foreach (var (node, initial, parentWorld, parentInv) in ObjectTargets)

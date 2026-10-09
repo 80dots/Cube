@@ -175,6 +175,7 @@ public class SelectTool : ToolBase
     private bool TryDoubleClickSelect(InputEventMouseButton mb)
     {
         var sel = Ctx.Sel;
+        if (sel.Mode == SelectMode.Uv) return TryDoubleClickUvShell(mb);
         if (sel.Mode is not (SelectMode.Edge or SelectMode.Face)) return false;
         // 커서 아래 컴포넌트를 집는다(보이는 요소 우선 옵션 반영)
         var hit = Picker.Pick(mb.Position, sel.Mode, Ctx.CameraBasedSelection);
@@ -198,9 +199,32 @@ public class SelectTool : ToolBase
         var node = hit.Value.Node;
         var items = ids.Select(i => new SelItem(node, i)).ToArray();
         var modifier = ModifierOf(mb);
-        // 더블클릭의 첫 클릭이 이미 Replace로 선택했으므로, 수식어 없는 더블클릭은 루프로 교체한다
-        UI.Shell.Instance.RecordSelection(s => s.Apply(items, modifier == SelectModifier.Replace ? SelectModifier.Replace : SelectModifier.Add));
+        // 더블클릭의 첫 클릭이 이미 Replace로 선택했으므로, 수식어 없는 더블클릭은 루프로 교체한다.
+        // Ctrl 더블클릭은 루프를 빼고(예전에는 Ctrl도 추가가 되었다), Shift/Ctrl+Shift는 더한다(Shift 토글이면 첫 클릭이 뺀 항목이 되살아남)
+        var mod = modifier switch { SelectModifier.Replace => SelectModifier.Replace, SelectModifier.Remove => SelectModifier.Remove, _ => SelectModifier.Add };
+        UI.Shell.Instance.RecordSelection(s => s.Apply(items, mod));
         if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] double-click {sel.Mode} -> {items.Length} items");
+        return true;
+    }
+
+    /// <summary>
+    /// 뷰포트 UV 모드 더블클릭(Maya): 커서 아래 정점의 UV 점들이 속한 UV 셸 전체를 선택한다. 수식어 규칙은 엣지 루프 더블클릭과 같다.
+    /// </summary>
+    private bool TryDoubleClickUvShell(InputEventMouseButton mb)
+    {
+        var hit = Picker.Pick(mb.Position, SelectMode.Uv, Ctx.CameraBasedSelection);
+        if (hit == null) return false;
+        var mv = Ctx.Viewport.Scene.GetMeshView(hit.Value.Node);
+        if (mv == null) return false;
+        var topo = mv.UvTopo;
+        var shells = new HashSet<int>(Picker.ExpandUv(new[] { hit.Value.ToSelItem() }).Select(it => topo.Points[it.Component].Shell));
+        if (shells.Count == 0) return false;
+        var node = hit.Value.Node;
+        var items = shells.SelectMany(topo.PointsInShell).Distinct().Select(p => new SelItem(node, p)).ToArray();
+        var modifier = ModifierOf(mb);
+        var mod = modifier switch { SelectModifier.Replace => SelectModifier.Replace, SelectModifier.Remove => SelectModifier.Remove, _ => SelectModifier.Add };
+        UI.Shell.Instance.RecordSelection(s => s.Apply(items, mod));
+        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] double-click Uv -> shells {string.Join(",", shells)}: {items.Length} points");
         return true;
     }
 

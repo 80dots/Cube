@@ -95,13 +95,15 @@ public partial class PieMenu : Control
     /// <summary>
     /// 항목 사각형을 계산한다. 높이는 아이콘 항목이 있으면 아이콘+6, 아니면 24(× 배율). 앞 8개는 방향 벡터 × Radius 지점에 놓되
     /// 오른쪽 항목은 왼쪽 끝을, 왼쪽 항목은 오른쪽 끝을, 위/아래 항목은 가운데를 그 지점에 맞춘다.
-    /// 9번째부터는 오버플로: 아래(공간이 모자라면 위) 영역에 열당 2~6개씩 세로 목록으로, 열 묶음 전체를 가운데 정렬(화면 안으로 자름)한다.
+    /// 9번째부터는 오버플로: <see cref="OverflowLayout"/>가 정한 열·행 격자(패널 안으로 자름)에 세로 목록으로 놓는다.
     /// </summary>
     private void Layout()
     {
         _rects.Clear();
         float s = CubeApp.Instance.UiScale;
         float padX = 10 * s, h = (_items.Any(it => it.Icon != null) ? IconPx + 6 : 24) * s;
+        // 오버플로 목록 배치(9번째 항목부터): 열 수·열당 개수·시작 위치를 한 번에 정한다
+        var (perCol, startY, left, colW, gap) = OverflowLayout(padX, h, s);
         // 각 항목의 폭 = 글자 폭 + 좌우 여백(+ 아이콘).
         for (int i = 0; i < _items.Count; i++)
         {
@@ -117,29 +119,41 @@ public partial class PieMenu : Control
             }
             else
             {
-                // 오버플로: 아래쪽에 열당 최대 6개, 열은 가운데 정렬(열 폭은 그 열의 가장 넓은 항목)
-                // 아래 공간에 맞게 열당 개수를 정한다(2~6개). 공간이 모자라면 열을 늘린다
-                float startY = _center.Y + Radius + h * 1.6f;
-                // 열 수와 열 폭(오버플로 항목 중 가장 넓은 것), 이 항목의 열/행 위치를 계산한다.
-                int overflow = _items.Count - 8;
-                int perCol = Math.Clamp((int)((Size.Y - startY) / (h + 4 * s)), 2, 6);
-                // 아래 공간이 모자라면(열이 너무 많아지면) 위쪽에 둔다
-                int colsBelow = (overflow + perCol - 1) / perCol;
-                float aboveSpace = _center.Y - Radius - h * 1.6f;
-                int perColAbove = Math.Clamp((int)(aboveSpace / (h + 4 * s)), 2, 6);
-                if (perCol < 6 && perColAbove > perCol) { perCol = perColAbove; startY = aboveSpace - perCol * (h + 4 * s); if (startY < 4 * s) startY = 4 * s; }
-                int cols = (overflow + perCol - 1) / perCol;
-                float colW = 0;
-                for (int j = 8; j < _items.Count; j++) colW = MathF.Max(colW, ItemWidth(_items[j], padX, s));
-                float gap = 8 * s;
                 int k = i - 8, col = k / perCol, row = k % perCol;
-                // 열 묶음 전체 폭을 중심에 맞추되 화면 좌우 4px 안쪽으로 자른다.
-                float blockW = cols * colW + (cols - 1) * gap;
-                float left = Math.Clamp(_center.X - blockW / 2, 4 * s, MathF.Max(4 * s, Size.X - blockW - 4 * s));
                 pos = new Vector2(left + col * (colW + gap) + (colW - w) / 2, startY + row * (h + 4 * s));
             }
             _rects.Add(new Rect2(pos, new Vector2(w, h)));
         }
+    }
+
+    /// <summary>
+    /// 오버플로 목록(9번째 항목부터)의 배치: 열당 최대 6개를 기본으로 하되, 열 묶음이 패널 폭을 넘으면 열당 개수를 늘려 열 수를 줄이고,
+    /// 방사형 아래(공간이 모자라면 위, 둘 다 모자라면 더 넓은 쪽)에 두며 패널 안으로 자른다.
+    /// 예전에는 열당 개수를 2~6으로만 정해 4분할처럼 작은 패널에서 Edit 파이(오브젝트 모드 21개 오버플로)의 일부 항목이 패널 밖으로 나가 고를 수 없었다.
+    /// </summary>
+    /// <returns>열당 개수, 첫 행 Y, 묶음 왼쪽 X, 열 폭, 열 간격.</returns>
+    private (int perCol, float startY, float left, float colW, float gap) OverflowLayout(float padX, float h, float s)
+    {
+        int n = _items.Count - 8;
+        float gap = 8 * s, rowH = h + 4 * s, margin = 4 * s;
+        if (n <= 0) return (1, 0, 0, 0, gap);
+        float colW = 0;
+        for (int j = 8; j < _items.Count; j++) colW = MathF.Max(colW, ItemWidth(_items[j], padX, s));
+        int maxCols = Math.Max(1, (int)((Size.X - 2 * margin + gap) / (colW + gap)));
+        int perCol = Math.Min(6, n);
+        if ((n + perCol - 1) / perCol > maxCols) perCol = (n + maxCols - 1) / maxCols;
+        int cols = (n + perCol - 1) / perCol;
+        float blockH = perCol * rowH - 4 * s;
+        float belowTop = _center.Y + Radius + h * 1.6f, aboveBottom = _center.Y - Radius - h * 1.6f;
+        float belowSpace = Size.Y - margin - belowTop, aboveSpace = aboveBottom - margin;
+        float startY;
+        if (blockH <= belowSpace || belowSpace >= aboveSpace) startY = belowTop;
+        else startY = aboveBottom - blockH;
+        // 패널 안으로(위·아래) 자른다
+        startY = Math.Clamp(startY, margin, MathF.Max(margin, Size.Y - margin - blockH));
+        float blockW = cols * colW + (cols - 1) * gap;
+        float left = Math.Clamp(_center.X - blockW / 2, margin, MathF.Max(margin, Size.X - blockW - margin));
+        return (perCol, startY, left, colW, gap);
     }
 
     /// <summary>아이콘 크기(UI 배율 1 기준 px).</summary>

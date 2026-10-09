@@ -112,4 +112,31 @@ public class HistoryTests
         Assert.True(MathF.Abs(maxY - 2.5f) < 1e-4f, $"maxY {maxY} after edit");
         Assert.Equal(26, mesh.AliveFaceCount);
     }
+    /// <summary>
+    /// 위상이 그대로인 히스토리 항목(컴포넌트 이동)의 파라미터를 바꾸거나 Undo/Redo해도 그 노드의 컴포넌트 선택이 유지된다.
+    /// 예전에는 EditHistoryCommand가 선택을 항상 비워 Properties History/Action Popup으로 값만 바꿔도 정점 선택이 사라졌다.
+    /// </summary>
+    [Fact]
+    public void EditHistory_SameTopology_KeepsComponentSelection()
+    {
+        var doc = new Document();
+        var cube = CreatePrimitiveCommand.Cube(doc); doc.Undo.Push(cube);
+        var node = cube.Node; var mesh = node.Mesh!;
+        var top = Enumerable.Range(0, mesh.VertexCount).Where(v => mesh.Verts[v].Position.Y > 0).ToArray();
+        var before = top.Select(v => mesh.Verts[v].Position).ToArray();
+        var after = before.Select(p => p + Vector3.UnitY).ToArray();
+        foreach (var (v, p) in top.Zip(after)) { var vert = mesh.Verts[v]; vert.Position = p; mesh.Verts[v] = vert; }
+        var op = new ComponentTransformOp { Type = ComponentTransformOp.Kind.Move, MeshWorld = node.WorldMatrix };
+        doc.Undo.Push(new MoveVerticesCommand("Move", node.Id, top, before, after, op, op.DefaultParams(Vector3.UnitY, 0, Vector3.One)), alreadyApplied: true);
+        doc.Selection.Mode = SelectMode.Vertex;
+        doc.Selection.SelectComponents(node.Id, SelectMode.Vertex, top);
+
+        var p2 = node.MeshShape!.History[0].Params.Clone(); p2["Translate"].Value = new Vector3(0, 2, 0);
+        doc.Undo.Push(new EditHistoryCommand(node.Id, 0, p2));
+        Assert.Equal(top.Length, doc.Selection.GetComponents(node.Id).Verts.Count);
+        doc.Undo.Undo();
+        Assert.Equal(top.Length, doc.Selection.GetComponents(node.Id).Verts.Count);
+        doc.Undo.Redo();
+        Assert.Equal(top.Length, doc.Selection.GetComponents(node.Id).Verts.Count);
+    }
 }

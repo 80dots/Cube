@@ -34,6 +34,13 @@ public sealed class PolyCount
         AnimPerf.End("shell.polycount", t0);
     }
 
+    /// <summary>노드와 모든 조상이 보이는지(Display → Hide Selection으로 숨긴 계층 제외).</summary>
+    private static bool VisibleInHierarchy(SceneNode n)
+    {
+        for (var p = n; p != null && !p.IsRoot; p = p.Parent) if (!p.Visible) return false;
+        return true;
+    }
+
     /// <summary>실제 집계: 값 초기화 → 선택 오브젝트 집합 구성 → 노드마다 살아 있는 요소 수를 세어 Scene/Object/Selected에 더한다.</summary>
     private void RecomputeCore(Document doc)
     {
@@ -48,6 +55,8 @@ public sealed class PolyCount
         foreach (var n in doc.Nodes.Values)
         {
             if (n.IsRoot) continue;
+            // Maya와 같이 숨긴 오브젝트(자신이나 조상이 Hide)는 세지 않는다
+            if (!VisibleInHierarchy(n)) continue;
             var m = n.Mesh;
             bool selected = objIds.Contains(n.Id);
             // 메시 없는 노드: 조인트나 셰이프가 있으면 오브젝트로만 센다

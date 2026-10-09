@@ -91,11 +91,45 @@ public partial class ViewportHud : VBoxContainer
         _jointAxes.Pressed += () => { UI.Shell.Instance.Actions.Invoke("display.jointAxes"); RefreshAllHuds(); };
         row.AddChild(_jointAxes);
         AddChild(row);
+        _row = row;
+        // 좁은 패널(4분할 등)에서는 버튼 줄이 패널 가운데까지 덮어 조작기·선택 클릭을 가로채므로 숨긴다(뷰 큐브만 남김)
+        panel.Resized += UpdateCompact;
+        Callable.From(UpdateCompact).CallDeferred();
 
         // 모드·카메라가 바뀌면 버튼 상태를 다시 맞춘다
         panel.Display.ModeChanged += Refresh;
         panel.CameraController.Changed += Refresh;
         Refresh();
+    }
+
+    /// <summary>버튼 줄(투영·셰이딩·표시 토글).</summary>
+    private HBoxContainer _row = null!;
+
+    /// <summary>
+    /// 패널 폭에 비해 버튼 줄이 너무 넓으면(폭의 55% 초과) 버튼 줄을 숨기고, 아주 작은 패널(높이 220px·폭 260px 미만, UI 배율 반영)에서는 뷰 큐브도 숨긴다.
+    /// 예전에는 4분할 뷰(패널 폭 ~450px)에서 버튼 줄이 패널 위쪽 가운데를 덮어 조작기 핸들(축 화살표)을 누르면 HUD 버튼이 눌렸다.
+    /// 같은 기능은 Display 메뉴·단축키(4/5/6/7)로 쓸 수 있다.
+    /// </summary>
+    private void UpdateCompact()
+    {
+        if (_panel == null || _row == null || !IsInstanceValid(_panel)) return;
+        float s = CubeApp.Instance.UiScale;
+        float rowW = _row.GetCombinedMinimumSize().X;
+        bool showRow = _panel.Size.X <= 0 || rowW <= _panel.Size.X * 0.55f;
+        bool showCube = _panel.Size.X <= 0 || (_panel.Size.X >= 260 * s && _panel.Size.Y >= 220 * s);
+        if (_row.Visible == showRow && _cube.GetParent<Control>().Visible == showCube) return;
+        _row.Visible = showRow;
+        _cube.GetParent<Control>().Visible = showCube;
+        // 오른쪽 위 모서리를 유지한 채 최소 크기로 다시 맞춘다(최소 크기는 다음 프레임에 갱신되므로 지연)
+        Callable.From(FitToMinimum).CallDeferred();
+    }
+
+    /// <summary>오른쪽·위 오프셋은 그대로 두고 왼쪽·아래 오프셋을 최소 크기에 맞춘다(우상단 앵커).</summary>
+    private void FitToMinimum()
+    {
+        var m = GetCombinedMinimumSize();
+        OffsetLeft = OffsetRight - m.X;
+        OffsetBottom = OffsetTop + m.Y;
     }
 
     /// <summary>모든 버튼 눌림 상태와 투영 아이콘·툴팁을 현재 상태(패널 표시 상태·전역 설정)에 맞추고 뷰 큐브를 다시 그린다. 신호는 내지 않는다.</summary>

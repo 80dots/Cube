@@ -49,6 +49,8 @@ public partial class Shell : Control
     private readonly List<(Button button, string action)> _shelfButtons = new();
     /// <summary>셸프 버튼과 액션 ID 목록(점검용 읽기 전용).</summary>
     public IReadOnlyList<(Button button, string action)> ShelfButtons => _shelfButtons;
+    /// <summary>셸프 버튼들의 ActionId(디버그 점검 `actioncheck`용).</summary>
+    public IEnumerable<string> ShelfActions => _shelfButtons.Select(b => b.action);
     /// <summary>왼쪽 세로 툴박스(Select/Move/Rotate/Scale, 축 방향 버튼, Preferences/Undo/Redo).</summary>
     public VBoxContainer ToolBox { get; private set; } = null!;
     /// <summary>Outliner를 담은 도킹 가능한 패널(기본: 왼쪽 도크).</summary>
@@ -157,6 +159,9 @@ public partial class Shell : Control
 
         // 메뉴바와 상태 라인(어두운 배경으로 감쌈)
         MenuBar = new MenuBar { Name = "MenuBar", Flat = true };
+        // 메뉴 항목의 단축키 표시(accelerator)는 표시 전용이다. 키는 ShellInput만 처리한다(텍스트 칸 포커스 무시, viewport 컨텍스트).
+        // 예전에는 MenuBar가 처리되지 않은 키를 accelerator로 실행해, 숫자 칸에 입력 중 F9/F/4 등이 그대로 실행되고 viewport 전용 키(F/A/1~8)가 뷰포트 밖에서도 동작했다.
+        MenuBar.SetDisableShortcuts(true);
         root.AddChild(MenuBar);
 
         StatusLine = new HBoxContainer { Name = "StatusLine", CustomMinimumSize = new Vector2(0, 28 * s) };
@@ -260,7 +265,7 @@ public partial class Shell : Control
         Layout.ActiveChanged += p => ToolContext.Viewport = p;
 
         // 핫키 라우터: 마우스가 어느 뷰포트 위에 있을 때만 viewport 컨텍스트 단축키가 동작
-        Hotkeys = new ShellInput { Name = "ShellInput", Actions = Actions, IsViewportContext = () => Layout.AnyHovered };
+        Hotkeys = new ShellInput { Name = "ShellInput", Actions = Actions, IsViewportContext = () => Layout.AnyHovered, IsBusy = () => Tools.Current is Tools.TransformToolBase { IsDragging: true } };
         Hotkeys.SpaceDown += OnSpaceDown;
         Hotkeys.SpaceUp += OnSpaceUp;
         AddChild(Hotkeys);

@@ -78,7 +78,7 @@ public partial class Shell
 
         // select.* = 전체 선택/해제, Grow/Shrink, 컴포넌트 변환(To Vertices/Edges/Faces/Boundary/UV/UV Island), 계층 선택.
         // 모두 RecordSelection으로 감싸 선택 변경이 Undo 가능(Maya와 동일).
-        Actions.Register("select.all", "Select All", () => RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); }));
+        Actions.Register("select.all", "Select All", SelectAll);
         Actions.Register("select.none", "Deselect All", () => RecordSelection(s => s.ClearAll()), canExecute: () => !sel.IsEmpty);
         Actions.Register("select.grow", "Grow Selection", () => GrowShrink(true), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.shrink", "Shrink Selection", () => GrowShrink(false), canExecute: () => sel.IsComponentMode);
@@ -104,7 +104,7 @@ public partial class Shell
         Actions.Register("edit.undo", "Undo", () => doc.Undo.Undo(), canExecute: () => doc.Undo.CanUndo);
         Actions.Register("edit.redo", "Redo", () => doc.Undo.Redo(), canExecute: () => doc.Undo.CanRedo);
         Actions.Register("edit.repeatLast", "Repeat Last", () => Actions.RepeatLast(), canExecute: () => Actions.LastRepeatable != null);
-        Actions.Register("edit.delete", "Delete", DeleteSelection, canExecute: () => !sel.IsEmpty, repeatable: true);
+        Actions.Register("edit.delete", "Delete", DeleteSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode != SelectMode.Uv && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true); // UV 모드 Delete는 아무것도 지우지 않는다(예전에는 빈 "Delete Vertices" Undo·히스토리 항목이 생겼다; UV 삭제는 uv.deleteUvs)
         Actions.Register("edit.duplicate", "Duplicate", DuplicateSelection, canExecute: () => sel.Objects.Count > 0, repeatable: true);
         Actions.Register("edit.preferences", "Preferences...", ShowPreferences);
         Actions.Register("edit.deleteHistory", "Delete History", () => { var ids = sel.Objects.Where(id => doc.Find(id)?.MeshShape?.History.Count > 0).ToArray(); if (ids.Length > 0) doc.Undo.Push(new DeleteHistoryCommand(ids)); },
@@ -130,7 +130,7 @@ public partial class Shell
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
-        Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.Mode != SelectMode.Uv && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.combine", "Combine", CombineSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count(id => doc.Find(id)?.Mesh != null) >= 2);
         Actions.Register("mesh.separate", "Separate", SeparateSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count == 1);
         Actions.Register("mesh.soften", "Soften Edge", () => SetEdgesHard(false), canExecute: () => HasEdgeTargets(), repeatable: true);
@@ -180,6 +180,10 @@ public partial class Shell
         Actions.Register("display.wireOnShaded", "Wireframe on Shaded", () => { bool on = !Viewport.Display.WireOnShaded; Settings.WireOnShaded = on; foreach (var p in Layout.Panels) { p.Display.WireOnShaded = on; p.Display.RefreshAll(); } }, isChecked: () => Viewport.Display.WireOnShaded);
         Actions.Register("display.grid", "Grid", () => { bool on = !Viewport.Display.ShowGrid; Settings.ShowGrid = on; foreach (var p in Layout.Panels) p.Display.ShowGrid = on; }, isChecked: () => Viewport.Display.ShowGrid);
         Actions.Register("display.background", "Background Color", () => { Viewport.CycleBackground(); });
+        // Hide/Show(Maya Ctrl+H / Shift+H / Show All): 숨긴 노드는 자손과 함께 보이지 않고 피킹·프레임에서 빠진다(Undo 가능)
+        Actions.Register("display.hideSelection", "Hide Selection", () => SetVisibility(sel.Objects, false), canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Visible == true), repeatable: true); // 오브젝트 모드만(컴포넌트 숨기기는 미지원)
+        Actions.Register("display.showSelection", "Show Selection", () => SetVisibility(sel.Objects, true), canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Visible == false));
+        Actions.Register("display.showAll", "Show All", () => SetVisibility(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id), true), canExecute: () => doc.Nodes.Values.Any(n => !n.IsRoot && !n.Visible));
         Actions.Register("display.polyCount", "Poly Count (HUD)", () => { Settings.ShowPolyCount = !Settings.ShowPolyCount; Settings.Save(); }, isChecked: () => Settings.ShowPolyCount);
 
         // Outliner/Properties 패널 열기/닫기 토글, About(버전 정보를 헬프 라인에)
@@ -245,10 +249,13 @@ public partial class Shell
             {
                 var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
                 var set = s.GetComponents(id).Get(mode);
-                if (grow) SelectionOps.Grow(mesh, mode, set); else SelectionOps.Shrink(mesh, mode, set);
+                // UV 모드는 UV 점 이웃으로(예전에는 SelectionOps.Grow가 UV를 다루지 않아 아무 일도 없었다)
+                if (mode == SelectMode.Uv) { var topo = UvTopology.Build(mesh); if (grow) SelectionOps.GrowUv(mesh, topo, set); else SelectionOps.ShrinkUv(mesh, topo, set); }
+                else if (grow) SelectionOps.Grow(mesh, mode, set); else SelectionOps.Shrink(mesh, mode, set);
             }
         });
         Viewport.Display.RefreshAll();
+        UvEditorWindow?.Canvas.QueueRedraw();
     }
 
     /// <summary>UV 모드 선택은 정점 집합으로 바꾼 ComponentSet을 돌려준다(그 외 모드는 그대로).</summary>
@@ -348,6 +355,42 @@ public partial class Shell
             foreach (var (id, set) in converted) { s.SelectComponents(id, SelectMode.Uv, set, replace: first); first = false; }
         });
         UvEditorWindow?.Canvas.QueueRedraw();
+    }
+
+    /// <summary>
+    /// Select All. 오브젝트 모드 = 모든 노드. 컴포넌트 모드(Maya와 같이) = 편집 대상 개체의 현재 모드 컴포넌트 전부(UV 모드 = 모든 UV 점).
+    /// 컴포넌트 모드인데 편집 대상이 없으면 오브젝트 모드로 바꿔 모든 노드를 선택한다.
+    /// </summary>
+    /// <remarks>예전에는 컴포넌트 모드에서도 오브젝트 모드로 빠져 모든 노드를 선택했다(UV 편집기 파이의 Select All도 같은 액션).</remarks>
+    private void SelectAll()
+    {
+        var doc = Document; var sel = doc.Selection;
+        var target = doc.Find(sel.ComponentTarget);
+        if (sel.IsComponentMode && target?.Mesh != null)
+        {
+            var mesh = target.Mesh; var mode = sel.Mode;
+            IEnumerable<int> ids = mode switch
+            {
+                SelectMode.Vertex => Enumerable.Range(0, mesh.VertexCount).Where(v => mesh.Verts[v].Alive),
+                SelectMode.Edge => Enumerable.Range(0, mesh.EdgeCount).Where(e => mesh.Edges[e].Alive),
+                SelectMode.Face => Enumerable.Range(0, mesh.FaceCount).Where(f => mesh.Faces[f].Alive),
+                _ => Enumerable.Range(0, UvTopology.Build(mesh).Points.Count),
+            };
+            var list = ids.ToList();
+            RecordSelection(s => s.SelectComponents(target.Id, mode, list));
+            UvEditorWindow?.Canvas.QueueRedraw();
+            return;
+        }
+        RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); });
+    }
+
+    /// <summary>노드들의 가시성을 바꾸는 SetVisibilityCommand를 넣는다(바뀌는 노드가 없으면 아무것도 안 함).</summary>
+    private void SetVisibility(IEnumerable<NodeId> ids, bool visible)
+    {
+        var cmd = new SetVisibilityCommand(Document, ids.ToArray(), visible);
+        if (cmd.IsEmpty) return;
+        Document.Undo.Push(cmd);
+        HelpLine.Text = visible ? "Show: objects shown." : "Hide: objects hidden (Shift+H or Display > Show All to show again).";
     }
 
     /// <summary>Select Hierarchy: 선택 오브젝트의 모든 자손을 선택에 더한다.</summary>
@@ -557,24 +600,29 @@ public partial class Shell
     }
 
     /// <summary>
-    /// Duplicate: 선택 오브젝트마다 이름을 고유하게 바꾼 새 SceneNode(같은 Local 트랜스폼, 메시 복제)를 같은 부모 아래에 추가하고
-    /// 만든 노드들을 선택한다. 메시가 없는 노드는 트랜스폼만 복제된다(자식은 복제하지 않음). 한 Undo 그룹.
+    /// Duplicate(Maya 기본): 선택 오브젝트마다 자식 계층·셰이프(메시/조인트/라이트)·머티리얼·피벗·가시성을 복제한 트리를
+    /// 같은 부모 아래에 추가하고 만든 최상위 노드들을 선택한다(NodeDuplicate.CloneTree). 선택된 조상이 있는 노드는 조상과 함께 복제되므로 건너뛴다.
+    /// 메시는 구성 이력·스킨 없이 복제된다. 한 Undo 그룹.
     /// </summary>
+    /// <remarks>예전에는 메시만 복제해(자식·머티리얼·조인트/라이트 셰이프 누락) 조인트나 라이트를 복제하면 빈 노드가 생겼다.</remarks>
     private void DuplicateSelection()
     {
         var doc = Document;
         var ids = doc.Selection.Objects.ToArray();
         if (ids.Length == 0) return;
+        var set = new HashSet<NodeId>(ids);
+        var names = new HashSet<string>();
         using (doc.Undo.BeginGroup("Duplicate"))
         {
             var created = new List<NodeId>();
             foreach (var id in ids)
             {
-                var src = doc.Get(id);
-                var copy = new SceneNode { Name = doc.UniqueName(src.Name), Local = src.Local, Visible = src.Visible };
-                if (src.Mesh != null) copy.Shape = new MeshShape(src.Mesh.Clone());
-                var cmd = new AddNodeCommand("Duplicate", copy, src.Parent != null && !src.Parent.IsRoot ? src.Parent.Id : NodeId.None);
-                doc.Undo.Push(cmd);
+                var src = doc.Find(id); if (src == null) continue;
+                bool ancestorSel = false;
+                for (var p = src.Parent; p != null && !p.IsRoot; p = p.Parent) if (set.Contains(p.Id)) { ancestorSel = true; break; }
+                if (ancestorSel) continue;
+                var copy = NodeDuplicate.CloneTree(doc, src, names);
+                doc.Undo.Push(new AddNodeCommand("Duplicate", copy, src.Parent != null && !src.Parent.IsRoot ? src.Parent.Id : NodeId.None));
                 created.Add(copy.Id);
             }
             RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(created); });
@@ -675,7 +723,7 @@ public partial class Shell
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
             .Item("select.lights").Separator()
-            .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
+            .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces").Item("select.toBoundaryEdges").Separator().Item("select.toUv").Item("select.toUvIsland"));
 
         Menus.Build(Add("Mesh"))
             .Item("mesh.combine").Item("mesh.separate").Submenu("Booleans", m => m.Op("mesh.booleanUnion").Op("mesh.booleanDifference").Op("mesh.booleanIntersection")).Separator()
@@ -710,6 +758,7 @@ public partial class Shell
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
             .Item("display.joints").Item("display.jointSize").Item("display.jointAxes").Item("display.timeSlider").Separator()
+            .Item("display.hideSelection").Item("display.showSelection").Item("display.showAll").Separator()
             .Item("display.grid").Item("display.polyCount").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 

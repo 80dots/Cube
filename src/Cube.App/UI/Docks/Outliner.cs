@@ -74,6 +74,9 @@ public partial class Outliner : Tree
             case ChangeKind.NodeRenamed:
                 if (_items.TryGetValue(c.Node, out var it)) it.SetText(0, _doc.Get(c.Node).Name);
                 break;
+            case ChangeKind.VisibilityChanged:
+                if (_items.TryGetValue(c.Node, out var vi)) ApplyVisibilityColor(vi, _doc.Get(c.Node));
+                break;
         }
     }
 
@@ -101,8 +104,15 @@ public partial class Outliner : Tree
         it.SetText(0, n.Name);
         it.SetMetadata(0, n.Id.Value);
         it.SetEditable(0, true);
+        ApplyVisibilityColor(it, n);
         _items[n.Id] = it;
         foreach (var c in n.Children) AddItem(c, it);
+    }
+
+    /// <summary>숨긴 노드(Display → Hide Selection)는 Maya Outliner처럼 이름을 흐리게 표시한다.</summary>
+    private static void ApplyVisibilityColor(TreeItem it, SceneNode n)
+    {
+        if (n.Visible) it.ClearCustomColor(0); else it.SetCustomColor(0, new Color(0.5f, 0.5f, 0.5f));
     }
 
     /// <summary>문서 선택 → 트리 선택. 모든 항목 선택을 지운 뒤 선택된 오브젝트의 항목만 선택한다(컴포넌트 선택은 반영하지 않음).</summary>

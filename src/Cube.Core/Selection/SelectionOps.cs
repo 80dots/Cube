@@ -1,4 +1,5 @@
 using Cube.Core.Mesh;
+using Cube.Core.Uv;
 
 namespace Cube.Core.Selection;
 
@@ -84,6 +85,40 @@ public static class SelectionOps
         set.ExceptWith(remove);
     }
 
+    /// <summary>UV 점 선택을 한 고리 넓힌다(UV 모드 Grow). 같은 면에서 앞뒤 코너의 UV 점을 더한다(심 건너편 UV 점은 이웃이 아님).</summary>
+    /// <param name="topo">메시의 현재 UV 토폴로지(UV 점 ID 기준).</param>
+    /// <param name="set">UV 점 ID 집합(제자리에서 바뀜). 범위를 벗어난 ID는 무시한다.</param>
+    public static void GrowUv(PolyMesh m, UvTopology topo, HashSet<int> set)
+    {
+        var add = new HashSet<int>();
+        foreach (int p in set) foreach (int n in UvNeighbors(m, topo, p)) add.Add(n);
+        set.UnionWith(add);
+    }
+
+    /// <summary>UV 점 선택의 가장자리 한 고리를 깎는다(UV 모드 Shrink). 이웃 UV 점 중 하나라도 비선택이면 뺀다.</summary>
+    public static void ShrinkUv(PolyMesh m, UvTopology topo, HashSet<int> set)
+    {
+        var remove = new HashSet<int>();
+        foreach (int p in set)
+        {
+            if (p < 0 || p >= topo.Points.Count) { remove.Add(p); continue; }
+            foreach (int n in UvNeighbors(m, topo, p)) if (!set.Contains(n)) { remove.Add(p); break; }
+        }
+        set.ExceptWith(remove);
+    }
+
+    /// <summary>UV 점의 이웃 UV 점(그 점의 코너마다 같은 면의 다음/이전 코너).</summary>
+    private static IEnumerable<int> UvNeighbors(PolyMesh m, UvTopology topo, int p)
+    {
+        if (p < 0 || p >= topo.Points.Count) yield break;
+        foreach (int he in topo.Points[p].HalfEdges)
+        {
+            int nx = topo.HeToPoint[m.Hes[he].Next], pv = topo.HeToPoint[m.Hes[he].Prev];
+            if (nx >= 0) yield return nx;
+            if (pv >= 0) yield return pv;
+        }
+    }
+
     /// <summary>면 집합의 바깥 경계 엣지(인접 면 중 하나만 집합에 속하거나 메시 경계인 엣지).</summary>
     /// <remarks>죽었거나 범위 밖 면 ID는 무시한다. 트윈이 없는 하프에지(메시 경계) 또는 트윈 면이 집합 밖이면 경계.</remarks>
     public static HashSet<int> BoundaryEdgesOfFaces(PolyMesh m, IEnumerable<int> faces)
@@ -152,7 +187,19 @@ public static class SelectionOps
                 }
                 break;
             case SelectMode.Face:
-                // 정점/엣지 → 면: 선택 정점을 하나라도 포함하는 면(Maya 기본)
+                if (from == SelectMode.Edge)
+                {
+                    // 엣지 → 면: 엣지 양쪽에 붙은 면(Maya polyListComponentConversion -fe -tf). 예전에는 양끝 정점에 닿는 모든 면(격자에서 6개)이었다.
+                    foreach (int e in comps.Edges)
+                    {
+                        if (e < 0 || e >= m.EdgeCount || !m.Edges[e].Alive) continue;
+                        var (f0, f1) = m.EdgeFaces(e);
+                        if (f0 >= 0) result.Add(f0);
+                        if (f1 >= 0) result.Add(f1);
+                    }
+                    break;
+                }
+                // 정점 → 면: 선택 정점을 하나라도 포함하는 면(Maya 기본)
                 foreach (int v in verts) { m.GetVertexFaces(v, tmp); result.UnionWith(tmp); }
                 break;
         }
