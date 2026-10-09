@@ -127,6 +127,7 @@ public partial class Shell
 
         // Extrude(옵션 쌍), 컴포넌트 삭제(Maya Delete Edge/Vertex), Combine/Separate, 하드/소프트 엣지, 면 뒤집기, Bridge, 엣지 루프/크리즈 툴
         // --- 메시 편집
+        RegisterNonManifoldActions(); // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
@@ -727,7 +728,7 @@ public partial class Shell
             .Item("tool.select").Item("tool.lasso").Separator()
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
-            .Item("select.lights").Separator()
+            .Item("select.lights").Op("select.nonManifold").Separator()
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces").Item("select.toBoundaryEdges").Separator().Item("select.toUv").Item("select.toUvIsland"));
 
         Menus.Build(Add("Mesh"))

@@ -118,6 +118,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - **전체 왕복 스모크**: `tools/smoke-export.ps1 -Full`(`App/SmokeRoundTrip.cs`: 피벗·계층·비균등 스케일·스킨·애니메이션·라이트·텍스처·선택 내보내기를 glb/gltf/fbx/obj로 왕복).
 - **기타**: Orient Joint는 옵션 쌍(`skeleton.orient`/`orientApply`). Properties 채널 편집은 선택 전체에 적용되고 MMB 드래그 한 번 = Undo 한 단계. 셸프 토글은 `Actions.Invoked`마다 갱신. 거울 변환(행렬식 < 0) 오브젝트는 셰이더가 앞뒤·노멀을 되돌린다.
 - **DebugDriver 점검 스텝**: `actioncheck`(메뉴·셸프·핫키·모든 파이가 가리키는 미등록 ID/핫키 충돌), `menuaudit`, `piesweep`, `quad 0|1`, `hidefloat`, `cam`, `hover`, `focusedit`, `retain 0|1`, `uvinfo`, `uvsel`, `uvat`, `uvsnap`, `opt ID KEY V`, `pieitem LABEL`, `reloadshell`, `rset/rprint`, `panels`, `gclick TEXT`, `imgdiff A B`, `matprint ID`, `prefscale N`, `dockdefault`, `--drive=@파일`(`DebugDriverUi.cs`).
+- **Select → Non-Manifold(v0.0.58)**: Core `Selection/NonManifold.cs`(`Find(mesh, NonManifoldOptions)` = 경계 엣지·나비넥타이 정점(부채꼴 둘 이상, `IsBowtie`)·고립 정점; 하프에지 구조라 엣지당 3면·방향 불일치는 존재할 수 없음), App `UI/ShellNonManifold.cs` 옵션 쌍 `select.nonManifold`/`select.nonManifoldApply`(Select As 정점/엣지; Select 메뉴·Ctrl+RMB Select 파이). 옵션이 있는 선택 액션은 Action Popup이 숨기지 않는다(`ActionPopup.OnInvoked`).
 - **알려진 한계**: 비매니폴드(꼬집힌) 정점 입력의 Bevel/Chamfer, 단독 정점 Extrude(스파이크), 분할로 생긴 코너의 다른 UV 세트 값(0), 서로 다른 루트 체인 둘에 바인드한 스킨의 glTF 내보내기, 겹친 껍질(자기 교차) 입력의 Boolean.
 
 ### 반드시 지킬 규약
@@ -135,7 +136,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - GUI 동작: 위 DebugDriver 스크립트 + 스크린샷. Unity 확인은 `tools/unity-check.md` 체크리스트(수동).
 
 ## 버전 및 릴리즈 워크플로
-- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.57`). v0.0.1~v0.0.57은 공개 릴리즈됨.
+- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.58`). v0.0.1~v0.0.58은 공개 릴리즈됨.
 - **수정 작업을 완료할 때마다** 패치 버전을 하나 올리고(공개된 태그는 재사용 불가) 커밋 → `origin/main` 푸시 → `dist/release-notes-v<ver>.md` 작성 → `gh release create v<ver> --target main --title v<ver> --latest --notes-file <file>`로 **바로 public 릴리즈**(2026-10-07 사용자 지시: 드래프트 아님) → `.	oolsuild-release.ps1 -Upload`로 빌드 산출물 첨부. 마이너/메이저 버전은 사용자가 올리라고 할 때만.
 - 푸시: `gh auth setup-git`으로 github.com 자격 증명이 gh(80dots)로 고정되어 있어 `git push origin main`이 팝업 없이 동작한다. 그래도 자동 세션에서는 `GIT_TERMINAL_PROMPT=0`과 `timeout 90`으로 감싼다.
 - 릴리즈 노트는 **UTF-8 파일**(Write 도구로 작성, 이전 버전 노트를 아래에 이어 붙임)을 `--notes-file`로 넘긴다. Python/PowerShell 표준 출력을 파이프로 넘기면 Windows 콘솔 인코딩(cp949) 때문에 한글이 깨진다.

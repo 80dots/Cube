@@ -106,6 +106,7 @@ public static class PieMenus
         Item(shell, "select.grow", "Grow"),
         Item(shell, "select.shrink", "Shrink"),
         Item(shell, "select.hierarchy", "Select Hierarchy"),
+        Item(shell, "select.nonManifoldApply", "Non-Manifold"),
         Item(shell, "select.all", "Select All"),
         Item(shell, "select.none", "Deselect All"),
     };

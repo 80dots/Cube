@@ -139,8 +139,9 @@ public partial class ActionPopup : PanelContainer
         if (id is "edit.undo" or "edit.redo") { Hide(); SnapshotHistoryCounts(); return; } // Undo/Redo는 조정할 작업이 아니다
         var last = _shell.Document.Undo.LastCommand;
         if (inv == null || last == null || ReferenceEquals(last, inv.Value.last)) { SnapshotHistoryCounts(); return; } // 명령을 만들지 않은 액션(모드 전환 등)
-        // 선택 액션(Select All/Grow/Convert 등)은 조정할 파라미터가 없는 선택 변경이다(예전에는 이름만 있는 "Select" 팝업이 떴다)
-        if (last is SelectionCommand) { Hide(); SnapshotHistoryCounts(); return; }
+        // 선택 액션(Select All/Grow/Convert 등)은 조정할 파라미터가 없는 선택 변경이다(예전에는 이름만 있는 "Select" 팝업이 떴다).
+        // 단, 옵션이 있는 선택 액션(Select → Non-Manifold 등)은 옵션을 다시 고를 수 있게 표시한다.
+        if (last is SelectionCommand && _shell.OptionKeyFor(id) == null) { Hide(); SnapshotHistoryCounts(); return; }
         ShowFor(last, id);
     }
 
