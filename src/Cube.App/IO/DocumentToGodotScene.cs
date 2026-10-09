@@ -47,8 +47,10 @@ public static class DocumentToGodotScene
         public readonly List<MaterialDef> UsedMaterials = new();
         /// <summary>만든 Godot 노드 수(본 포함)와 삼각형 수. 결과 메시지용.</summary>
         public int Count, Tris;
-        /// <summary>루트를 받아 빈 상태로 시작한다.</summary>
-        public Ctx(Node3D root) { Root = root; }
+        /// <summary>내보내는 문서(머티리얼·스킨 조인트·애니메이션 노드를 찾는다). 앱 전역 문서가 아니라 exporter가 받은 문서를 쓴다.</summary>
+        public readonly Document Doc;
+        /// <summary>루트와 문서를 받아 빈 상태로 시작한다.</summary>
+        public Ctx(Node3D root, Document doc) { Root = root; Doc = doc; }
     }
 
     /// <summary>
@@ -62,10 +64,11 @@ public static class DocumentToGodotScene
     /// <param name="clips">함께 내보낼 애니메이션 클립(없으면 null).</param>
     /// <returns>(호출자가 Free 해야 하는 루트, 만든 노드 수, 삼각형 수).</returns>
     /// <param name="usedMaterials">채워지면 내보낸 메시가 쓰는 문서 머티리얼(<see cref="GltfMaterialExtension"/>이 텍스처·확장을 쓰는 데 쓴다).</param>
-    public static (Node3D root, int nodeCount, int triCount) Build(IReadOnlyList<SceneNode> nodes, string rootName, IReadOnlyList<AnimationClip>? clips = null, List<MaterialDef>? usedMaterials = null)
+    /// <param name="doc">내보내는 문서(null이면 앱 문서). 전에는 항상 앱 문서를 읽어 다른 문서(헤드리스 스모크 등)를 내보내면 머티리얼·스킨 역바인드·애니메이션이 빠졌다.</param>
+    public static (Node3D root, int nodeCount, int triCount) Build(IReadOnlyList<SceneNode> nodes, string rootName, IReadOnlyList<AnimationClip>? clips = null, List<MaterialDef>? usedMaterials = null, Document? doc = null)
     {
         var root = new Node3D { Name = rootName };
-        var ctx = new Ctx(root);
+        var ctx = new Ctx(root, doc ?? CubeApp.Instance.Document);
         // 선택한 노드의 조상이 함께 선택되었으면 조상만 처리(하위는 재귀로 따라감)
         var set = new HashSet<SceneNode>(nodes);
         var tops = new List<SceneNode>();
@@ -137,7 +140,7 @@ public static class DocumentToGodotScene
     private static Material MaterialFor(Ctx ctx, SceneNode n)
     {
         // 문서 머티리얼을 찾고, 이미 이번 내보내기에서 만들었으면 재사용한다(glTF 머티리얼 하나로 공유)
-        var def = CubeApp.Instance.Document.FindMaterial(n.MaterialId);
+        var def = ctx.Doc.FindMaterial(n.MaterialId);
         if (def == null) return DefaultMaterial;
         if (ctx.Materials.TryGetValue(def.Id, out var cached)) return cached;
         var c = def.Color;
@@ -237,7 +240,7 @@ public static class DocumentToGodotScene
         NMat.Invert(skelWorld, out var skelInv);
         NMat.Invert(n.WorldMatrix, out var meshInv);
         // 스켈레톤 공간 변환에 쓸 역행렬들
-        var doc = CubeApp.Instance.Document;
+        var doc = ctx.Doc;
 
         // 현재 포즈로 변형된 월드 위치 → 스켈레톤 공간
         var deformed = new NVec3[src.VertexCount];
@@ -309,7 +312,7 @@ public static class DocumentToGodotScene
     /// </summary>
     private static void AddAnimations(Ctx ctx, IReadOnlyList<AnimationClip> clips)
     {
-        var doc = CubeApp.Instance.Document;
+        var doc = ctx.Doc;
         var lib = new AnimationLibrary();
         // 같은 이름의 클립이 여러 개면 _2, _3...을 붙여 라이브러리 키 충돌을 피한다
         var usedNames = new HashSet<string>();

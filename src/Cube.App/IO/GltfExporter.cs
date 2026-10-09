@@ -28,7 +28,7 @@ public sealed class GltfExporter : IExporter
         // 파일 이름을 glTF 루트 노드 이름으로 쓴다. Build는 사용한 머티리얼을 usedMaterials에 채운다
         string rootName = System.IO.Path.GetFileNameWithoutExtension(path);
         var usedMaterials = new List<MaterialDef>();
-        var (root, count, tris) = DocumentToGodotScene.Build(nodes, SanitizeName(rootName), doc.Animations, usedMaterials);
+        var (root, count, tris) = DocumentToGodotScene.Build(nodes, SanitizeName(rootName), doc.Animations, usedMaterials, doc);
         // 머티리얼 텍스처·PBR 확장은 문서 확장이 기록한다(GltfDocument 확장 등록은 전역이라 이 내보내기 동안만 등록)
         GltfMaterialExtension.Begin(usedMaterials);
         var matExt = new GltfMaterialExtension();

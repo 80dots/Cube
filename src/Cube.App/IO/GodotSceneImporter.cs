@@ -59,7 +59,7 @@ public abstract class GodotSceneImporterBase : IImporter
             // 결과 메시지: 메시·머티리얼·조인트·스킨·애니메이션 개수
             int mats = ictx.Materials.Created.Count;
             string msg = $"Imported {ictx.Meshes} mesh(es)" + (mats > 0 ? $", {mats} material(s)" : "") + (ictx.Joints > 0 ? $", {ictx.Joints} joint(s), {ictx.Skins} skin(s)" : "")
-                + (clips.Count > 0 ? $", {clips.Count} animation(s)" : "") + $" from {System.IO.Path.GetFileName(path)}";
+                + (clips.Count > 0 ? $", {clips.Count} animation(s)" : "") + (ictx.Lights > 0 ? $", {ictx.Lights} light(s)" : "") + $" from {System.IO.Path.GetFileName(path)}";
             return new ImportResult(true, msg, nodes) { Animations = clips, Materials = ictx.Materials.Created };
         }
         catch (Exception ex) { return ImportResult.Fail(ex.Message); }
@@ -74,8 +74,8 @@ public abstract class GodotSceneImporterBase : IImporter
     {
         /// <summary>대상 문서와 변환 옵션.</summary>
         public readonly Document Doc; public readonly ImportOptions Options;
-        /// <summary>만든 메시·조인트·스킨 수(결과 메시지용).</summary>
-        public int Meshes, Joints, Skins;
+        /// <summary>만든 메시·조인트·스킨·라이트 수(결과 메시지용).</summary>
+        public int Meshes, Joints, Skins, Lights;
         /// <summary>이번 가져오기에서 이미 배정한 노드 이름.</summary>
         private readonly HashSet<string> _used = new();
         /// <summary>문서 안 이름과 이번 가져오기에서 이미 쓴 이름을 모두 피한다(아직 문서에 없는 노드끼리도 겹치지 않게).</summary>
@@ -134,6 +134,20 @@ public abstract class GodotSceneImporterBase : IImporter
         var node = new SceneNode { Name = ctx.Unique(SafeName(g.Name)) };
         node.Local = Transform3.FromMatrix(g.Transform.ToNumerics());
         ctx.NodeMap[g] = node;
+        // 라이트: 내보내기(DocumentToGodotScene/FBX Light)의 역. Godot Spot 각도는 반각이라 2배. 전에는 빈 노드로 들어와 라이트가 사라졌다.
+        if (g is Light3D gl)
+        {
+            var c = gl.LightColor;
+            node.Shape = gl switch
+            {
+                DirectionalLight3D => new LightShape { Type = LightType.Directional },
+                SpotLight3D sp => new LightShape { Type = LightType.Spot, Range = sp.SpotRange, SpotAngle = Math.Clamp(sp.SpotAngle * 2f, 1f, 179f) },
+                OmniLight3D om => new LightShape { Type = LightType.Point, Range = om.OmniRange },
+                _ => new LightShape(),
+            };
+            var ls = node.Light!; ls.Color = new NVec3(c.R, c.G, c.B); ls.Intensity = gl.LightEnergy;
+            ctx.Lights++;
+        }
         if (g is Skeleton3D skel)
         {
             // 본 → 조인트 노드(부모 본 아래, 루트 본은 스켈레톤 노드 아래)

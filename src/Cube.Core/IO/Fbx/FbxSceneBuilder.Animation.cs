@@ -81,6 +81,7 @@ public sealed partial class FbxSceneBuilder
     {
         // 월드 베이크 노드면 부모(내보내지 않음)의 rest 월드를 키 행렬에 곱해야 한다.
         bool worldBake = _bakedWorldNodes.Contains(n);
+        bool lightCorr = IsCorrectedLight(n);
         // 피벗 보정 항: 이동 = xt + P·S·R − Q
         Vector3 P, Q;
         if (_opt.BakePivots) { P = _bakedPivot.GetValueOrDefault(n); Q = _parentShiftOf.GetValueOrDefault(n); }
@@ -124,6 +125,8 @@ public sealed partial class FbxSceneBuilder
             }
             var sr = Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(q);
             var t = p + (pivotTerm ? Vector3.Transform(P, sr) : Vector3.Zero) - Q;
+            // 라이트 방향 보정(BuildNode와 같게): 회전 키에도 X+90°를 앞에 곱한다
+            if (lightCorr) q = LightCorrected(q);
             return (s, q, t);
         }
 

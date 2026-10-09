@@ -44,6 +44,10 @@ public sealed class ImportedMaterials
         // 머티리얼이 없는 서피스는 기본 lambert1
         if (gm == null) return 0;
         if (_ids.TryGetValue(gm, out int id)) return id;
+        // Cube/Maya 기본 머티리얼(내보내기가 쓰는 회색 "lambert1", 텍스처 없음)은 문서 기본(0)으로 되돌린다.
+        // 전에는 왕복할 때마다 "lambert1" PBR 머티리얼이 새로 하나씩 생겼다. FBX 가져오기는 색 공간 변환으로 0.5가 아닐 수 있어 무채색만 본다.
+        if (gm is BaseMaterial3D { ResourceName: "lambert1", AlbedoTexture: null } lb && MathF.Abs(lb.AlbedoColor.R - lb.AlbedoColor.G) < 0.01f && MathF.Abs(lb.AlbedoColor.G - lb.AlbedoColor.B) < 0.01f)
+        { _ids[gm] = 0; return 0; }
         // 변환 후 값이 같은 머티리얼이 문서나 이번 가져오기에 이미 있으면 그 ID를 재사용, 없으면 새 ID로 생성 목록에 추가
         var def = Convert(gm);
         var same = _doc.Materials.FirstOrDefault(m => m.ValuesEqual(def)) ?? Created.FirstOrDefault(m => m.ValuesEqual(def));
