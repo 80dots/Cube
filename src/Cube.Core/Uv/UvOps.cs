@@ -397,6 +397,17 @@ public static partial class UvOps
         {
             if (foldedBefore.Contains(s)) continue;
             foreach (int p in topo.PointsInShell(s)) foreach (int h in topo.Points[p].HalfEdges) SetUv(m, h, before[h]);
+            // 되돌린 셸은 조금씩(몇 반복씩) 이완하며 접히기 직전까지만 진행해 Tutte 배치의 찌그러짐을 줄인다
+            var t1 = UvTopology.Build(m);
+            int shell = t1.Points[t1.HeToPoint[topo.Points[topo.PointsInShell(s).First()].HalfEdges[0]]].Shell;
+            for (int step = 0; step < unfoldIterations; step += 4)
+            {
+                var keep = t1.PointsInShell(shell).ToDictionary(p => p, p => t1.Points[p].Uv);
+                UnfoldRelax(m, t1, new[] { shell }, 4);
+                if (!FoldedShells(m, t1).Contains(shell)) continue;
+                foreach (var (p, uv) in keep) SetPointUv(m, t1, p, uv);
+                break;
+            }
         }
         topo = UvTopology.Build(m);
         Layout(m, topo, Enumerable.Range(0, topo.ShellCount));

@@ -337,4 +337,20 @@ public class UvAuditStressTests
         Assert.DoesNotContain(m2.Hes, h => h.PinUv);
         Assert.Empty(MeshValidator.Check(m2));
     }
+    /// <summary>
+    /// 토러스 Auto Wrap: 손잡이를 짧은 두 고리(자오선·위선)로 잘라 원반 하나로 펴고, 면의 90%가 평균 텍셀 밀도의 ±50% 안이어야 한다
+    /// (예전에는 손잡이가 안 잘려 60/96 면이 겹쳤고, 이후에도 지그재그 절단 + Tutte 그대로라 크게 찌그러졌다).
+    /// </summary>
+    [Fact]
+    public void AutoWrap_Torus_OneLowDistortionShell()
+    {
+        var m = MeshBuilder.Torus(0.5f, 0.2f, 16, 10);
+        UvOps.AutoWrap(m);
+        var t = UvTopology.Build(m);
+        Assert.Equal(1, t.ShellCount);
+        Assert.Empty(UvOps.OverlappingFaces(m));
+        var d = UvOps.DistortionPerFace(m).Where((_, f) => m.Faces[f].Alive).OrderBy(x => x).ToArray();
+        Assert.InRange(d[d.Length / 10], 0.67f, 1.5f);
+        Assert.InRange(d[d.Length * 9 / 10], 0.67f, 1.5f);
+    }
 }

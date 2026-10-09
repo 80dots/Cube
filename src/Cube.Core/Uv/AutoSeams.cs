@@ -71,17 +71,7 @@ public static class AutoSeams
                         var path = ShortestPathBetweenSets(m, edges, loopsVerts[0], loopsVerts[1], boundaryEdges);
                         if (path.Count > 0) { foreach (int e in path) seams.Add(e); changed = true; }
                     }
-                    else if (chi < 1)
-                    {
-                        // 손잡이(토러스 등): 경계 정점에서 가장 먼 정점까지 경로
-                        var bv = loopsVerts.Count > 0 ? loopsVerts[0] : new HashSet<int> { verts.First() };
-                        int far = FarthestFrom(m, verts, edges, bv);
-                        if (far >= 0)
-                        {
-                            var path = ShortestPathBetweenSets(m, edges, bv, new HashSet<int> { far }, boundaryEdges);
-                            if (path.Count > 0) { foreach (int e in path) seams.Add(e); changed = true; }
-                        }
-                    }
+                    // 손잡이(χ < 1, 경계 1개)는 경로 하나로는 원반이 되지 않으므로 패스가 끝난 뒤 CutGraph가 자른다
                 }
             }
             // 이번 패스에서 아무것도 자르지 않았으면 모든 영역이 원반이거나 더 할 수 있는 것이 없다
@@ -97,40 +87,85 @@ public static class AutoSeams
     }
 
     /// <summary>
-    /// 트리-코트리 절단 그래프: 영역을 원반으로 만드는 내부 엣지 집합.
-    /// 면 쌍대 그래프의 최대 신장 트리(긴 엣지를 트리에 남겨 짧은 엣지를 자름)에 들지 않은 내부 엣지와 영역 경계로 그래프를 만들고,
-    /// 차수 1인 정점에 매달린 내부 엣지를 반복해서 떼어 내면(가지치기) 손잡이를 끊는 고리와 경계로 가는 경로만 남는다.
+    /// 손잡이를 끊는 절단 그래프(트리-코트리, 짧은 고리 우선): 영역 경계(없으면 한 정점)에서 최단 경로 트리 T를 만들고,
+    /// T에 들지 않은 내부 엣지 e마다 고리 길이 w(e) = d(u) + d(v) + |e|를 매겨 면 쌍대 그래프의 최대 신장 트리 C를 만든 뒤,
+    /// T에도 C에도 들지 않은 엣지(손잡이마다 2개)의 고리(e + 양끝에서 T를 따라 경계/뿌리까지)를 자른다.
+    /// 고리가 경계에서 출발하는 최단 경로라 토러스면 자오선·위선처럼 곧은 두 고리가 되어 펼친 모양이 사각형에 가깝다.
     /// </summary>
+    /// <remarks>
+    /// 경계가 있으면 경계 엣지(하나 빼고)를 먼저 T에 넣어 경계 전체를 뿌리 하나처럼 다룬다 — 그래야 남는 엣지 수가 정확히 2g가 된다.
+    /// 예전 구현(길이 순 크루스칼 + 가지치기)은 절단이 지그재그로 길어져 펼친 셸이 심하게 찌그러졌다.
+    /// </remarks>
     private static List<int> CutGraph(PolyMesh m, List<int> region, HashSet<int> edges, HashSet<int> boundaryEdges)
     {
         var set = new HashSet<int>(region);
-        // 영역 안 내부 엣지(양쪽 면이 영역 안, 경계 아님)를 길이 내림차순으로 크루스칼
-        var interior = edges.Where(e => !boundaryEdges.Contains(e)).ToList();
         float Len(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
-        interior.Sort((x, y) => Len(y).CompareTo(Len(x)));
+        // 정점 인접(영역 엣지 전부)
+        var adj = new Dictionary<int, List<(int v, int e)>>();
+        foreach (int e in edges)
+        {
+            var (a, b) = m.EdgeVertices(e);
+            if (!adj.TryGetValue(a, out var la)) adj[a] = la = new(); la.Add((b, e));
+            if (!adj.TryGetValue(b, out var lb)) adj[b] = lb = new(); lb.Add((a, e));
+        }
+        // 1) T: 경계 엣지(하나 빼고)를 먼저 넣고, 경계 정점 전체(없으면 첫 정점)에서 다익스트라
+        var dist = new Dictionary<int, float>(); var parentEdge = new Dictionary<int, int>();
+        var tree = new HashSet<int>();
+        var pq = new PriorityQueue<int, float>();
+        if (boundaryEdges.Count > 0)
+        {
+            // 경계 정점을 경계 엣지로 이어 붙이되 순환은 만들지 않는다(유니온 파인드)
+            var bp = new Dictionary<int, int>();
+            int F(int x) { while (bp.TryGetValue(x, out int p) && p != x) x = p; return x; }
+            foreach (int e in boundaryEdges)
+            {
+                var (a, b) = m.EdgeVertices(e);
+                int ra = F(a), rb = F(b);
+                if (ra != rb) { bp[ra] = rb; tree.Add(e); }
+                dist[a] = 0; dist[b] = 0;
+            }
+            foreach (var v in dist.Keys.ToList()) pq.Enqueue(v, 0);
+        }
+        else { int r = adj.Keys.First(); dist[r] = 0; pq.Enqueue(r, 0); }
+        while (pq.TryDequeue(out int u, out float du))
+        {
+            if (du > dist[u]) continue;
+            foreach (var (v, e) in adj[u])
+            {
+                if (boundaryEdges.Contains(e)) continue;
+                float nd = du + Len(e);
+                if (!dist.TryGetValue(v, out float old) || nd < old) { dist[v] = nd; parentEdge[v] = e; pq.Enqueue(v, nd); }
+            }
+        }
+        foreach (var (v, e) in parentEdge) tree.Add(e);
+        // 2) C: T 밖 내부 엣지를 고리 길이 내림차순으로 크루스칼(면 쌍대)
+        var cand = edges.Where(e => !boundaryEdges.Contains(e) && !tree.Contains(e)).ToList();
+        float W(int e) { var (a, b) = m.EdgeVertices(e); return dist.GetValueOrDefault(a) + dist.GetValueOrDefault(b) + Len(e); }
+        cand.Sort((x, y) => W(y).CompareTo(W(x)));
         var parent = new Dictionary<int, int>(); foreach (int f in region) parent[f] = f;
         int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
-        var cut = new HashSet<int>();
-        foreach (int e in interior)
+        var leftover = new List<int>();
+        foreach (int e in cand)
         {
             var (f0, f1) = m.EdgeFaces(e);
             if (f0 < 0 || f1 < 0 || !set.Contains(f0) || !set.Contains(f1)) continue;
             int a = Find(f0), b = Find(f1);
-            if (a != b) parent[a] = b; else cut.Add(e);
+            if (a != b) parent[a] = b; else leftover.Add(e);
         }
-        // 가지치기: (절단 후보 ∪ 경계) 그래프에서 차수 1 정점에 닿은 절단 후보를 반복 제거
-        var deg = new Dictionary<int, int>();
-        void Inc(int v, int d) => deg[v] = deg.GetValueOrDefault(v) + d;
-        foreach (int e in cut.Concat(boundaryEdges)) { var (a, b) = m.EdgeVertices(e); Inc(a, 1); Inc(b, 1); }
-        bool removed = true;
-        while (removed)
+        // 3) 남은 엣지마다 고리: e + 양끝에서 T(부모 엣지)를 따라 경계/뿌리까지
+        var cut = new HashSet<int>();
+        foreach (int e in leftover)
         {
-            removed = false;
-            foreach (int e in cut.ToList())
+            cut.Add(e);
+            var (a, b) = m.EdgeVertices(e);
+            foreach (int start in new[] { a, b })
             {
-                var (a, b) = m.EdgeVertices(e);
-                if (deg[a] > 1 && deg[b] > 1) continue;
-                cut.Remove(e); Inc(a, -1); Inc(b, -1); removed = true;
+                int cur = start, guard = 0;
+                while (parentEdge.TryGetValue(cur, out int pe) && guard++ < 100000)
+                {
+                    cut.Add(pe);
+                    var (x, y) = m.EdgeVertices(pe); cur = x == cur ? y : x;
+                }
             }
         }
         return cut.ToList();
