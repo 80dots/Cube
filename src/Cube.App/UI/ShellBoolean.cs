@@ -63,7 +63,15 @@ public partial class Shell
                         return (true, null, null);
                     }));
             }
-            if (delete) doc.Undo.Push(new DeleteNodesCommand(doc, ids.Skip(1)));
+            if (delete)
+            {
+                // A의 조상인 피연산자를 지우면 A(결과)도 함께 지워지므로 남긴다(v0.0.57)
+                var ancestors = new HashSet<NodeId>();
+                for (var p = a.Parent; p != null && !p.IsRoot; p = p.Parent) ancestors.Add(p.Id);
+                var del = ids.Skip(1).Where(id => !ancestors.Contains(id)).ToList();
+                if (del.Count < ids.Count - 1) warnings.Add("operands that are parents of the result were kept");
+                if (del.Count > 0) doc.Undo.Push(new DeleteNodesCommand(doc, del));
+            }
             RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(new[] { a.Id }); });
         }
         // 결과가 비면(겹치지 않는 Intersection, 같은 메시 Difference 등) 빈 메시 오브젝트가 남으므로 알린다
