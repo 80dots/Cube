@@ -61,6 +61,10 @@ public static class CubeFileFormat
         /// <summary>UV 세트 이름(Maya 기본 "map1").</summary>
         [JsonPropertyName("name")] public string Name { get; set; } = "map1";
         [JsonPropertyName("uvs")] public float[][] Uvs { get; set; } = Array.Empty<float[]>();          // 면별 코너 uv
+        /// <summary>이 세트의 UV 심(정점 쌍). null이면 예전 파일 — 세트 전환 때 메시 심을 그대로 둔다.</summary>
+        [JsonPropertyName("seams")] public int[][]? Seams { get; set; }
+        /// <summary>이 세트의 핀(면별 핀된 코너 인덱스). null이면 예전 파일.</summary>
+        [JsonPropertyName("pinnedUvs")] public int[][]? PinnedUvs { get; set; }
     }
 
     /// <summary>
@@ -508,7 +512,17 @@ public static class CubeFileFormat
                     for (int i = 0; i < loop.Count; i++) { var v = loop[i] < set.Uvs.Length ? set.Uvs[loop[i]] : Vector2.Zero; uv[i * 2] = v.X; uv[i * 2 + 1] = v.Y; }
                     per.Add(uv);
                 }
-                return new UvSetDto { Name = set.Name, Uvs = per.ToArray() };
+                // 세트별 심(정점 쌍)과 핀(면별 코너 인덱스)
+                var setSeams = new List<int[]>();
+                for (int e = 0; e < m.EdgeCount; e++) if (set.Seams != null && e < set.Seams.Length && set.Seams[e]) { var (a, b) = m.EdgeVertices(e); setSeams.Add(new[] { a, b }); }
+                var setPins = new List<int[]>();
+                for (int f = 0; f < m.FaceCount; f++)
+                {
+                    m.GetFaceHalfEdges(f, loop);
+                    var p = new List<int>(); for (int i = 0; i < loop.Count; i++) if (set.Pins != null && loop[i] < set.Pins.Length && set.Pins[loop[i]]) p.Add(i);
+                    setPins.Add(p.ToArray());
+                }
+                return new UvSetDto { Name = set.Name, Uvs = per.ToArray(), Seams = setSeams.ToArray(), PinnedUvs = setPins.ToArray() };
             }).ToArray();
         }
         return dto;
@@ -599,7 +613,19 @@ public static class CubeFileFormat
                     var uv = sd.Uvs[f];
                     for (int i = 0; i < loop.Count && i * 2 + 1 < uv.Length; i++) arr[loop[i]] = new Vector2(uv[i * 2], uv[i * 2 + 1]);
                 }
-                m.UvSets.Add(new UvSet { Name = sd.Name, Uvs = arr });
+                // 세트별 심·핀(예전 파일엔 없음 → null = 전환 때 메시 값 유지)
+                bool[]? seamArr = null, pinArr = null;
+                if (sd.Seams != null)
+                {
+                    seamArr = new bool[m.EdgeCount];
+                    foreach (var pair in sd.Seams) { if (pair.Length < 2) continue; int e = m.FindEdge(pair[0], pair[1]); if (e >= 0) seamArr[e] = true; }
+                }
+                if (sd.PinnedUvs != null)
+                {
+                    pinArr = new bool[m.HalfEdgeCount];
+                    for (int f = 0; f < m.FaceCount && f < sd.PinnedUvs.Length; f++) { m.GetFaceHalfEdges(f, loop); foreach (int ci in sd.PinnedUvs[f]) if (ci >= 0 && ci < loop.Count) pinArr[loop[ci]] = true; }
+                }
+                m.UvSets.Add(new UvSet { Name = sd.Name, Uvs = arr, Seams = seamArr, Pins = pinArr });
             }
             m.CurrentUvSet = Math.Clamp(dto.CurrentUvSet, 0, m.UvSets.Count - 1);
             // 코너 UV(dto.Uvs)는 현재 세트와 같다

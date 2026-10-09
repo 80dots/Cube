@@ -117,4 +117,35 @@ public class UvTransferTests
         Assert.Equal(1, transferred);
         Assert.Equal(5, skipped);
     }
+    /// <summary>
+    /// 편집 이력이 있는(죽은 슬롯·n각형·삼각형이 섞인) 메시도 OBJ 왕복 → 외부 툴에서 UV 재작업(Auto Wrap으로 흉내) → 전송하면
+    /// 모든 면이 그대로 옮겨지고(건너뜀 0), UV 셸 수가 소스와 같으며 메시가 유효해야 한다.
+    /// </summary>
+    [Theory]
+    [InlineData("extrudeDelete")]
+    [InlineData("bevel")]
+    [InlineData("tris")]
+    [InlineData("cylinder")]
+    public void ApplyByFaceOrder_EditedMeshes_RoundTripMatchesSourceShells(string kind)
+    {
+        var target = kind switch
+        {
+            "extrudeDelete" => Make(m => { MeshOps.ExtrudeFaces(m, new[] { 4 }); MeshOps.DeleteFaces(m, new[] { 0 }); }),
+            "bevel" => Make(m => MeshOps.BevelEdges(m, Enumerable.Range(0, m.EdgeCount), 0.1f, 2)),
+            "tris" => Make(m => MeshOps.Triangulate(m, new[] { 0, 2, 5 })),
+            _ => MeshBuilder.Cylinder(0.5f, 1f, 10),
+        };
+        var node = new SceneNode { Name = "obj", Shape = new MeshShape(target), Local = new Transform3(new Vector3(1, 2, 3), new Vector3(10, 20, 30), new Vector3(1, 2, 1)) };
+        var source = ObjFormat.ReadFromString(ObjFormat.WriteToString(new[] { node }, worldSpace: true))[0].Mesh;
+        Assert.Equal(target.AliveFaceCount, source.AliveFaceCount);
+        Core.Uv.UvOps.AutoWrap(source);
+        int transferred = UvTransfer.ApplyByFaceOrder(target, source, out int skipped);
+        Assert.Equal(0, skipped);
+        Assert.Equal(target.AliveFaceCount, transferred);
+        Assert.Empty(MeshValidator.Check(target));
+        Assert.Equal(Core.Uv.UvTopology.Build(source).ShellCount, Core.Uv.UvTopology.Build(target).ShellCount);
+        Assert.Empty(Core.Uv.UvOps.OverlappingFaces(target));
+
+        static PolyMesh Make(Action<PolyMesh> edit) { var m = MeshBuilder.Cube(); edit(m); MeshNormals.Recompute(m); return m; }
+    }
 }

@@ -91,7 +91,8 @@ public partial class UvSetEditorWindow : FloatingPanel
     {
         var n = Node(); if (n?.Mesh == null || string.IsNullOrWhiteSpace(text)) return;
         string t = text.Trim();
-        Op("Rename UV Set", n, m => { m.EnsureUvSets(); m.UvSets[m.CurrentUvSet].Name = t; });
+        // 다른 세트와 같은 이름이면 숫자를 붙인다(같은 이름 세트가 둘이면 구분할 수 없다)
+        Op("Rename UV Set", n, m => { m.EnsureUvSets(); m.UvSets[m.CurrentUvSet].Name = m.UniqueUvSetName(t, m.CurrentUvSet); });
     }
 
     /// <summary>

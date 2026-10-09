@@ -57,8 +57,13 @@ public sealed class UvSet
     public string Name = "map1";
     /// <summary>하프에지 슬롯별 UV. 현재 세트의 값은 전환/저장 시점의 스냅샷이고 최신 값은 HalfEdge.Uv0에 있다.</summary>
     public Vector2[] Uvs = Array.Empty<Vector2>();
+    /// <summary>엣지 슬롯별 UV 심(Edge.Seam). 현재 세트의 값은 전환/저장 시점의 스냅샷. null이면 기록이 없어 전환 때 메시 심을 그대로 둔다(예전 파일).</summary>
+    /// <remarks>심은 UV 세트마다 다르다(Maya도 UV 불연속은 세트별) — 메시 하나에 공유하면 다른 세트에서 자르거나 투영한 심이 이 세트의 심을 덮었다.</remarks>
+    public bool[]? Seams;
+    /// <summary>하프에지 슬롯별 UV 핀(HalfEdge.PinUv). null이면 전환 때 메시 핀을 그대로 둔다.</summary>
+    public bool[]? Pins;
     /// <summary>배열까지 복사한 깊은 복제(메시 Clone/스냅샷용).</summary>
-    public UvSet Clone() => new() { Name = Name, Uvs = (Vector2[])Uvs.Clone() };
+    public UvSet Clone() => new() { Name = Name, Uvs = (Vector2[])Uvs.Clone(), Seams = (bool[]?)Seams?.Clone(), Pins = (bool[]?)Pins?.Clone() };
 }
 
 /// <summary>무방향 엣지. 최대 2개의 하프에지(He1은 경계면 -1)를 가진다. 비매니폴드(3면 이상)는 허용하지 않는다.</summary>
@@ -125,9 +130,14 @@ public sealed class PolyMesh
     public void EnsureUvSets()
     {
         if (UvSets.Count > 0) return;
-        UvSets.Add(new UvSet { Name = "map1", Uvs = SnapshotUvs() });
+        UvSets.Add(new UvSet { Name = "map1", Uvs = SnapshotUvs(), Seams = SnapshotSeams(), Pins = SnapshotPins() });
         CurrentUvSet = 0;
     }
+
+    /// <summary>모든 엣지 슬롯의 Seam을 새 배열로 복사한다(인덱스 = 엣지 ID).</summary>
+    public bool[] SnapshotSeams() { var a = new bool[Edges.Count]; for (int i = 0; i < a.Length; i++) a[i] = Edges[i].Seam; return a; }
+    /// <summary>모든 하프에지 슬롯의 PinUv를 새 배열로 복사한다(인덱스 = 하프에지 ID).</summary>
+    public bool[] SnapshotPins() { var a = new bool[Hes.Count]; for (int i = 0; i < a.Length; i++) a[i] = Hes[i].PinUv; return a; }
 
     /// <summary>모든 하프에지 슬롯의 Uv0을 새 배열로 복사한다(인덱스 = 하프에지 ID).</summary>
     public Vector2[] SnapshotUvs() { var a = new Vector2[Hes.Count]; for (int i = 0; i < a.Length; i++) a[i] = Hes[i].Uv0; return a; }
@@ -136,7 +146,8 @@ public sealed class PolyMesh
     public void StoreCurrentUvs()
     {
         EnsureUvSets();
-        UvSets[Math.Clamp(CurrentUvSet, 0, UvSets.Count - 1)].Uvs = SnapshotUvs();
+        var cur = UvSets[Math.Clamp(CurrentUvSet, 0, UvSets.Count - 1)];
+        cur.Uvs = SnapshotUvs(); cur.Seams = SnapshotSeams(); cur.Pins = SnapshotPins();
     }
 
     /// <summary>세트를 전환한다: 현재 UV를 저장하고 대상 세트를 코너에 올린다(배열이 짧으면 0).</summary>
@@ -145,18 +156,46 @@ public sealed class PolyMesh
         EnsureUvSets();
         if (index < 0 || index >= UvSets.Count) return;
         StoreCurrentUvs();
-        var src = UvSets[index].Uvs;
-        for (int h = 0; h < Hes.Count; h++) { var he = Hes[h]; he.Uv0 = h < src.Length ? src[h] : Vector2.Zero; Hes[h] = he; }
+        var set = UvSets[index];
+        var src = set.Uvs;
+        for (int h = 0; h < Hes.Count; h++)
+        {
+            var he = Hes[h]; he.Uv0 = h < src.Length ? src[h] : Vector2.Zero;
+            if (set.Pins != null) he.PinUv = h < set.Pins.Length && set.Pins[h];
+            Hes[h] = he;
+        }
+        // 세트의 심을 올린다(배열보다 늘어난 엣지는 심 없음). 기록이 없는 세트(예전 파일)는 메시 심을 그대로 둔다.
+        if (set.Seams != null)
+            for (int e = 0; e < Edges.Count; e++) { var ed = Edges[e]; ed.Seam = e < set.Seams.Length && set.Seams[e]; Edges[e] = ed; }
         CurrentUvSet = index;
         GeometryVersion++;
     }
 
-    /// <summary>새 UV 세트를 만든다(copyCurrent면 현재 UV 복사, 아니면 0). 반환값은 인덱스.</summary>
+    /// <summary>
+    /// 다른 세트와 겹치지 않는 세트 이름: 이미 쓰는 이름이면 끝의 숫자를 늘리거나(uvSet1 → uvSet2) 숫자를 붙인다(map1_copy → map1_copy1).
+    /// </summary>
+    /// <param name="name">원하는 이름.</param>
+    /// <param name="exceptIndex">비교에서 뺄 세트(이름 바꾸기 대상 자신), 없으면 −1.</param>
+    public string UniqueUvSetName(string name, int exceptIndex = -1)
+    {
+        bool Taken(string n) { for (int i = 0; i < UvSets.Count; i++) if (i != exceptIndex && UvSets[i].Name == n) return true; return false; }
+        if (!Taken(name)) return name;
+        // 끝의 숫자 부분과 앞부분으로 나눠 숫자를 올린다
+        int k = name.Length; while (k > 0 && char.IsDigit(name[k - 1])) k--;
+        string stem = name[..k]; int n = k < name.Length ? int.Parse(name[k..]) : 0;
+        string cand;
+        do cand = stem + (++n); while (Taken(cand));
+        return cand;
+    }
+
+    /// <summary>새 UV 세트를 만든다(copyCurrent면 현재 UV 복사, 아니면 0). 이름이 이미 있으면 숫자를 붙여 겹치지 않게 한다. 반환값은 인덱스.</summary>
     public int AddUvSet(string name, bool copyCurrent)
     {
         EnsureUvSets();
         StoreCurrentUvs();
-        UvSets.Add(new UvSet { Name = name, Uvs = copyCurrent ? SnapshotUvs() : new Vector2[Hes.Count] });
+        name = UniqueUvSetName(name);
+        // 복사 세트는 심·핀도 그대로, 빈 세트는 심·핀 없음
+        UvSets.Add(new UvSet { Name = name, Uvs = copyCurrent ? SnapshotUvs() : new Vector2[Hes.Count], Seams = copyCurrent ? SnapshotSeams() : new bool[Edges.Count], Pins = copyCurrent ? SnapshotPins() : new bool[Hes.Count] });
         return UvSets.Count - 1;
     }
 
@@ -630,6 +669,8 @@ public sealed class PolyMesh
             var packed = new Vector2[nh];
             for (int i = 0; i < hMap.Length && i < set.Uvs.Length; i++) if (hMap[i] >= 0) packed[hMap[i]] = set.Uvs[i];
             set.Uvs = packed;
+            if (set.Pins != null) { var pp = new bool[nh]; for (int i = 0; i < hMap.Length && i < set.Pins.Length; i++) if (hMap[i] >= 0) pp[hMap[i]] = set.Pins[i]; set.Pins = pp; }
+            if (set.Seams != null) { var sp = new bool[ne]; for (int i = 0; i < eMap.Length && i < set.Seams.Length; i++) if (eMap[i] >= 0) sp[eMap[i]] = set.Seams[i]; set.Seams = sp; }
         }
         TopologyVersion++; GeometryVersion++;
         _edgeMap = null; _vertexOutgoing = null;

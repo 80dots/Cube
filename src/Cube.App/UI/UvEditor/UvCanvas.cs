@@ -1755,7 +1755,8 @@ public partial class UvCanvas : Control
         var (node, edge) = hit.Value;
         if (!_cutSewDone.Add((node.Id, edge))) return;
         var m = node.Mesh!;
-        if (m.Edges[edge].He1 < 0 || m.Edges[edge].Seam == !_cutSewSew) return;
+        // 이미 그 상태면 건너뛴다: Cut = 이미 심, Sew = 이미 이어짐(심 플래그 없이 UV만 갈라진 엣지도 꿰맨다)
+        if (m.Edges[edge].He1 < 0 || (_cutSewSew ? UvOps.IsEdgeSewn(m, edge) : m.Edges[edge].Seam)) return;
         bool sew = _cutSewSew; int e = edge;
         _shell.Document.Undo.Push(new UvEditCommand(sew ? "Sew UV Edge" : "Cut UV Edge", node.Id, mm => { if (sew) UvOps.SewEdges(mm, new[] { e }); else UvOps.CutEdges(mm, new[] { e }); }));
         _topos.Remove(node.Id);

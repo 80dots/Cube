@@ -130,17 +130,17 @@ public partial class Shell
         }, HasTargets);
         Actions.Register("uv.cameraBased", "Camera-Based Mapping", () =>
         {
-            // 활성 뷰포트 카메라의 오른쪽/위쪽 벡터(월드)를 노드 로컬 축으로 바꿔 화면 평면에 투영한다.
-            // 방향 벡터는 월드 행렬의 전치로 변환한다(회전 성분의 역 = 전치이므로 월드 방향 → 로컬 방향; 스케일 영향은 정규화로 제거).
+            // 활성 뷰포트 카메라의 오른쪽/위쪽 벡터(월드)로 화면 좌표를 만든다. 로컬 점 p의 월드 화면 좌표 = dot(p·M, r) = dot(p, r·Mᵀ)이므로
+            // 축을 월드 행렬의 전치로 변환해 로컬 위치에 내적한다. 정규화하지 않는다 — 비균등 스케일 오브젝트에서 두 축을 따로 정규화하면
+            // 화면에 보이는 비율과 UV 비율이 달라졌다(균등 스케일은 CameraProject가 0..1로 맞추며 사라진다).
             var proj = Viewport.Picker.Projection();
             var right = proj.Right; var up = NVec3Cross(right, proj.Forward);
             var targets = UvTargetNodes().ToList();
             using (Document.Undo.BeginGroup("Camera-Based Mapping"))
                 foreach (var (node, faces) in targets)
                 {
-                    Matrix4x4.Invert(node.WorldMatrix, out var inv);
-                    var r = System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(right, Matrix4x4.Transpose(node.WorldMatrix)));
-                    var u = System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(up, Matrix4x4.Transpose(node.WorldMatrix)));
+                    var r = System.Numerics.Vector3.TransformNormal(right, Matrix4x4.Transpose(node.WorldMatrix));
+                    var u = System.Numerics.Vector3.TransformNormal(up, Matrix4x4.Transpose(node.WorldMatrix));
                     Document.Undo.Push(new UvEditCommand("Camera-Based", node.Id, m => UvOps.CameraProject(m, faces, r, u)));
                 }
             UvEditorWindow?.Canvas.Invalidate();
@@ -161,12 +161,14 @@ public partial class Shell
         Actions.Register("uv.contourStretch", "Contour Stretch Mapping", () => Project("Contour Stretch", (m, f) => UvOps.ContourStretch(m, f)), canExecute: HasTargets, repeatable: true);
 
         // ---------------------------------------------------------------- Cut / Sew
+        Actions.Register("uv.createShellGrid", "Create UV Shell (Grid)", () => Project("Create UV Shell (Grid)", (m, f) => UvOps.CreateShellGrid(m, f)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.createShell", "Create UV Shell", () => Project("Create UV Shell", (m, f) => UvOps.CreateUvShell(m, f)), canExecute: () => sel.IsComponentMode && HasTargets(), repeatable: true);
         Actions.Register("uv.split", "Split UVs", () => ForEachUvPoints("Split UVs", (m, t, p) => UvOps.SplitUvs(m, t, p)), canExecute: () => sel.IsComponentMode && HasUvPoints(), repeatable: true);
         RegisterOptionPair("uv.merge", "Merge UVs", new OptionSpec("Merge UVs Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Distance threshold", 0, 1, 0.0001) }, "Merge"),
             () => { float t = Options("uv.merge").Float("threshold"); ForEachUvPoints("Merge UVs", (m, tp, p) => UvOps.MergeUvs(m, tp, p, t)); }, HasUvPoints);
         Actions.Register("uv.moveAndSew", "Move and Sew UV Edges", MoveAndSew, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
-        Actions.Register("uv.deleteUvs", "Delete UVs", () => Project("Delete UVs", (m, f) => UvOps.DeleteUvs(m, f)), canExecute: () => sel.Mode == SelectMode.Face && HasTargets(), repeatable: true);
+        // 면 모드 = 선택 면, UV 모드 = 선택 UV 점이 모두 덮는 면(TargetFaces 규칙)의 UV를 지운다
+        Actions.Register("uv.deleteUvs", "Delete UVs", () => Project("Delete UVs", (m, f) => UvOps.DeleteUvs(m, f)), canExecute: () => sel.Mode is SelectMode.Face or SelectMode.Uv && sel.NodesWithComponents(sel.Mode).Any() && HasTargets(), repeatable: true);
         Actions.Register("uv.cutSewTool", "3D Cut and Sew UV Tool", () => Tools.SetTool("cutSewUv"), isChecked: () => Tools.Current?.Id == "cutSewUv");
 
         // ---------------------------------------------------------------- Modify: align / distribute / rotate
@@ -273,6 +275,28 @@ public partial class Shell
         Actions.Register("uv.unpinAll", "Unpin All", () => ForEachUvPoints("Unpin All", (m, _, _) => UvOps.UnpinAll(m), requirePoints: false), canExecute: () => UvNodes().Any(), repeatable: true);
 
         // ---------------------------------------------------------------- Select
+        // Select All(UV 편집기): 컴포넌트 모드면 대상 노드의 현재 종류 컴포넌트를 모두 선택(Maya UV Editor Select > All).
+        // 셸의 select.all은 항상 오브젝트 모드로 바꿔 UV 편집기에서 UV 모드가 풀렸다. 오브젝트 모드면 select.all과 같다.
+        Actions.Register("uv.selectAll", "Select All", () =>
+        {
+            if (!sel.IsComponentMode) { Actions.Invoke("select.all"); return; }
+            RecordSelection(s =>
+            {
+                bool first = true;
+                foreach (var n in UvNodes().ToList())
+                {
+                    var m = n.Mesh!;
+                    IEnumerable<int> all = s.Mode switch
+                    {
+                        SelectMode.Uv => Enumerable.Range(0, UvTopology.Build(m).Points.Count),
+                        SelectMode.Edge => Enumerable.Range(0, m.EdgeCount).Where(e => m.Edges[e].Alive),
+                        SelectMode.Face => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive),
+                        _ => Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive),
+                    };
+                    s.SelectComponents(n.Id, s.Mode, all.ToList(), replace: first); first = false;
+                }
+            });
+        }, canExecute: () => UvNodes().Any() || !sel.IsComponentMode);
         // 현재 모드의 컴포넌트 선택을 노드별로 반전(살아 있는 요소 중 선택되지 않은 것만 남김)
         Actions.Register("uv.selectInverse", "Select Inverse", () => RecordSelection(s =>
         {

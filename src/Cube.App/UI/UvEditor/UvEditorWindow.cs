@@ -125,12 +125,12 @@ public partial class UvEditorWindow : FloatingPanel
         var M = _shell.Menus;
         M.Build(Add("Edit")).Item("uv.copy").Item("uv.paste").Item("edit.delete", "Delete").Separator().Item("uv.pin").Item("uv.invertPins").Item("uv.unpin").Item("uv.unpinAll");
         M.Build(Add("Create")).Item("display.uvGrid", "Assign Checker Shader").Separator().Op("uv.automatic").Item("uv.cameraBased").Item("uv.cylindrical").Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.spherical").Separator().Item("uv.bestPlane").Item("uv.contourStretch");
-        M.Build(Add("Select")).Item("select.all").Item("select.none", "Clear").Item("uv.selectInverse").Separator()
+        M.Build(Add("Select")).Item("uv.selectAll").Item("select.none", "Clear").Item("uv.selectInverse").Separator()
             .Submenu("Components", m => m.Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Item("mode.uvIsland", "UV Shell"))
             .Separator().Item("uv.selectBackFacing").Item("uv.selectFrontFacing").Item("uv.selectOverlapping").Item("uv.selectNonOverlapping").Item("uv.selectTextureBorders").Item("uv.selectUnmapped").Separator()
             .Item("uv.shortestPath").Item("select.grow").Item("uv.growLoop").Item("select.shrink").Item("uv.shrinkLoop").Separator().Item("uv.containedFaces").Item("uv.connectedFaces").Separator()
             .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces").Item("select.toUv").Item("select.toUvIsland", "To UV Shell").Item("select.toBoundaryEdges", "To UV Shell Border"));
-        M.Build(Add("Cut/Sew")).Item("uv.autoSeams").Item("uv.autoWrap").Separator().Item("uv.createShell").Separator().Item("uv.cut").Item("uv.sew").Item("uv.split").Op("uv.merge").Item("uv.moveAndSew").Separator().Item("uv.deleteUvs").Separator().Item("uv.cutSewTool");
+        M.Build(Add("Cut/Sew")).Item("uv.autoSeams").Item("uv.autoWrap").Separator().Item("uv.createShell").Item("uv.createShellGrid").Separator().Item("uv.cut").Item("uv.sew").Item("uv.split").Op("uv.merge").Item("uv.moveAndSew").Separator().Item("uv.deleteUvs").Separator().Item("uv.cutSewTool");
         M.Build(Add("Modify"))
             .Submenu("Align", m => m.Item("uv.alignMinU").Item("uv.alignMaxU").Item("uv.alignMinV").Item("uv.alignMaxV").Item("uv.alignCenterU").Item("uv.alignCenterV").Separator().Item("uv.linearAlign"))
             .Item("uv.cycle").Submenu("Distribute UVs", m => m.Item("uv.distributeU").Item("uv.distributeV")).Submenu("Flip", m => m.Item("uv.flipU").Item("uv.flipV"))
@@ -217,6 +217,9 @@ public partial class UvEditorWindow : FloatingPanel
     public void Toggle()
     {
         if (Visible) { Close(); return; }
+        // 처음 열 때는 메뉴·툴바 흐름 컨테이너가 줄바꿈되며 캔버스 크기가 몇 프레임 동안 바뀌므로, 그동안 크기가 바뀔 때마다 다시 프레임한다
+        // (전에는 첫 크기로 한 번만 프레임해 0..1 타일이 캔버스 밖으로 넘친 채 열렸다)
+        Canvas.FrameOnResize();
         Open();
         Canvas.Invalidate(); Canvas.CallDeferred(nameof(UvCanvas.FrameAll));
     }

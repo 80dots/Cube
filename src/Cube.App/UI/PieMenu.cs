@@ -163,6 +163,14 @@ public partial class PieMenu : Control
     private float ItemWidth(PieItem it, float padX, float s)
         => _font.GetStringSize(it.Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2 + (it.Icon != null ? (IconPx + 6) * s : 0);
 
+    /// <summary>라벨이 label로 시작하는 항목의 화면(전역) 중심. 없으면 null(DebugDriver `pieitem`용).</summary>
+    public Vector2? ItemGlobalCenter(string label)
+    {
+        for (int i = 0; i < _items.Count && i < _rects.Count; i++)
+            if (_items[i].Label.StartsWith(label, StringComparison.OrdinalIgnoreCase)) return GetGlobalTransform() * _rects[i].GetCenter();
+        return null;
+    }
+
     /// <summary>마우스 위치로 하이라이트 갱신.</summary>
     public void UpdatePointer(Vector2 local)
     {

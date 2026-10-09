@@ -104,7 +104,7 @@ public partial class Shell
         Actions.Register("edit.undo", "Undo", () => doc.Undo.Undo(), canExecute: () => doc.Undo.CanUndo);
         Actions.Register("edit.redo", "Redo", () => doc.Undo.Redo(), canExecute: () => doc.Undo.CanRedo);
         Actions.Register("edit.repeatLast", "Repeat Last", () => Actions.RepeatLast(), canExecute: () => Actions.LastRepeatable != null);
-        Actions.Register("edit.delete", "Delete", DeleteSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode != SelectMode.Uv && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true); // UV 모드 Delete는 아무것도 지우지 않는다(예전에는 빈 "Delete Vertices" Undo·히스토리 항목이 생겼다; UV 삭제는 uv.deleteUvs)
+        Actions.Register("edit.delete", "Delete", DeleteSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.NodesWithComponents(sel.Mode).Any(), repeatable: true); // UV 모드 Delete = uv.deleteUvs(선택 UV가 덮는 면의 UV 삭제; 예전에는 정점 삭제가 UV 점 ID를 받아 빈 Undo 단계만 남겼다)
         Actions.Register("edit.duplicate", "Duplicate", DuplicateSelection, canExecute: () => sel.Objects.Count > 0, repeatable: true);
         Actions.Register("edit.preferences", "Preferences...", ShowPreferences);
         Actions.Register("edit.deleteHistory", "Delete History", () => { var ids = sel.Objects.Where(id => doc.Find(id)?.MeshShape?.History.Count > 0).ToArray(); if (ids.Length > 0) doc.Undo.Push(new DeleteHistoryCommand(ids)); },
@@ -463,6 +463,9 @@ public partial class Shell
             var cmd = new DeleteNodesCommand(Document, sel.Objects);
             if (!cmd.IsEmpty) Document.Undo.Push(cmd);
         }
+        // UV 모드의 Delete는 메시 컴포넌트가 아니라 선택 UV가 덮는 면의 UV를 지운다(Maya UV Editor Edit > Delete).
+        // 전에는 정점 삭제 명령이 UV 점 ID를 받아 아무것도 지우지 않은 채 선택만 비우는 빈 Undo 단계를 남겼다.
+        else if (sel.Mode == SelectMode.Uv) Actions.Invoke("uv.deleteUvs");
         else Actions.Invoke("mesh.deleteComponents");
     }
 
@@ -748,9 +751,10 @@ public partial class Shell
             .Item("normals.lock").Item("normals.unlock");
 
         Menus.Build(Add("UV"))
-            .Item("windows.uvEditor").Separator()
-            .Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
-            .Item("uv.unfold").Op("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
+            .Item("windows.uvEditor").Item("uv.setEditor").Separator()
+            .Op("uv.automatic").Item("uv.bestPlane").Item("uv.cameraBased").Item("uv.contourStretch").Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
+            .Item("uv.autoSeams").Item("uv.autoWrap").Item("uv.createShell").Item("uv.createShellGrid").Separator()
+            .Item("uv.unfold").Item("uv.optimize").Op("uv.layout").Op("uv.normalize").Op("uv.straighten").Separator().Item("uv.cut").Item("uv.sew").Item("uv.moveAndSew").Item("uv.cutSewTool").Separator().Item("uv.flipU").Item("uv.flipV");
         Menus.Build(Add("Skeleton")).Item("skeleton.jointTool").Item("skeleton.insertJointTool").Separator().Item("skeleton.mirror").Op("skeleton.orient");
         Menus.Build(Add("Skin")).Item("skin.bind").Item("skin.detach").Separator().Item("skin.paintTool").Item("skin.normalize").Item("skin.rebind");
 

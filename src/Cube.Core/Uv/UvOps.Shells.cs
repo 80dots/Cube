@@ -69,10 +69,10 @@ public static partial class UvOps
         }
     }
 
-    /// <summary>Orient Shell to Edges: 셸을 돌려 주어진 엣지가 U축(가로)과 평행이 되게 한다.</summary>
+    /// <summary>Orient Shell to Edges: 셸을 최소 각도로 돌려 주어진 엣지가 가장 가까운 축(U 가로 또는 V 세로)과 평행이 되게 한다.</summary>
     /// <remarks>
-    /// 엣지의 He0 쪽 코너 두 UV 점(a → b) 방향 각 atan2(d)를 구해 그만큼 반대로(−각) 셸 경계 상자 중심을 기준으로 회전한다.
-    /// 결과적으로 a → b가 +U 방향을 향한다.
+    /// 엣지의 He0 쪽 코너 두 UV 점(a → b) 방향 각 atan2(d)를 가장 가까운 90° 배수로 반올림한 차이만큼 셸 경계 상자 중심을 기준으로 회전한다.
+    /// 결과적으로 엣지가 U 또는 V 축에 평행해진다(Maya와 같이 셸을 45° 넘게 돌리지 않음).
     /// </remarks>
     public static void OrientShellToEdge(PolyMesh m, UvTopology topo, int edge)
     {
@@ -81,14 +81,14 @@ public static partial class UvOps
         int a = topo.HeToPoint[he], b = topo.HeToPoint[m.Hes[he].Next];
         var d = topo.Points[b].Uv - topo.Points[a].Uv;
         if (d.LengthSquared() < 1e-12f) return;
-        float ang = -MathF.Atan2(d.Y, d.X);
-        // 90° 배수로 가장 가까운 축에 맞춘다
-        // 주의: 아래 식은 정리하면 ang 그대로(축 반올림 항이 서로 상쇄됨)이며, 실제 회전은 그다음 줄들의 −atan2(d)로 정해진다.
-        ang = MathF.Round(ang / (MathF.PI / 2f)) * (MathF.PI / 2f) - MathF.Atan2(d.Y, d.X) + MathF.Atan2(d.Y, d.X) * 0 + (ang - MathF.Round(ang / (MathF.PI / 2f)) * (MathF.PI / 2f));
+        // 엣지 각을 가장 가까운 90° 배수(U 또는 V 축)로 돌리는 최소 회전(−45°~45°)
+        float cur = MathF.Atan2(d.Y, d.X);
+        float ang = MathF.Round(cur / (MathF.PI / 2f)) * (MathF.PI / 2f) - cur;
+        if (MathF.Abs(ang) < 1e-7f) return;
         int shell = topo.Points[a].Shell;
         var pts = topo.PointsInShell(shell).ToList();
         var (mn, mx) = Bounds(pts.Select(p => topo.Points[p].Uv));
-        TransformPoints(m, topo, pts, Matrix3x2.CreateRotation(-MathF.Atan2(d.Y, d.X), (mn + mx) * 0.5f));
+        TransformPoints(m, topo, pts, Matrix3x2.CreateRotation(ang, (mn + mx) * 0.5f));
     }
 
     /// <summary>Randomize Shells: 셸마다 임의 이동/회전/스케일.</summary>

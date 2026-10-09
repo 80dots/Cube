@@ -33,6 +33,7 @@ public sealed class UndoStack
     /// <summary>문서에 연결된 빈 스택을 만든다.</summary>
     public UndoStack(Document doc) { _doc = doc; }
 
+
     /// <summary>Undo할 명령이 있는지.</summary>
     public bool CanUndo => _undo.Count > 0;
     /// <summary>Redo할 명령이 있는지.</summary>

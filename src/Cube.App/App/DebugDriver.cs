@@ -52,7 +52,7 @@ public partial class DebugDriver : Node
             var step = _steps.Dequeue();
             var parts = step.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             try { Exec(parts); }
-            catch (Exception ex) { GD.PrintErr($"[Drive] '{step}': {ex.Message}"); }
+            catch (Exception ex) { GD.PrintErr($"[Drive] '{step}': {ex.Message}"); if (ex is ObjectDisposedException) GD.PrintErr(ex.StackTrace); }
             // 주입된 입력 이벤트는 다음 입력 플러시에서 처리되므로 입력 스텝 뒤에는 한 프레임 양보한다
             if (parts[0] is "move" or "gmove" or "gdrag" or "grab" or "grip" or "dragger" or "press" or "dblclick" or "release" or "drag" or "wheel" or "key" or "axisdrag" or "ringdrag" or "centerdrag" or "keydown" or "keyup") _wait = Math.Max(_wait, 1);
         }
@@ -406,6 +406,86 @@ public partial class DebugDriver : Node
                 UI.Shell.Instance.Actions.Invoke("log.copy");
                 GD.Print($"[Drive] logcopy lines={DisplayServer.ClipboardGet().Count(c => c == '\n')} counts={LogCapture.Instance?.Counts}");
                 break;
+            case "opt":   // opt ID KEY VALUE: 옵션 액션 id의 값 하나를 바꾼다(옵션 창 없이; 다음 <id>Apply가 그 값으로 실행)
+                UI.Shell.Instance.Options(p[1]).Set(p[2], float.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture));
+                GD.Print($"[Drive] opt {p[1]}.{p[2]}={p[3]}");
+                break;
+            case "uvat":   // uvat U V [DX DY]: UV 편집기 캔버스에서 UV 좌표 (U, V)(+ 화면 px 오프셋)가 보이는 위치로 커서 이동(버튼을 누르고 있으면 8단계 드래그)
+                {
+                    var cv = UI.Shell.Instance.UvEditorWindow?.Canvas;
+                    if (cv == null) { GD.Print("[Drive] uvat: no UV editor"); break; }
+                    var inv = System.Globalization.CultureInfo.InvariantCulture;
+                    var g = cv.GetGlobalRect().Position + cv.UvToPx(new System.Numerics.Vector2(float.Parse(p[1], inv), float.Parse(p[2], inv)));
+                    if (p.Length > 4 && float.TryParse(p[3], System.Globalization.NumberStyles.Float, inv, out float dx) && float.TryParse(p[4], System.Globalization.NumberStyles.Float, inv, out float dy)) g += new Vector2(dx, dy) * CubeApp.Instance.UiScale;
+                    var target = g - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    int n = _held.Count > 0 ? 8 : 1;
+                    for (int i = 1; i <= n; i++)
+                    {
+                        var next = _pos.Lerp(target, i / (float)n);
+                        var ev = new InputEventMouseMotion { Position = ToGlobal(next), GlobalPosition = ToGlobal(next), Relative = next - _pos, ButtonMask = Mask() };
+                        Mods(ev, p, 3);
+                        Input.ParseInputEvent(ev);
+                        _pos = next;
+                    }
+                    break;
+                }
+            case "uvsel":   // uvsel: UV 편집기 대상 노드마다 선택 UV 점 수와 그 UV 범위
+                {
+                    var cv = UI.Shell.Instance.UvEditorWindow?.Canvas;
+                    if (cv == null) break;
+                    foreach (var n in cv.TargetNodes())
+                    {
+                        var t = cv.Topo(n); var ps = cv.SelectedPoints(n);
+                        var mn = new System.Numerics.Vector2(float.MaxValue); var mx = new System.Numerics.Vector2(float.MinValue);
+                        foreach (int q in ps) { mn = System.Numerics.Vector2.Min(mn, t.Points[q].Uv); mx = System.Numerics.Vector2.Max(mx, t.Points[q].Uv); }
+                        var c = CubeApp.Instance.Document.Selection.GetComponents(n.Id);
+                        GD.Print($"[Drive] uvsel {n.Name}: mode={CubeApp.Instance.Document.Selection.Mode} pts={ps.Count}/{t.Points.Count} v{c.Verts.Count}/e{c.Edges.Count}/f{c.Faces.Count}/u{c.Uvs.Count} range=<{mn.X:F3},{mn.Y:F3}>..<{mx.X:F3},{mx.Y:F3}>");
+                    }
+                    break;
+                }
+            case "pieitem":   // pieitem LABEL: 열려 있는 파이(뷰포트/UV 편집기) 중 라벨이 LABEL(밑줄 = 공백)로 시작하는 항목 위로 커서 이동
+                {
+                    string label = string.Join(" ", p.Skip(1)).Replace('_', ' ');
+                    var pie = UI.Shell.Instance.FindChildren("*", "", true, false).OfType<UI.PieMenu>().FirstOrDefault(pm => pm.IsOpen);
+                    var at = pie?.ItemGlobalCenter(label);
+                    if (at == null) { GD.Print($"[Drive] pieitem '{label}': not found (open={pie != null})"); break; }
+                    _pos = at.Value - (Viewport?.GlobalPosition ?? Vector2.Zero);
+                    Input.ParseInputEvent(new InputEventMouseMotion { Position = ToGlobal(_pos), GlobalPosition = ToGlobal(_pos), Relative = Vector2.Zero, ButtonMask = Mask() });
+                    GD.Print($"[Drive] pieitem '{label}' at {at.Value} sticky={pie!.Sticky} title={pie.Title}");
+                    break;
+                }
+            case "reloadshell":   // reloadshell: 셸을 다시 만든다(Preferences UI 배율 변경과 같은 경로; 문서 유지)
+                CubeApp.Instance.CallDeferred(nameof(CubeApp.ReloadShell));
+                GD.Print("[Drive] reloadshell");
+                break;
+            case "uvsnap":   // uvsnap PATH: UV 편집기 캔버스를 PNG로 저장(UV Snapshot과 같은 경로, 파일 다이얼로그 없이)
+                GD.Print($"[Drive] uvsnap {UI.Shell.Instance.UvEditorWindow?.Canvas.SaveSnapshot(p[1])}");
+                break;
+            case "uvinfo":   // uvinfo: 메시 노드마다 UV 통계(셸·겹침·뒤집힘·사용률·범위·심·핀·세트)와 UV 편집기 상태·헬프 라인
+                {
+                    var doc = CubeApp.Instance.Document;
+                    foreach (var n in doc.MeshNodes())
+                    {
+                        var m = n.Mesh!;
+                        var topo = Core.Uv.UvTopology.Build(m);
+                        var st = Core.Uv.UvOps.Statistics(m, topo);
+                        var mn = new System.Numerics.Vector2(float.MaxValue); var mx = new System.Numerics.Vector2(float.MinValue);
+                        bool finite = true; int pins = 0;
+                        for (int h = 0; h < m.HalfEdgeCount; h++)
+                        {
+                            if (!m.Hes[h].Alive) continue; var uv = m.Hes[h].Uv0;
+                            if (!float.IsFinite(uv.X) || !float.IsFinite(uv.Y)) finite = false;
+                            mn = System.Numerics.Vector2.Min(mn, uv); mx = System.Numerics.Vector2.Max(mx, uv);
+                            if (m.Hes[h].PinUv) pins++;
+                        }
+                        int seams = 0; for (int e = 0; e < m.EdgeCount; e++) if (m.Edges[e].Alive && m.Edges[e].Seam) seams++;
+                        var sets = m.UvSets.Count > 0 ? string.Join(",", m.UvSets.Select((s, i) => (i == m.CurrentUvSet ? "*" : "") + s.Name)) : "-";
+                        GD.Print($"[Drive] uv {n.Name}: shells={st.shells} points={topo.Points.Count} overlap={st.overlapping}/{m.AliveFaceCount} reversed={st.reversed} usage={st.usage:F3} bounds=<{mn.X:F3},{mn.Y:F3}>..<{mx.X:F3},{mx.Y:F3}> finite={finite} seams={seams} pinnedCorners={pins} sets=[{sets}] valid={Core.Mesh.MeshValidator.Check(m).Count == 0}");
+                    }
+                    var ed = UI.Shell.Instance.UvEditorWindow;
+                    GD.Print($"[Drive] uvEditor open={ed?.IsOpen ?? false} tool={ed?.Canvas.Tool} island={ed?.Canvas.IslandMode} bg={ed?.Canvas.Background} help=\"{UI.Shell.Instance.HelpLine.Text}\"");
+                    break;
+                }
             case "confirm":   // 열린 확인 다이얼로그의 OK(Discard)를 누른다
                 {
                     var dl = UI.Shell.Instance.FindChildren("*", "ConfirmationDialog", true, false).OfType<ConfirmationDialog>().FirstOrDefault(d => d.Visible);

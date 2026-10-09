@@ -116,6 +116,7 @@ public sealed class SelectionState
     /// <summary>문서에 연결된 빈 선택(오브젝트 모드).</summary>
     public SelectionState(Document doc) { _doc = doc; }
 
+
     /// <summary>선택 모드. 오브젝트 → 컴포넌트로 바뀌는 순간 활성 오브젝트가 편집 대상이 된다(EnterComponentMode).</summary>
     public SelectMode Mode
     {
