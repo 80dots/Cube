@@ -106,7 +106,23 @@ public sealed class Document
         Root = new SceneNode { Name = "root", IsRoot = true, Id = NodeId.None };
         Selection = new SelectionState(this);
         Undo = new UndoStack(this);
-        Selection.Changed += () => Notify(new DocChange(ChangeKind.Selection, NodeId.None));
+        Selection.Changed += ForwardSelection;
+    }
+
+    /// <summary>선택 변경을 ChangeKind.Selection 문서 통지로 중계한다.</summary>
+    private void ForwardSelection() => Notify(new DocChange(ChangeKind.Selection, NodeId.None));
+
+    /// <summary>
+    /// 문서·선택·Undo 이벤트의 외부 구독자를 모두 뗀다(내부 선택 중계만 다시 연결).
+    /// 문서는 셸보다 오래 살므로 UI를 다시 만들 때(Preferences UI 배율 → 셸 재생성) 옛 셸의 패널·뷰가 남긴 구독을 지우는 데 쓴다.
+    /// 지우지 않으면 해제된 Godot 컨트롤을 건드리는 처리기가 남아 Undo 등에서 ObjectDisposedException이 나고 통지가 중간에 끊긴다.
+    /// </summary>
+    public void ClearEventSubscribers()
+    {
+        Changed = null;
+        Selection.ClearSubscribers();
+        Undo.ClearSubscribers();
+        Selection.Changed += ForwardSelection;
     }
 
     /// <summary>새 노드 ID를 배정한다.</summary>

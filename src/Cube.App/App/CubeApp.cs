@@ -61,6 +61,8 @@ public partial class CubeApp : Node
     public void ReloadShell()
     {
         UI.Shell.Instance?.Dock?.SaveLayout(); // 도킹 레이아웃(폭·탭) 유지
+        // 옛 셸의 패널·뷰·툴이 문서 이벤트에 남긴 구독을 지운다(문서는 유지되므로 그대로 두면 해제된 컨트롤을 건드려 Undo 중 예외가 났음)
+        Document.ClearEventSubscribers();
         ApplyUiScale();
         GetTree().ReloadCurrentScene();
     }

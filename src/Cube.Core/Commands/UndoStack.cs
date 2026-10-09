@@ -27,6 +27,8 @@ public sealed class UndoStack
     public int MaxSteps { get; set; } = 100;
     /// <summary>스택 내용이 바뀔 때(Push/Undo/Redo/Clear/그룹 종료) 발생. 메뉴 갱신·Action Popup 감지에 쓴다.</summary>
     public event Action? Changed;
+    /// <summary>모든 구독자를 뗀다(<see cref="Document.ClearEventSubscribers"/>에서만).</summary>
+    internal void ClearSubscribers() => Changed = null;
 
     /// <summary>문서에 연결된 빈 스택을 만든다.</summary>
     public UndoStack(Document doc) { _doc = doc; }

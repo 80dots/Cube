@@ -104,6 +104,14 @@ public partial class DebugDriver
                     _wait = Math.Max(_wait, 3);
                     return true;
                 }
+            case "prefscale":   // prefscale PERCENT: Preferences의 UI Scale 저장과 같은 경로(설정 저장 → 셸 다시 만들기)
+                {
+                    CubeApp.Instance.Settings.UiScalePercent = int.Parse(p[1]);
+                    CubeApp.Instance.Settings.Save();
+                    CubeApp.Instance.CallDeferred(nameof(CubeApp.ReloadShell));
+                    _wait = Math.Max(_wait, 10);
+                    return true;
+                }
             case "matprint":   // matprint ID: 머티리얼의 모든 값/텍스처를 찍는다
                 {
                     var m = CubeApp.Instance.Document.FindMaterial(int.Parse(p[1]));

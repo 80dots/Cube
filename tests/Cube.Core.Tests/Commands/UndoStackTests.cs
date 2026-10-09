@@ -240,4 +240,32 @@ public class UndoStackTests
         var mq = Matrix4x4.CreateScale(t.Scale) * Matrix4x4.CreateFromQuaternion(t.Rotation) * Matrix4x4.CreateTranslation(t.Translation);
         for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) Assert.True(MathF.Abs(m[r, c] - mq[r, c]) < 1e-4f, $"[{r},{c}] {m[r, c]} vs {mq[r, c]}");
     }
+    /// <summary>
+    /// 셸을 다시 만들 때 쓰는 <see cref="Document.ClearEventSubscribers"/>: 옛 구독자(문서·선택·모드·Undo)는 더 불리지 않고,
+    /// 새로 단 구독자는 선택 변경의 문서 중계(ChangeKind.Selection)를 포함해 정상적으로 통지받아야 한다.
+    /// </summary>
+    [Fact]
+    public void ClearEventSubscribers_DropsOldHandlers_KeepsSelectionForwarding()
+    {
+        var doc = new Document();
+        var cube = CreatePrimitiveCommand.Cube(doc);
+        int oldCalls = 0;
+        doc.Changed += _ => oldCalls++;
+        doc.Selection.Changed += () => oldCalls++;
+        doc.Selection.ModeChanged += () => oldCalls++;
+        doc.Undo.Changed += () => oldCalls++;
+        doc.ClearEventSubscribers();
+        var kinds = new List<ChangeKind>(); int undoCalls = 0, modeCalls = 0;
+        doc.Changed += c => kinds.Add(c.Kind);
+        doc.Undo.Changed += () => undoCalls++;
+        doc.Selection.ModeChanged += () => modeCalls++;
+        doc.Undo.Push(cube);
+        doc.Selection.SelectObjects(new[] { cube.Node.Id });
+        doc.Selection.Mode = Cube.Core.Selection.SelectMode.Face;
+        Assert.Equal(0, oldCalls);
+        Assert.Contains(ChangeKind.NodeAdded, kinds);
+        Assert.Contains(ChangeKind.Selection, kinds);
+        Assert.True(undoCalls > 0);
+        Assert.Equal(1, modeCalls);
+    }
 }
