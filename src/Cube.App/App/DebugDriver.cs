@@ -540,7 +540,7 @@ public partial class DebugDriver : Node
             case "gizmo":
                 {
                     if (UI.Shell.Instance.Tools.Current is Tools.TransformToolBase t && t.GizmoPublic != null)
-                        GD.Print($"[Drive] gizmo visible={t.GizmoPublic.Visible} pivot={t.GizmoPublic.Pivot} x={t.GizmoPublic.AxisX} y={t.GizmoPublic.AxisY} z={t.GizmoPublic.AxisZ} axis={UI.Shell.Instance.ToolContext.AxisOrientation} view={UI.Shell.Instance.Viewport.CameraController.Label}");
+                        GD.Print($"[Drive] gizmo visible={t.GizmoPublic.Visible} screen={UI.Shell.Instance.Viewport.Picker.Projection().Project(t.GizmoPublic.Pivot, out _)} pivot={t.GizmoPublic.Pivot} x={t.GizmoPublic.AxisX} y={t.GizmoPublic.AxisY} z={t.GizmoPublic.AxisZ} axis={UI.Shell.Instance.ToolContext.AxisOrientation} view={UI.Shell.Instance.Viewport.CameraController.Label}");
                     else GD.Print("[Drive] gizmo: (no transform tool)");
                     break;
                 }
@@ -666,6 +666,102 @@ public partial class DebugDriver : Node
                         foreach (var v in active.Mesh.Verts) if (v.Alive) { mn = System.Numerics.Vector3.Min(mn, v.Position); mx = System.Numerics.Vector3.Max(mx, v.Position); }
                         GD.Print($"[Drive] active={active.Name} material={active.MaterialId} local={active.Local} meshMin=<{mn.X:F3},{mn.Y:F3},{mn.Z:F3}> meshMax=<{mx.X:F3},{mx.Y:F3},{mx.Z:F3}> comps={string.Join("|", doc.Selection.Components.Select(kv => $"{kv.Key}:v{kv.Value.Verts.Count}/e{kv.Value.Edges.Count}/f{kv.Value.Faces.Count}/u{kv.Value.Uvs.Count}"))}");
                     }
+                    break;
+                }
+            // piesweep: 현재 선택 모드의 Edit 파이(Shift+RMB) 항목 중 활성인 것을 하나씩 실행하고 Undo로 되돌린다(파일 대화상자 항목 제외).
+            // 예외와 실행 결과(만든 Undo 단계 수)를 찍는다. 툴 전환 항목은 Select 툴로 되돌린다.
+            case "piesweep":
+                {
+                    var shell = UI.Shell.Instance; var doc = CubeApp.Instance.Document;
+                    var items = UI.PieMenus.ContextMenu(shell);
+                    var report = new List<string>();
+                    foreach (var it in items)
+                    {
+                        if (it.Sub != null || it.Run != null || it.ActionId.StartsWith("file.")) continue;
+                        if (!it.Enabled) { report.Add($"{it.ActionId}:disabled"); continue; }
+                        var selBefore = doc.Selection.Capture();
+                        int undoBefore = doc.Undo.UndoCount;
+                        string res;
+                        try
+                        {
+                            bool ok = shell.Actions.Invoke(it.ActionId);
+                            int made = doc.Undo.UndoCount - undoBefore;
+                            res = $"{it.ActionId}:{(ok ? "ok" : "fail")}+{made}";
+                            while (doc.Undo.UndoCount > undoBefore && doc.Undo.CanUndo) doc.Undo.Undo();
+                        }
+                        catch (Exception ex) { res = $"{it.ActionId}:EXCEPTION {ex.GetType().Name}: {ex.Message}"; }
+                        if (shell.Tools.Current?.Id != "select") shell.Tools.SetTool("select");
+                        doc.Selection.Restore(selBefore);
+                        report.Add(res);
+                    }
+                    GD.Print($"[Drive] piesweep {doc.Selection.Mode}: {string.Join(" ", report)}");
+                    break;
+                }
+            // quad 0|1: 단일/4분할 레이아웃을 명시적으로 맞춘다(시작 상태가 공유 settings.json에 따라 달라지므로 토글 대신)
+            case "quad":
+                {
+                    var shell = UI.Shell.Instance;
+                    if (shell.Layout.IsQuad != (p[1] != "0")) shell.Actions.Invoke("view.toggleLayout");
+                    GD.Print($"[Drive] quad={shell.Layout.IsQuad}");
+                    break;
+                }
+            // hidefloat: 떠 있는(도킹 안 된) 플로팅 패널을 모두 숨긴다(뷰포트 위를 덮어 주입한 클릭을 가로채지 않게; 설정은 저장하지 않음)
+            case "hidefloat":
+                {
+                    int n = 0;
+                    foreach (var fp in UI.Shell.Instance.FindChildren("*", "", true, false).OfType<UI.FloatingPanel>())
+                        if (fp.Visible && !fp.Docked) { fp.Visible = false; n++; }
+                    GD.Print($"[Drive] hidefloat {n}");
+                    break;
+                }
+            // hover: 현재 마우스 아래 GUI 컨트롤 경로(입력을 가로채는 위젯 확인용)
+            case "hover":
+                {
+                    var c = GetViewport().GuiGetHoveredControl();
+                    GD.Print($"[Drive] hover {_pos} -> {(c == null ? "(none)" : c.GetPath().ToString())}");
+                    break;
+                }
+            // retain 0|1: Retain Component Spacing(점 스냅 collapse 여부)를 메모리에서만 바꾼다(저장하지 않음; 드라이브 끝에 되돌릴 것)
+            case "retain":
+                CubeApp.Instance.Settings.RetainComponentSpacing = p[1] != "0";
+                GD.Print($"[Drive] retain={CubeApp.Instance.Settings.RetainComponentSpacing}");
+                break;
+            // actioncheck: 메뉴·셸프·핫키·파이(모든 선택 모드, 서브 파이 포함)가 가리키는 ActionId 중 등록되지 않은 것과
+            // 같은 (키 조합, 컨텍스트)에 서로 다른 액션이 묶인 핫키 충돌을 찍는다
+            case "actioncheck":
+                {
+                    var shell = UI.Shell.Instance; var reg = shell.Actions; var sel = CubeApp.Instance.Document.Selection;
+                    var missing = new SortedSet<string>();
+                    void Check(string src, string id) { if (reg.Get(id) == null) missing.Add($"{src}:{id}"); }
+                    foreach (var id in shell.Menus.ReferencedActions) Check("menu", id);
+                    foreach (var id in shell.ShelfActions) Check("shelf", id);
+                    foreach (var b in shell.Hotkeys.Map.Bindings) Check("hotkey", b.Action);
+                    void Pie(string src, List<UI.PieItem> items, int depth)
+                    {
+                        foreach (var it in items)
+                        {
+                            if (it.Sub != null) { if (depth < 3) Pie(src + ">" + it.Label, it.Sub(), depth + 1); continue; }
+                            if (it.Run == null) Check(src, it.ActionId);
+                        }
+                    }
+                    var oldMode = sel.Mode;
+                    foreach (var m in Enum.GetValues<Core.Selection.SelectMode>())
+                    {
+                        sel.Mode = m;
+                        Pie($"pieMode[{m}]", UI.PieMenus.ModeMenu(shell), 0);
+                        Pie($"pieEdit[{m}]", UI.PieMenus.ContextMenu(shell), 0);
+                    }
+                    sel.Mode = oldMode;
+                    Pie("pieSelect", UI.PieMenus.SelectMenu(shell), 0);
+                    Pie("pieView", UI.PieMenus.ViewMenu(shell), 0);
+                    Pie("pieUvMode", UI.PieMenus.UvModeMenu(shell, false), 0);
+                    Pie("pieUvSelect", UI.PieMenus.UvSelectMenu(shell), 0);
+                    Pie("pieUv", UI.PieMenus.UvMenu(shell), 0);
+                    var conflicts = shell.Hotkeys.Map.Bindings.GroupBy(b => (b.Chord, b.Context)).Where(g => g.Select(b => b.Action).Distinct().Count() > 1)
+                        .Select(g => $"{g.Key.Chord}/{g.Key.Context}: {string.Join(",", g.Select(b => b.Action))}");
+                    GD.Print($"[Drive] actioncheck registered={reg.All.Count()} missing={missing.Count} {string.Join(" ", missing)}");
+                    GD.Print($"[Drive] actioncheck conflicts: {string.Join(" | ", conflicts)}");
+                    GD.Print($"[Drive] actioncheck notInMenu: {string.Join(" ", reg.All.Select(a => a.Id).Where(id => !shell.Menus.ReferencedActions.Contains(id)).OrderBy(x => x))}");
                     break;
                 }
             default: GD.PrintErr($"[Drive] unknown step {p[0]}"); break;

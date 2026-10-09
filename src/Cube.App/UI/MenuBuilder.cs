@@ -18,6 +18,9 @@ public sealed class MenuBuilder
     /// <summary>만든 모든 항목(팝업, 항목 인덱스, ActionId). 상태 갱신 때 순회한다.</summary>
     private readonly List<(PopupMenu menu, int index, string action)> _items = new();
 
+    /// <summary>메뉴에 넣은 모든 ActionId(디버그 점검 `actioncheck`가 등록되지 않은 ID를 찾는 데 쓴다).</summary>
+    public IEnumerable<string> ReferencedActions => _items.Select(i => i.action);
+
     /// <summary>액션 레지스트리와 단축키 맵을 받아 빌더를 만든다.</summary>
     public MenuBuilder(ActionRegistry actions, HotkeyMap hotkeys) { _actions = actions; _hotkeys = hotkeys; }
 

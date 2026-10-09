@@ -99,7 +99,12 @@ public partial class CubeApp : Node
     }
 
     /// <summary>드라이브 스크립트를 실행하는 <see cref="DebugDriver"/> 노드를 자식으로 붙인다.</summary>
-    private void StartDriver(string script) => AddChild(new DebugDriver(script));
+    /// <remarks>"--drive=@PATH"면 스크립트를 파일에서 읽는다(긴 드라이브용; 줄바꿈도 스텝 구분자로 취급).</remarks>
+    private void StartDriver(string script)
+    {
+        if (script.StartsWith('@')) script = System.IO.File.ReadAllText(script[1..]).Replace("\r", "").Replace('\n', ';');
+        AddChild(new DebugDriver(script));
+    }
 
     /// <summary>--quit-after가 지정됐을 때만 프레임을 세어, 마지막 직전 프레임에 스크린샷을 저장하고 마지막 프레임에 설정 저장 후 종료한다.</summary>
     public override void _Process(double delta)

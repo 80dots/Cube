@@ -47,6 +47,8 @@ public partial class Shell : Control
     /// 액션의 Enabled(CanExecute)와 IsChecked를 버튼의 Disabled/눌림 상태에 반영한다.
     /// </summary>
     private readonly List<(Button button, string action)> _shelfButtons = new();
+    /// <summary>셸프 버튼들의 ActionId(디버그 점검 `actioncheck`용).</summary>
+    public IEnumerable<string> ShelfActions => _shelfButtons.Select(b => b.action);
     /// <summary>왼쪽 세로 툴박스(Select/Move/Rotate/Scale, 축 방향 버튼, Preferences/Undo/Redo).</summary>
     public VBoxContainer ToolBox { get; private set; } = null!;
     /// <summary>Outliner를 담은 도킹 가능한 패널(기본: 왼쪽 도크).</summary>
