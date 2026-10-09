@@ -646,7 +646,9 @@ public sealed partial class FbxSceneBuilder
 
     /// <summary>
     /// 스킨이 있는 메시에 Deformer Skin과 조인트별 Cluster, 그리고 BindPose를 만든다.
-    /// Cluster: Indexes/Weights = 그 조인트의 가중치가 0보다 큰 정점(FBX 정점 인덱스), Transform = 메시 월드, TransformLink = 조인트 월드.
+    /// Cluster: Indexes/Weights = 그 조인트의 가중치가 0보다 큰 정점(FBX 정점 인덱스), TransformLink = 조인트 월드,
+    /// Transform = 메시 공간 → 본 공간(행벡터 규약 메시 월드 · inv(조인트 월드); FBX SDK/Maya/Blender와 같은 의미, ufbx의 mesh_node_to_bone).
+    /// v0.0.56까지는 Transform에 메시 월드를 그대로 써서 Godot(ufbx)이 바인드 포즈를 단위 행렬로 읽어 원점에 없는 본의 스킨이 어긋났다.
     /// 바인드 포즈는 저장된 바인드 행렬이 아니라 내보내는 시점의 현재(rest) 월드 행렬이다(glTF 내보내기와 동일).
     /// 행렬 이동 성분은 cm로 스케일한다.
     /// </summary>
@@ -704,7 +706,8 @@ public sealed partial class FbxSceneBuilder
             cl.Add("Indexes", idx.ToArray());
             cl.Add("Weights", wts.ToArray());
             var jointWorld = Scaled(jn.WorldMatrix);
-            cl.Add("Transform", ToArray(meshWorld));
+            Matrix4x4.Invert(jointWorld, out var invJoint);
+            cl.Add("Transform", ToArray(meshWorld * invJoint));
             cl.Add("TransformLink", ToArray(jointWorld));
             _objects.Add(cl);
             _connections.Add((cid, sid, null));

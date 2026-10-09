@@ -233,6 +233,14 @@ public class FbxWriterTests
         // joint2 월드 y = 1 m → TransformLink 이동 성분 100 cm
         var c2 = clusters.First(c => FbxNode.ReadableId(c.Prop<string>(1)).EndsWith("joint2"));
         Assert.Equal(100.0, c2.Child("TransformLink")!.Prop<double[]>(0)[13], 3);
+        // Transform = 메시 → 본 공간(FBX SDK 의미): Transform · TransformLink = 메시 월드(여기서는 단위 행렬), 즉 Transform 이동 = −100 cm
+        var tr = c2.Child("Transform")!.Prop<double[]>(0); var tl = c2.Child("TransformLink")!.Prop<double[]>(0);
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+            {
+                double s = 0; for (int k = 0; k < 4; k++) s += tr[i * 4 + k] * tl[k * 4 + j];
+                Assert.Equal(i == j ? 1.0 : 0.0, s, 4);
+            }
         var pose = objects.All("Pose").Single();
         Assert.Equal(3, pose.Child("NbPoseNodes")!.Prop<int>(0));
         Assert.Equal(2, objects.All("NodeAttribute").Count(a => a.Child("TypeFlags")!.Prop<string>(0) == "Skeleton"));

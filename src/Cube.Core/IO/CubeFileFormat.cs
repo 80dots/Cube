@@ -487,8 +487,9 @@ public static class CubeFileFormat
             pins.Add(p.ToArray());
         }
         if (anyPin) dto.PinnedUvs = pins.ToArray();
-        // UV 세트가 여럿이면 현재 Uv0을 세트에 먼저 저장(StoreCurrentUvs)한 뒤 세트마다 면별 코너 UV를 기록한다.
-        if (m.UvSets.Count > 1)
+        // UV 세트가 여럿(또는 이름을 바꾼 하나)이면 현재 Uv0을 세트에 먼저 저장(StoreCurrentUvs)한 뒤 세트마다 면별 코너 UV를 기록한다.
+        // 세트가 하나뿐이어도 이름을 바꿨으면(UV Set Editor → Rename) 이름을 남기기 위해 기록한다.
+        if (m.UvSets.Count > 1 || (m.UvSets.Count == 1 && m.UvSets[0].Name != "map1"))
         {
             m.StoreCurrentUvs();
             dto.CurrentUvSet = m.CurrentUvSet;

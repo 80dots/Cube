@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Cube.Core.IO.Fbx;
 
-/// <summary>바이너리 FBX(7.1~7.4, 32비트 오프셋) 리더. writer 검증·테스트용(가져오기는 Godot FbxDocument가 한다).</summary>
+/// <summary>바이너리 FBX(7.1~7.4 32비트 오프셋, 7.5+ 64비트 오프셋) 리더. writer 검증·테스트용(가져오기는 Godot FbxDocument가 한다).</summary>
 public static class FbxBinaryReader
 /// <summary>바이너리 FBX인지 매직 문자열("Kaydara FBX Binary")로 판별한다.</summary>
 {
@@ -12,7 +12,6 @@ public static class FbxBinaryReader
 /// 바이트 배열을 읽어 버전과 최상위 노드 목록을 돌려준다. 버전은 오프셋 23(매직 다음)의 u32.
 /// 최상위 NULL 레코드를 만나면 멈추고 푸터는 읽지 않는다.
 /// </summary>
-/// <exception cref="NotSupportedException">7.5 이상(64비트 오프셋) 파일.</exception>
 
     public static (int version, List<FbxNode> nodes) Read(byte[] data)
     {
@@ -21,11 +20,11 @@ public static class FbxBinaryReader
         using var r = new BinaryReader(ms);
         ms.Position = 23;
         int version = (int)r.ReadUInt32();
-        if (version >= 7500) throw new NotSupportedException("FBX 7.5+ (64-bit offsets) is not supported by this reader");
+        bool wide = version >= 7500; // 7.5부터 레코드 헤더의 오프셋/개수/길이가 64비트
         var nodes = new List<FbxNode>();
         while (true)
         {
-            var n = ReadNode(r);
+            var n = ReadNode(r, wide);
             if (n == null) break;
             nodes.Add(n);
         }
@@ -39,11 +38,11 @@ public static class FbxBinaryReader
 /// 속성을 읽은 뒤 EndOffset까지 남은 바이트를 자식 레코드로 읽고, 마지막에 위치를 EndOffset으로 맞춘다.
 /// </summary>
 
-    private static FbxNode? ReadNode(BinaryReader r)
+    private static FbxNode? ReadNode(BinaryReader r, bool wide)
     {
-        long end = r.ReadUInt32();
-        int propCount = (int)r.ReadUInt32();
-        uint propLen = r.ReadUInt32();
+        long end = wide ? (long)r.ReadUInt64() : r.ReadUInt32();
+        long propCount = wide ? (long)r.ReadUInt64() : r.ReadUInt32();
+        long propLen = wide ? (long)r.ReadUInt64() : r.ReadUInt32();
         int nameLen = r.ReadByte();
         if (end == 0 && propCount == 0 && propLen == 0 && nameLen == 0) return null; // NULL 레코드
         string name = Encoding.UTF8.GetString(r.ReadBytes(nameLen));
@@ -51,7 +50,7 @@ public static class FbxBinaryReader
         for (int i = 0; i < propCount; i++) node.Props.Add(ReadProp(r));
         while (r.BaseStream.Position < end)
         {
-            var child = ReadNode(r);
+            var child = ReadNode(r, wide);
             if (child == null) break;
             node.Children.Add(child);
         }
