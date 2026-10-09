@@ -50,6 +50,8 @@ public static partial class MeshOps
         private readonly Dictionary<int, (int a, int b)> _parent = new();
         /// <summary>캡처한 면 목록(원래 면 ID, 코너, 머티리얼). 호출자는 이것을 순회하며 새 루프를 만든다.</summary>
         public readonly List<(int face, List<Corner> corners, int material)> Captured = new();
+        /// <summary>캡처한 면 ID 집합(중복 캡처 검사를 O(1)로; 전에는 목록 선형 검색이라 큰 분할에서 O(n²)).</summary>
+        private readonly HashSet<int> _capturedSet = new();
 
         /// <summary>메시 m을 대상으로 하는 빈 재구성기를 만든다.</summary>
         public FaceRebuilder(PolyMesh m) { _m = m; }
@@ -61,7 +63,7 @@ public static partial class MeshOps
         public void Capture(int f)
         {
             if (f < 0 || f >= _m.FaceCount || !_m.Faces[f].Alive) return;
-            if (Captured.Any(c => c.face == f)) return;
+            if (!_capturedSet.Add(f)) return;
             var corners = CaptureCorners(_m, f);
             for (int i = 0; i < corners.Count; i++)
             {
@@ -142,7 +144,9 @@ public static partial class MeshOps
             }
             rb.AddFace(loop, material);
         }
-        m.BumpTopology();
+        // 위상 버전은 RemoveFace/AddFace/AddVertex가 이미 올렸고 엣지 맵도 유효하게 유지된다. BumpTopology는 캐시를 버려
+        // 엣지를 반복해 나누는 연산(Add Divisions 엣지 단계, Multi-Cut, Slice)에서 매번 엣지 맵 전체를 다시 만들었다(v0.0.57).
+        m.BumpGeometry();
         return nv;
     }
 

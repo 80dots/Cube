@@ -138,6 +138,8 @@ public static partial class MeshOps
     /// <summary>Bevel 실행. Affect = Edges면 ids는 엣지, Vertices면 정점 ID. 반환값은 새로 생긴 면 ID들.</summary>
     public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o)
     {
+        // 폭 0(또는 음수)이면 Blender처럼 아무것도 하지 않는다(전에는 넓이 0인 면이 생겼다, v0.0.57)
+        if (!(o.Width > 0f)) return new List<int>();
         var info = new BevelInfo();
         // 1) Affect에 따라 엣지/정점 베벨 핵심 처리
         var result = o.Affect == BevelAffect.Vertices ? BevelVerticesCore(m, ids, o, info) : BevelEdgesCore(m, ids, o, info);

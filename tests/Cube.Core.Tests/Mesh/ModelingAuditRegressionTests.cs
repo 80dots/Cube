@@ -162,4 +162,32 @@ public class ModelingAuditRegressionTests
         Assert.Empty(made);
         Assert.Equal(6, m.AliveFaceCount);
     }
+
+    /// <summary>
+    /// 성능 회귀: 면을 대량으로 지웠다 다시 만드는 연산이 면마다 전체 하프에지를 훑지 않는다(전에는 Add Divisions 4단계 토러스 107초,
+    /// 엣지 32단계 분할 구 5분 이상 = 앱 정지). 넉넉한 상한으로 O(n²) 회귀만 잡는다.
+    /// </summary>
+    [Fact]
+    public void LargeSplitOperations_AreNotQuadratic()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var t = MeshBuilder.Torus();
+        MeshOps.AddDivisions(t, Faces(t), 3, MeshOps.DivisionMode.Triangles);
+        var s = MeshBuilder.Sphere();
+        MeshOps.DivideEdges(s, Enumerable.Range(0, s.EdgeCount).Where(e => s.Edges[e].Alive).ToArray(), 32);
+        var c = MeshBuilder.Plane(1, 1, 60, 60);
+        MeshOps.DeleteFaces(c, Faces(c).Where(f => f % 2 == 0));
+        Assert.True(sw.ElapsedMilliseconds < 20000, $"took {sw.ElapsedMilliseconds} ms");
+        AssertSound(s); AssertSound(c);
+    }
+
+    /// <summary>Bevel 폭 0은 아무것도 바꾸지 않는다(전에는 넓이 0 면이 생겼다).</summary>
+    [Fact]
+    public void Bevel_ZeroWidth_NoChange()
+    {
+        var m = MeshBuilder.Cube();
+        var r = MeshOps.Bevel(m, Enumerable.Range(0, m.EdgeCount).ToArray(), new BevelOptions { Width = 0f });
+        Assert.Empty(r);
+        Assert.Equal(6, m.AliveFaceCount);
+    }
 }

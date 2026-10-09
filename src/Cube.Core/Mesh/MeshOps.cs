@@ -203,7 +203,10 @@ public static partial class MeshOps
     /// </summary>
     public static void DeleteFaces(PolyMesh m, IEnumerable<int> faceIds)
     {
-        foreach (int f in faceIds.ToArray()) m.RemoveFace(f);
+        // 고립 정점은 마지막에 한 번에 정리한다(면마다 전체 하프에지를 훑지 않도록)
+        var orphans = new HashSet<int>();
+        foreach (int f in faceIds.ToArray()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
+        RemoveIsolatedVertices(m, orphans);
         m.BumpTopology();
     }
 
@@ -213,8 +216,20 @@ public static partial class MeshOps
     /// </summary>
     internal static void RemoveIsolatedVertices(PolyMesh m, IEnumerable<int> candidates)
     {
+        // 먼저 (유효한 출발 캐시로) 모두 판정한 뒤 한꺼번에 죽인다 — 하나씩 지우면 위상 버전이 바뀌어 캐시를 매번 다시 만든다
+        var dead = new List<int>();
         foreach (int v in candidates.Distinct().ToArray())
-            if (v >= 0 && v < m.Verts.Count && m.Verts[v].Alive && m.VertexOutgoing(v).Length == 0) m.RemoveVertexIfIsolated(v);
+        {
+            if (v < 0 || v >= m.Verts.Count || !m.Verts[v].Alive) continue;
+            var outs = m.VertexOutgoing(v);
+            if (outs.Length == 0) { dead.Add(v); continue; }
+            // 면을 대량으로 지우면 대표 하프에지가 미정(-1)으로 남을 수 있으므로(PolyMesh.RemoveFace) 살아 있는 출발 하프에지로 채운다
+            var vt = m.Verts[v];
+            if (vt.HalfEdge < 0 || !m.Hes[vt.HalfEdge].Alive || m.Hes[vt.HalfEdge].Vertex != v) { vt.HalfEdge = outs[0]; m.Verts[v] = vt; }
+        }
+        if (dead.Count == 0) return;
+        foreach (int v in dead) { var vt = m.Verts[v]; vt.Alive = false; vt.HalfEdge = -1; m.Verts[v] = vt; }
+        m.BumpTopology();
     }
 
     /// <summary>면 루프의 정점들을 set에 더한다(삭제·재구성 전에 고립 정점 후보를 모을 때).</summary>
