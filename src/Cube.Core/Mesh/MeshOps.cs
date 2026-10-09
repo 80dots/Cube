@@ -322,16 +322,31 @@ public static partial class MeshOps
                 cur = m.Hes[m.Hes[cur].Prev].Twin; // 다음 면에서 v에서 나가는 하프에지
                 if (cur < 0 || guard++ > 10000) break;
             } while (cur != startHe);
+            // 합친 루프에 같은 정점이 반복되면(부채꼴 면들이 v 말고도 정점·엣지를 공유: 큐브의 대각 두 모서리를 함께 지울 때 등) 한 면으로 만들 수 없다
+            // → 이 정점은 지우지 않는다(전에는 면만 지워지고 새 면 추가가 실패해 메시가 통째로 사라졌다, v0.0.57)
+            if (loop.Count < 3 || loop.Select(c => c.Vertex).Distinct().Count() != loop.Count) continue;
             var hard = new List<bool>();
             for (int i = 0; i < loop.Count; i++) hard.Add(IsHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
             // 새 면의 머티리얼은 부채꼴 첫 면을 따른다
             int material = m.Faces[visitedFaces[0]].Material;
+            // 실패 시 복구용 원래 부채꼴 면
+            var fan = visitedFaces.Distinct().Select(f => (corners: CaptureCorners(m, f), mat: m.Faces[f].Material)).ToList();
+            var fanHard = fan.Select(fc => Enumerable.Range(0, fc.corners.Count).Select(i => IsHard(m, fc.corners[i].Vertex, fc.corners[(i + 1) % fc.corners.Count].Vertex)).ToList()).ToList();
             foreach (int f in visitedFaces.Distinct()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
-            m.RemoveVertexIfIsolated(v);
-            if (loop.Count >= 3)
+            int nf = AddFaceWithCorners(m, loop, material);
+            if (nf >= 0)
             {
-                int nf = AddFaceWithCorners(m, loop, material);
-                if (nf >= 0) for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
+                for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
+                m.RemoveVertexIfIsolated(v);
+            }
+            else
+            {
+                // 새 면을 만들 수 없으면(비매니폴드) 원래 면을 되살린다
+                for (int k = 0; k < fan.Count; k++)
+                {
+                    int rf = AddFaceWithCorners(m, fan[k].corners, fan[k].mat);
+                    if (rf >= 0) for (int i = 0; i < fan[k].corners.Count; i++) SetHard(m, fan[k].corners[i].Vertex, fan[k].corners[(i + 1) % fan[k].corners.Count].Vertex, fanHard[k][i]);
+                }
             }
         }
         RemoveIsolatedVertices(m, orphans);

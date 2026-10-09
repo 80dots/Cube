@@ -124,4 +124,17 @@ public class ModelingAuditRegressionTests
         Assert.All(Faces(m), f => Assert.Equal(4, m.FaceDegree(f)));
         AssertSound(m);
     }
+
+    /// <summary>큐브 윗면의 대각 두 모서리를 함께 삭제: 첫 정점은 세 면이 합쳐지고 둘째는 합칠 수 없으니 남는다(전에는 면 1개만 남았다).</summary>
+    [Fact]
+    public void DeleteVertices_TwoDiagonalCubeCorners_KeepsClosedMesh()
+    {
+        var m = MeshBuilder.Cube();
+        var top = Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Position.Y > 0).ToArray();
+        int a = top[0];
+        int b = top.First(v => v != a && m.FindEdge(a, v) < 0); // 대각 정점
+        MeshOps.DeleteVertices(m, new[] { a, b });
+        AssertSound(m, closed: true);
+        Assert.True(m.AliveFaceCount >= 4, $"faces {m.AliveFaceCount}");
+    }
 }

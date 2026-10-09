@@ -58,7 +58,9 @@ public abstract class MeshEditCommand : ICommand
         _selBefore = doc.Selection.Capture();
         bool changed = Execute(doc, node, mesh);
         // 변경이 없으면 스냅샷을 버려 DidChange == false가 되게 한다(호출자가 스택에 넣지 않음).
-        if (!changed) { _before = null; _selBefore = null; return; }
+        // 연산이 메시를 일부 바꾼 뒤 '변경 없음'을 돌려줄 수 있으므로(예: 엣지 하나로 Connect = 분할 정점만 생기고 연결 실패)
+        // 실행 전 메시로 되돌린다 — 안 그러면 Undo할 수 없는 변경이 남는다(v0.0.57).
+        if (!changed) { mesh.CopyFrom(_before); _before = null; _selBefore = null; return; }
         // 결과 정리: 노멀 재계산, 위상 버전 증가, 후 상태 저장.
         MeshNormals.Recompute(mesh);
         mesh.BumpTopology();
