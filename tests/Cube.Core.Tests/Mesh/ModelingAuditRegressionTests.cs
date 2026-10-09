@@ -333,4 +333,23 @@ public class ModelingAuditRegressionTests
         Assert.Equal(2, cmd.Parts.Count);
         Assert.All(cmd.Parts, p => Assert.Equal(4, p.MaterialId));
     }
+
+    /// <summary>선택 면 Smooth: 전체 면을 고르면 Catmull-Clark과 같은 정점 위치, 일부만 고르면 닫힌 메시를 유지한다.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void SmoothFaces_MatchesCatmullClarkOnWholeMesh_AndKeepsSubsetClosed(int levels)
+    {
+        var a = MeshBuilder.Cube(); MeshOps.SmoothFaces(a, Faces(a), levels);
+        var b = MeshBuilder.Cube(); MeshOps.Smooth(b, levels);
+        string Key(PolyMesh m) => string.Join(";", Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive).Select(v => m.Verts[v].Position).Select(p => $"{p.X:F4},{p.Y:F4},{p.Z:F4}").OrderBy(x => x, StringComparer.Ordinal));
+        Assert.Equal(Key(b), Key(a));
+        AssertSound(a, closed: true, euler: 2);
+        foreach (var make in new Func<PolyMesh>[] { () => MeshBuilder.Cube(), () => MeshBuilder.Sphere(), () => MeshBuilder.Torus(), () => MeshBuilder.Plane(1, 1, 3, 3) })
+        {
+            var m = make(); bool closed = Enumerable.Range(0, m.EdgeCount).All(e => !m.Edges[e].Alive || !m.IsBoundaryEdge(e)); int euler = Euler(m);
+            MeshOps.SmoothFaces(m, Faces(m).Where(f => f % 3 == 0), levels);
+            AssertSound(m, closed: closed, euler: euler);
+        }
+    }
 }

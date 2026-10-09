@@ -208,9 +208,13 @@ public static partial class MeshOps
     /// 또는 삼각형 두 개로 나눈다. 영역 밖 이웃 면은 공유 엣지에 중점만 끼워 T-정점(구멍)이 생기지 않게 한다.
     /// </summary>
     /// <returns>영역 면에서 새로 생긴 면 ID(다음 단계 입력).</returns>
-    private static List<int> SubdivideOnce(PolyMesh m, List<int> faces, DivisionMode mode)
+    private static List<int> SubdivideOnce(PolyMesh m, List<int> faces, DivisionMode mode) => SubdivideOnce(m, faces, mode, out _, out _);
+
+    /// <summary>SubdivideOnce + 엣지 중점 맵(무향 정점 쌍 키 → 중점 정점)과 면 중심 맵(원래 면 ID → 중심 정점). 부분 Smooth가 위치를 다시 잡을 때 쓴다.</summary>
+    private static List<int> SubdivideOnce(PolyMesh m, List<int> faces, DivisionMode mode, out Dictionary<long, int> midOut, out Dictionary<int, int> centerOut)
     {
         var result = new List<int>();
+        midOut = new Dictionary<long, int>(PairKeyComparer.Instance); centerOut = new Dictionary<int, int>();
         if (faces.Count == 0) return result;
         var set = new HashSet<int>(faces);
         var rb = new FaceRebuilder(m);
@@ -225,7 +229,7 @@ public static partial class MeshOps
         foreach (int f in neighbors) rb.Capture(f);
         // 엣지 중점(영역 면의 엣지만)
         // mid: 무향 엣지 키 → 중점 정점. K는 FaceRebuilder.Key와 같은 키 함수.
-        var mid = new Dictionary<long, int>(PairKeyComparer.Instance);
+        var mid = midOut;
         long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
         foreach (int f in faces)
         {
@@ -260,6 +264,7 @@ public static partial class MeshOps
             foreach (var c in corners) { center += m.Verts[c.Vertex].Position; uvC += c.Uv; }
             center /= n; uvC /= n;
             int cv = m.AddVertex(center);
+            centerOut[f] = cv;
             for (int i = 0; i < n; i++)
             {
                 var c = corners[i]; var next = corners[(i + 1) % n]; var prev = corners[(i + n - 1) % n];

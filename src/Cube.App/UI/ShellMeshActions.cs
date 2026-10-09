@@ -157,7 +157,7 @@ public partial class Shell
         // Quadrangulate = 각도 임계값 이하인 삼각형 쌍을 쿼드로 병합, Mirror/Symmetrize = 축 평면 기준 반사(+자르기),
         // Fill Hole = 선택 경계 구멍 메우기, Triangulate = 이어 깎기(EarClipping), Cleanup = 퇴화 면 제거, Conform = 마지막 선택 표면에 감싸기
         RegisterOptionPair("mesh.smooth", "Smooth", new OptionSpec("Smooth Options", v => v.Set("levels", 1), new[] { OptionField.I("levels", "Division levels", 1, 4) }, "Smooth"), SmoothSelection,
-            () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null));
+            () => sel.Mode == SelectMode.Object ? sel.Objects.Any(id => doc.Find(id)?.Mesh != null) : HasComponents(SelectMode.Vertex, SelectMode.Edge, SelectMode.Face));
         RegisterOptionPair("mesh.merge", "Merge Vertices", new OptionSpec("Merge Vertices Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Threshold", 0, 1000, 0.0001) }, "Merge"), MergeSelectedVertices,
             () => sel.IsComponentMode ? sel.NodesWithComponents(sel.Mode).Any() : HasMeshSelection());
         RegisterBevelActions(); // Blender식 Bevel 옵션 전체 + 대화형 툴(ShellBevel.cs)
@@ -287,10 +287,19 @@ public partial class Shell
 
     /// <summary>
     /// Mesh → Smooth: 선택 메시 오브젝트마다 Catmull-Clark를 levels만큼 적용한다(히스토리 파라미터 Levels로 나중에 바꿀 수 있음).
+    /// 컴포넌트 모드면 선택을 면으로 바꿔 그 면들만 부드럽게 한다.
     /// </summary>
     private void SmoothSelection()
     {
         int levels = Options("mesh.smooth").Int("levels");
+        if (Document.Selection.IsComponentMode)
+        {
+            // 컴포넌트 모드(Maya와 같음): 선택을 면으로 바꿔 그 면들만 부드럽게(MeshOps.SmoothFaces; v0.0.57 전에는 오브젝트 모드에서만 실행됐다)
+            ForEachMeshTarget("Smooth", SelectMode.Face, (id, ids) => ParamOp("Smooth", id, HistoryParam.I("Levels", levels, 0, 4),
+                (m, p) => { var nf = MeshOps.SmoothFaces(m, ids, p.Int("Levels")); return (nf.Count > 0 && p.Int("Levels") > 0, SelectMode.Face, nf); }));
+            HelpLine.Text = $"Smooth (selected faces): {levels} level(s).";
+            return;
+        }
         var targets = Document.Selection.Objects.Where(id => Document.Find(id)?.Mesh != null).ToArray();
         using (Document.Undo.BeginGroup("Smooth"))
             foreach (var id in targets)
