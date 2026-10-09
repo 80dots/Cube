@@ -171,6 +171,37 @@ public class FbxAnimationTests
     /// 피벗이 있는 노드의 이동 커브: 기본(BakePivots)은 T = P·R + p 공식으로 베이크되어 (0,200,-100)cm가 되어야 하고,
     /// 베이크하지 않으면 Rotation/ScalingPivot 모델에 맞춘 T = p + P·R − P가 기록되어야 한다.
     /// </summary>
+    /// <summary>
+    /// Y 45° → 135° 회전 키 둘: 오일러 표현이 (0,45,0) → (180,45,180)으로 바뀌어 축별 선형 보간이 slerp와 다르므로
+    /// 중간 키가 추가되고, 키 사이 어디서든 오일러 선형 보간이 slerp와 1° 이내여야 한다(FBX 가져오기에서 중간 포즈가 어긋나던 문제).
+    /// </summary>
+    [Fact]
+    public void Export_RotationKeys_RefinedWhereEulerPathDiverges()
+    {
+        var doc = new Document();
+        var n = new SceneNode { Name = "spin", Local = new Transform3(Vector3.Zero, new Vector3(0, 45, 0), Vector3.One) };
+        doc.AddNode(n, doc.Root);
+        var clip = new AnimationClip { Name = "spin", FrameRate = 30f };
+        var tr = new NodeTrack { Node = n.Id, NodeName = "spin" };
+        tr.Rotation.Add(new(0f, Deg(Vector3.UnitY, 45))); tr.Rotation.Add(new(1f, Deg(Vector3.UnitY, 135)));
+        clip.Tracks.Add(tr); clip.UpdateLength(); doc.Animations.Add(clip);
+        var p = BuildAndRead(doc, new[] { n });
+        var r = p.CurveNodes("spin")["Lcl Rotation"];
+        var times = p.Curve(r, "d|X").Child("KeyTime")!.Prop<long[]>(0);
+        Assert.True(times.Length > 2);
+        var x = p.Values(r, "d|X"); var y = p.Values(r, "d|Y"); var z = p.Values(r, "d|Z");
+        for (int i = 0; i + 1 < times.Length; i++)
+            for (float a = 0.25f; a < 1f; a += 0.25f)
+            {
+                float t = (times[i] + (times[i + 1] - times[i]) * a) / (float)Tick;
+                var e = new Vector3(x[i] + (x[i + 1] - x[i]) * a, y[i] + (y[i + 1] - y[i]) * a, z[i] + (z[i + 1] - z[i]) * a);
+                var q = new Transform3(Vector3.Zero, e, Vector3.One).Rotation;
+                var want = NodeTrack.Sample(tr.Rotation, t, Quaternion.Identity);
+                float ang = 2f * MathF.Acos(MathF.Min(1f, MathF.Abs(Quaternion.Dot(q, want)))) * 180f / MathF.PI;
+                Assert.True(ang < 1f, $"t={t} angle {ang}");
+            }
+    }
+
     [Fact]
     public void Export_PivotNode_BakesTranslationFormula()
     {

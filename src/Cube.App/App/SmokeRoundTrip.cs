@@ -83,6 +83,13 @@ public static class SmokeRoundTrip
         tr.Rotation.Add(new AnimKey<Quaternion>(0, Quaternion.Identity));
         tr.Rotation.Add(new AnimKey<Quaternion>(1, Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 3)));
         clip.Tracks.Add(tr);
+        // 일반 노드 트랙: 피벗이 있는 부모 아래 자식 구가 Y축으로 돌며 위로 이동(노드 경로 트랙 + 피벗/계층 보정 검사)
+        var tb = new NodeTrack { Node = b.Node.Id, NodeName = "childBall" };
+        tb.Rotation.Add(new AnimKey<Quaternion>(0, b.Node.Local.Rotation));
+        tb.Rotation.Add(new AnimKey<Quaternion>(1, Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI * 0.75f)));
+        tb.Position.Add(new AnimKey<Vector3>(0, new Vector3(0, 1, 0)));
+        tb.Position.Add(new AnimKey<Vector3>(1, new Vector3(0.5f, 2, 0)));
+        clip.Tracks.Add(tb);
         doc.Undo.Push(new SetAnimationsCommand("anim", new[] { clip }));
         // 스팟 라이트
         var l = new SceneNode { Name = "spotA", Shape = new LightShape { Type = LightType.Spot, Intensity = 2, SpotAngle = 30 }, Local = new Transform3(new Vector3(0, 3, 0), new Vector3(-90, 0, 0), Vector3.One) };
@@ -175,6 +182,9 @@ public static class SmokeRoundTrip
             if (dj == null || Vector3.Distance(sj, dj.Value) > tol) Fail($"{ext}: jTip at t={t} {sj} vs {dj}");
             var bs = DeformedBounds(src, MeshesNamed(src, "skinTube")); var bd = DeformedBounds(dst, MeshesNamed(dst, "skinTube"));
             if (!Same(bs, bd, 5e-3f)) Fail($"{ext}: skinTube posed bounds t={t} {bs} vs {bd}");
+            // 애니메이션된 일반 노드(자식 구)의 월드 정점 범위
+            var cs = WorldBounds(MeshesNamed(src, "childBall")[0]); var cd = WorldBounds(MeshesNamed(dst, "childBall")[0]);
+            if (!Same(cs, cd, 5e-3f)) Fail($"{ext}: childBall posed bounds t={t} {cs} vs {cd}");
             else GD.Print($"[SmokeFull] {ext} posed t={t} ok tip={dj}");
         }
         AnimationPose.Clear(src); AnimationPose.Clear(dst);
