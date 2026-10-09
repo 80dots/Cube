@@ -148,6 +148,8 @@ public class ModelingAuditFuzzTests
         ("Mirror", false, (m, r) => MeshOps.MirrorGeometry(m, r.Next(3), 0.25f, r.Next(2) == 0, false, 0.001f)),
         ("MirrorCut", false, (m, r) => MeshOps.MirrorGeometry(m, r.Next(3), 0.1f, r.Next(2) == 0, true, 0.001f)),
         ("Symmetrize0", false, (m, r) => MeshOps.MirrorGeometry(m, r.Next(3), 0f, r.Next(2) == 0, true, 0.001f)),
+        ("MirrorTiltedCut", false, (m, r) => MeshOps.MirrorAcrossPlane(m, Vector3.Normalize(new Vector3((float)r.NextDouble() - 0.5f, (float)r.NextDouble() - 0.5f, (float)r.NextDouble() - 0.5f) + new Vector3(0.01f)), (float)r.NextDouble() * 0.4f - 0.2f, r.Next(2) == 0, true, 0.001f)),
+        ("MirrorTilted", false, (m, r) => MeshOps.MirrorAcrossPlane(m, Vector3.Normalize(new Vector3((float)r.NextDouble() - 0.5f, (float)r.NextDouble() - 0.5f, (float)r.NextDouble() - 0.5f) + new Vector3(0.01f)), (float)r.NextDouble() * 0.4f - 0.2f, r.Next(2) == 0, false, 0.001f)),
         ("Cleanup", false, (m, r) => MeshOps.Cleanup(m)),
         ("Slice", true, (m, r) => MeshOps.SliceWithPlane(m, new Vector3(0.05f, 0.03f, 0.02f), Vector3.Normalize(new Vector3((float)r.NextDouble() - 0.5f, (float)r.NextDouble() + 0.1f, (float)r.NextDouble() - 0.5f)))),
         ("Crease", true, (m, r) => MeshOps.SetCrease(m, Pick(r, Edges(m)), 2f)),
