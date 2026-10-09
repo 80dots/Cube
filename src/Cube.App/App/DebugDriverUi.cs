@@ -92,6 +92,18 @@ public partial class DebugDriver
                         GD.Print($"[Drive] panel {fp.PanelId}: open={fp.IsOpen} docked={fp.Docked} visible={fp.Visible} pos={fp.GlobalPosition} size={fp.Size}");
                     return true;
                 }
+            case "dockdefault":   // dockdefault: Outliner/Properties 외 패널을 모두 닫고 도크 폭을 기본(220/260)으로 되돌린 뒤 저장(도킹 점검 뒤 정리용)
+                {
+                    var dm = shell.Dock;
+                    foreach (var fp in dm.RegisteredPanels.ToList())
+                        if (fp.PanelId is not ("outliner" or "properties") && fp.IsOpen) fp.Close();
+                    float sc = CubeApp.Instance.UiScale;
+                    dm.SetSideWidth(UI.Docking.DockSideKind.Left, 220 * sc);
+                    dm.SetSideWidth(UI.Docking.DockSideKind.Right, 260 * sc);
+                    Callable.From(() => Callable.From(dm.SaveLayout).CallDeferred()).CallDeferred();
+                    _wait = Math.Max(_wait, 3);
+                    return true;
+                }
             case "matprint":   // matprint ID: 머티리얼의 모든 값/텍스처를 찍는다
                 {
                     var m = CubeApp.Instance.Document.FindMaterial(int.Parse(p[1]));
