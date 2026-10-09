@@ -193,6 +193,29 @@ public class FbxWriterTests
     }
 
     /// <summary>
+    /// FBX 색 속성은 선형이다(Maya·Blender·Unity·ufbx가 선형으로 읽음): 문서 sRGB 색 0.5 → DiffuseColor ≈ 0.214, 발광 1 → 1.
+    /// </summary>
+    [Fact]
+    public void SceneBuilder_MaterialColors_AreWrittenLinear()
+    {
+        var doc = new Document();
+        var cube = CreatePrimitiveCommand.Cube(doc); doc.Undo.Push(cube);
+        var mat = new MaterialDef { Name = "m", Type = MaterialType.Lambert, Color = new Vector3(0.5f, 1f, 0f) };
+        mat.Set("emissive", new Vector3(1f, 0.5f, 0f));
+        doc.Undo.Push(new AddMaterialCommand(mat));
+        doc.Undo.Push(new AssignMaterialCommand(new[] { cube.Node.Id }, doc.Materials[0].Id));
+        var (_, nodes) = FbxBinaryReader.Read(FbxBinaryWriter.Write(new FbxSceneBuilder(doc).Build(new[] { cube.Node })));
+        var ps = nodes.First(n => n.Name == "Objects").All("Material").Single().Child("Properties70")!.All("P").ToList();
+        var diffuse = ps.Single(x => x.Prop<string>(0) == "DiffuseColor");
+        Assert.Equal(0.2140, diffuse.Prop<double>(4), 3);
+        Assert.Equal(1.0, diffuse.Prop<double>(5), 6);
+        Assert.Equal(0.0, diffuse.Prop<double>(6), 6);
+        var emis = ps.Single(x => x.Prop<string>(0) == "EmissiveColor");
+        Assert.Equal(1.0, emis.Prop<double>(4), 6);
+        Assert.Equal(0.2140, emis.Prop<double>(5), 3);
+    }
+
+    /// <summary>
     /// 조인트 두 개에 스킨된 원기둥에서 메시만 골라 내보내도 스킨이 참조하는 조인트 체인이 자동 포함되어야 한다(Model 3, LimbNode 2).
     /// Skin 디포머 1개·Cluster 2개(Indexes/Weights 길이 일치, TransformLink 4x4), joint2의 TransformLink 이동 성분 100cm,
     /// BindPose 노드 수 3, Skeleton NodeAttribute 2개를 확인한다.

@@ -124,6 +124,7 @@ public partial class LightView : Node3D
                 }
                 break;
         }
+        _segments = v.ToArray();
         // 모은 선분을 Lines 서피스 하나로 올린다
         var arrays = new GArray();
         arrays.Resize((int)Mesh.ArrayType.Max);
@@ -132,5 +133,15 @@ public partial class LightView : Node3D
     }
 
     /// <summary>아이콘 색을 바꾼다(선택/활성 상태 표시). 아직 _Ready 전이면 무시.</summary>
+    /// <summary>아이콘 선분 끝점(라이트 로컬 좌표, 두 개씩 한 선분). 피킹이 아이콘 선 근처 클릭도 라이트로 집는 데 쓴다.</summary>
+    private Vector3[] _segments = System.Array.Empty<Vector3>();
+
+    /// <summary>아이콘 선분들을 월드 좌표로 돌려준다(두 점씩 한 선분).</summary>
+    public IEnumerable<(Vector3 a, Vector3 b)> IconSegmentsWorld()
+    {
+        var xf = GlobalTransform;
+        for (int i = 0; i + 1 < _segments.Length; i += 2) yield return (xf * _segments[i], xf * _segments[i + 1]);
+    }
+
     public void SetColor(Color c) { if (_mat != null) _mat.AlbedoColor = c; }
 }

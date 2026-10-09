@@ -128,8 +128,8 @@ public partial class PreferencesDialog : AcceptDialog
         else
         {
             var shell = Shell.Instance;
-            shell.Viewport.Display.WireOnShaded = s.WireOnShaded;
-            shell.Viewport.Display.RefreshAll();
+            // 전역 설정이므로 4분할의 모든 패널에 적용(전에는 활성 패널에만 적용되어 나머지 패널은 다시 시작해야 바뀌었음)
+            foreach (var p in shell.Layout.Panels) { p.Display.WireOnShaded = s.WireOnShaded; p.Display.RefreshAll(); }
             shell.SyncStatusLine();
             shell.ApplyGridSettings();
             foreach (var p in shell.Layout.Panels) p.Hud.Refresh();

@@ -110,6 +110,8 @@ public sealed class SelectionState
     public event Action? Changed;
     /// <summary>선택 모드가 바뀔 때만 발생.</summary>
     public event Action? ModeChanged;
+    /// <summary>모든 구독자를 뗀다(<see cref="Document.ClearEventSubscribers"/>에서만).</summary>
+    internal void ClearSubscribers() { Changed = null; ModeChanged = null; }
 
     /// <summary>문서에 연결된 빈 선택(오브젝트 모드).</summary>
     public SelectionState(Document doc) { _doc = doc; }

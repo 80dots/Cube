@@ -315,22 +315,53 @@ public partial class ViewportPanel : SubViewportContainer
         CameraController.Frame(total.Value, Aspect);
     }
 
-    /// <summary>A: 모든 메시 노드의 월드 AABB에 카메라를 맞춘다(메시가 없으면 원점 주변 12×12 영역).</summary>
+    /// <summary>A: 모든 노드(메시·라이트·조인트)의 월드 AABB에 카메라를 맞춘다(아무것도 없으면 원점 주변 12×12 영역).</summary>
     public void FrameAll()
     {
         if (_doc == null) return;
         Aabb? total = null;
-        foreach (var n in _doc.MeshNodes())
+        foreach (var n in _doc.Nodes.Values)
         {
-            var aabb = ObjectAabb(n.Id);
+            if (n.IsRoot || !n.Visible) continue;
+            var aabb = OwnAabb(n);
             if (aabb == null) continue;
             total = total == null ? aabb : total.Value.Merge(aabb.Value);
         }
         CameraController.Frame(total ?? new Aabb(new Vector3(-6, 0, -6), new Vector3(12, 0.01f, 12)), Aspect);
     }
 
-    /// <summary>메시 뷰의 렌더 점(정점)들을 월드로 변환해 감싼 AABB(변형·스킨 표시 위치 반영). 메시가 없거나 비면 null.</summary>
+    /// <summary>
+    /// 오브젝트(와 그 자손)의 월드 AABB. Maya처럼 그룹·라이트·조인트를 골라 F를 눌러도 그것을 프레임한다
+    /// (전에는 메시가 아니면 null이라 라이트/조인트/빈 그룹을 골라도 장면 전체를 프레임했음).
+    /// </summary>
     private Aabb? ObjectAabb(NodeId id)
+    {
+        var node = _doc?.Find(id);
+        if (node == null) return MeshAabb(id);
+        Aabb? box = null;
+        // 노드 자신과 모든 자손의 AABB를 합친다
+        void Walk(Core.Scene.SceneNode n)
+        {
+            var b = OwnAabb(n);
+            if (b != null) box = box == null ? b : box.Value.Merge(b.Value);
+            foreach (var c in n.Children) Walk(c);
+        }
+        Walk(node);
+        return box;
+    }
+
+    /// <summary>노드 자신만의 월드 AABB: 메시 = 정점, 라이트·조인트 = 위치 주변 작은 상자(아이콘/구 크기), 빈 트랜스폼 = null.</summary>
+    private Aabb? OwnAabb(Core.Scene.SceneNode n)
+    {
+        if (n.MeshShape != null) return MeshAabb(n.Id);
+        if (n.Light == null && !n.IsJoint) return null;
+        var p = n.WorldMatrix.Translation.ToGodot();
+        float r = n.Joint is { } j ? MathF.Max(j.Radius * 2f, 0.1f) : 0.4f;
+        return new Aabb(p - new Vector3(r, r, r), new Vector3(r, r, r) * 2f);
+    }
+
+    /// <summary>메시 뷰의 렌더 점(정점)들을 월드로 변환해 감싼 AABB(변형·스킨 표시 위치 반영). 메시가 없거나 비면 null.</summary>
+    private Aabb? MeshAabb(NodeId id)
     {
         var mv = Scene.GetMeshView(id);
         if (mv == null || mv.Render.PointCount == 0) return null;

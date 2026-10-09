@@ -47,6 +47,8 @@ public partial class Shell : Control
     /// 액션의 Enabled(CanExecute)와 IsChecked를 버튼의 Disabled/눌림 상태에 반영한다.
     /// </summary>
     private readonly List<(Button button, string action)> _shelfButtons = new();
+    /// <summary>셸프 버튼과 액션 ID 목록(점검용 읽기 전용).</summary>
+    public IReadOnlyList<(Button button, string action)> ShelfButtons => _shelfButtons;
     /// <summary>왼쪽 세로 툴박스(Select/Move/Rotate/Scale, 축 방향 버튼, Preferences/Undo/Redo).</summary>
     public VBoxContainer ToolBox { get; private set; } = null!;
     /// <summary>Outliner를 담은 도킹 가능한 패널(기본: 왼쪽 도크).</summary>
@@ -497,19 +499,24 @@ public partial class Shell : Control
             new[] { ("windows.renderSettings", "Settings", "render_settings"), ("render.ibl", "IBL", "light_ibl"), ("render.background", "HDRI BG", "light_background"), ("render.nextHdri", "Next HDRI", "light_next_hdri"), ("render.headlight", "Headlight", "light_headlight"), ("render.shadows", "Shadows", "light_shadows") },
             new[] { ("render.ssao", "SSAO", "render_ssao"), ("render.glow", "Glow", "render_glow"), ("render.ssr", "SSR", "render_ssr"), ("render.ssil", "SSIL", "render_ssil"), ("render.sdfgi", "SDFGI", "render_sdfgi") },
             new[] { ("render.fog", "Fog", "render_fog"), ("render.volumetricFog", "Vol. Fog", "render_volfog"), ("render.adjust", "Color Adj.", "render_adjust"), ("render.dof", "DOF", "render_dof"), ("render.autoExposure", "Auto Exp.", "render_autoexp") },
-            new[] { ("render.fxaa", "FXAA", "render_fxaa"), ("render.smaa", "SMAA", "render_smaa"), ("render.taa", "TAA", "render_taa"), ("render.debanding", "Debanding", "render_debanding"), ("render.postReset", "All Off", "render_off") });
+            new[] { ("render.fxaa", "FXAA", "render_fxaa"), ("render.smaa", "SMAA", "render_smaa"), ("render.taa", "TAA", "render_taa"), ("render.debanding", "Debanding", "render_debanding"), ("render.postReset", "FX Off", "render_off") });
         // 선택·모드·툴이 바뀌면 CanExecute/IsChecked가 달라지므로 버튼 상태를 다시 맞춘다
         Document.Selection.Changed += RefreshShelf;
         Document.Selection.ModeChanged += RefreshShelf;
         Tools.ToolChanged += _ => RefreshShelf();
+        // 메뉴·단축키·HUD로 토글 액션(렌더 설정, 셰이딩 모드 등)을 실행해도 셸프 토글 표시가 따라가도록(전에는 셸프 버튼을 직접 눌렀을 때만 갱신)
+        Actions.Invoked += _ => RefreshShelf();
+        // 셰이딩 모드 같은 패널별 체크 상태는 활성 패널이 바뀌면 달라진다
+        Layout.ActiveChanged += _ => RefreshShelf();
         RefreshShelf();
     }
 
     /// <summary>셸프 버튼 활성/체크 상태를 액션의 CanExecute/IsChecked로 맞춘다.</summary>
-    private void RefreshShelf()
+    public void RefreshShelf()
     {
         foreach (var (b, id) in _shelfButtons)
         {
+            if (!IsInstanceValid(b)) continue;
             var a = Actions.Get(id); if (a == null) continue;
             b.Disabled = !a.Enabled;
             if (a.IsChecked != null) b.SetPressedNoSignal(a.IsChecked());

@@ -61,6 +61,15 @@ public partial class PropertiesPanel : VBoxContainer
     private int _historyIndex = -1;          // 선택된 히스토리 항목(오래된 것부터 센 인덱스)
     /// <summary>현재 파라미터 상자에 들어 있는 행 컨트롤들(다시 만들 때 QueueFree로 지운다).</summary>
     private readonly List<Control> _paramControls = new();
+    /// <summary>파라미터 상자를 만든 기준(노드, 항목 인덱스, 파라미터 이름·종류 서명). 같으면 행을 다시 만들지 않고 값만 고친다(MMB 드래그 중인 칸이 지워지지 않도록).</summary>
+    private (NodeId node, int index, string sig)? _paramsKey;
+    /// <summary>현재 파라미터 숫자 칸(이름, 성분, 칸). 값만 고칠 때 쓴다.</summary>
+    private readonly List<(string name, int comp, SpinBox spin)> _paramSpins = new();
+    /// <summary>
+    /// 라이트·히스토리 파라미터의 SpinDrag 병합 상태: 마지막 명령을 만든 드래그 번호와 그 명령.
+    /// 같은 드래그의 다음 변경은 그 명령을 Undo하고 처음 값부터 다시 만들어 Undo 한 단계로 합친다.
+    /// </summary>
+    private int _mergeDragId; private ICommand? _mergeCmd;
 
     /// <summary>
     /// 문서에 연결한다. 머티리얼 편집기를 셸에 연결하고, 선택/모드 변경 → 전체 갱신,
@@ -107,6 +116,8 @@ public partial class PropertiesPanel : VBoxContainer
                 var sb = Spin(s);
                 int idx = r * 3 + c;
                 sb.ValueChanged += v => OnValueChanged(idx, (float)v);
+                // MMB 드래그 속도: 이동/스케일/피벗 0.01, 회전 0.5°(증분 0.001 그대로면 100px에 0.5°밖에 안 돌았음)
+                sb.SetMeta(SpinDrag.DragUnitMeta, r == 1 ? 0.5 : 0.01);
                 _fields[idx] = sb;
                 grid.AddChild(sb);
             }
@@ -138,12 +149,13 @@ public partial class PropertiesPanel : VBoxContainer
         _lightColor = new ColorPickerButton { EditAlpha = false, SizeFlagsHorizontal = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(0, 22 * s) };
         _lightColor.PopupClosed += () => CommitLight(l => l.Color = new NVec3(_lightColor.Color.R, _lightColor.Color.G, _lightColor.Color.B));
         lightBox.AddChild(LabeledRow("Color", _lightColor, s));
-        _lightIntensity = Spin(s); _lightIntensity.MinValue = 0; _lightIntensity.Step = 0.01; _lightIntensity.ValueChanged += v => CommitLight(l => l.Intensity = (float)v);
+        _lightIntensity = Spin(s); _lightIntensity.MinValue = 0; _lightIntensity.AllowLesser = false; _lightIntensity.Step = 0.01; _lightIntensity.ValueChanged += v => CommitLight(l => l.Intensity = (float)v);
         lightBox.AddChild(LabeledRow("Intensity", _lightIntensity, s));
-        _lightRange = Spin(s); _lightRange.MinValue = 0.01; _lightRange.Step = 0.1; _lightRange.ValueChanged += v => CommitLight(l => l.Range = (float)v);
+        _lightRange = Spin(s); _lightRange.MinValue = 0.01; _lightRange.AllowLesser = false; _lightRange.Step = 0.1; _lightRange.ValueChanged += v => CommitLight(l => l.Range = (float)v);
         _lightRangeRow = LabeledRow("Range", _lightRange, s); lightBox.AddChild(_lightRangeRow);
-        _lightAngle = Spin(s); _lightAngle.MinValue = 1; _lightAngle.MaxValue = 179; _lightAngle.Step = 0.5; _lightAngle.ValueChanged += v => CommitLight(l => l.SpotAngle = (float)v);
+        _lightAngle = Spin(s); _lightAngle.MinValue = 1; _lightAngle.MaxValue = 179; _lightAngle.AllowLesser = false; _lightAngle.AllowGreater = false; _lightAngle.Step = 0.5; _lightAngle.ValueChanged += v => CommitLight(l => l.SpotAngle = (float)v);
         _lightAngleRow = LabeledRow("Cone Angle", _lightAngle, s); lightBox.AddChild(_lightAngleRow);
+        // 음수 세기·범위, 1~179° 밖의 원뿔 각도는 받지 않는다(공통 Spin은 범위 밖 입력을 허용하므로 다시 막음)
         _lightGroup = lightBox;
         AddChild(lightBox);
 
@@ -205,9 +217,30 @@ public partial class PropertiesPanel : VBoxContainer
     {
         if (_updating || _node.IsNone) return;
         var node = _doc.Find(_node); if (node?.Light == null) return;
+        // 같은 MMB 드래그의 이전 명령은 되돌리고 처음 값부터 다시 만든다(드래그 한 번 = Undo 한 단계)
+        UndoMergedDrag();
         var after = node.Light.Clone(); change(after);
         if (after.Type == node.Light.Type && after.Color == node.Light.Color && after.Intensity == node.Light.Intensity && after.Range == node.Light.Range && after.SpotAngle == node.Light.SpotAngle) return;
-        _doc.Undo.Push(new SetLightCommand(_node, after));
+        PushMerged(new SetLightCommand(_node, after));
+    }
+
+    /// <summary>SpinDrag 드래그 중이고 Undo 스택 맨 위가 같은 드래그가 넣은 명령이면 그것을 Undo한다.</summary>
+    private void UndoMergedDrag()
+    {
+        if (SpinDrag.ActiveDrag != 0 && SpinDrag.ActiveDrag == _mergeDragId && _mergeCmd != null && ReferenceEquals(_doc.Undo.LastCommand, _mergeCmd))
+        {
+            bool was = _updating; _updating = true;   // Undo 통지로 Refresh가 칸 값을 되돌리며 생기는 신호를 무시
+            _doc.Undo.Undo();
+            _updating = was;
+        }
+        _mergeCmd = null;
+    }
+
+    /// <summary>명령을 넣고, SpinDrag 드래그 중이면 다음 변경에서 합칠 수 있게 기억한다.</summary>
+    private void PushMerged(ICommand cmd)
+    {
+        _doc.Undo.Push(cmd);
+        _mergeDragId = SpinDrag.ActiveDrag; _mergeCmd = SpinDrag.ActiveDrag != 0 ? cmd : null;
     }
 
     /// <summary>Light 그룹을 노드의 라이트 값으로 채우고 종류에 따라 Range/Cone Angle 행을 보이거나 숨긴다. 라이트가 없으면 그룹을 숨긴다.</summary>
@@ -335,12 +368,28 @@ public partial class PropertiesPanel : VBoxContainer
     /// </summary>
     private void RefreshParams()
     {
+        var entries = _doc.Find(_node)?.MeshShape?.History;
+        var cur = entries == null || _historyIndex < 0 || _historyIndex >= entries.Count ? null : entries[_historyIndex];
+        // 같은 항목·같은 파라미터 구성이면 행을 다시 만들지 않고 값만 고친다(편집 → 재실행 통지마다 칸이 지워지면 MMB 드래그가 끊김)
+        if (cur != null && cur.Editable && _paramsKey is { } key && key.node == _node && key.index == _historyIndex && key.sig == ParamSig(cur))
+        {
+            bool was = _updating; _updating = true;
+            foreach (var (name, comp, spin) in _paramSpins)
+            {
+                if (!IsInstanceValid(spin)) continue;
+                var v = cur.Params[name].Value;
+                spin.SetValueNoSignal(comp == 0 ? v.X : comp == 1 ? v.Y : v.Z);
+            }
+            _updating = was;
+            return;
+        }
         // 이전 행들을 지운다.
         foreach (var c in _paramControls) c.QueueFree();
         _paramControls.Clear();
-        var entries = _doc.Find(_node)?.MeshShape?.History;
-        if (entries == null || _historyIndex < 0 || _historyIndex >= entries.Count) return;
-        var entry = entries[_historyIndex];
+        _paramSpins.Clear();
+        _paramsKey = null;
+        if (cur == null) return;
+        var entry = cur;
         float s = CubeApp.Instance.UiScale;
         if (!entry.Editable)
         {
@@ -350,6 +399,7 @@ public partial class PropertiesPanel : VBoxContainer
         }
         // 람다가 캡처할 항목 인덱스(이후 _historyIndex가 바뀌어도 이 행은 같은 항목을 가리킨다).
         int entryIndex = _historyIndex;
+        _paramsKey = (_node, entryIndex, ParamSig(entry));
         foreach (var p in entry.Params.Items)
         {
             var row = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
@@ -365,10 +415,14 @@ public partial class PropertiesPanel : VBoxContainer
                 string pname = p.Name; int comp = c;
                 sb.ValueChanged += v => OnParamChanged(entryIndex, pname, comp, (float)v);
                 row.AddChild(sb);
+                _paramSpins.Add((pname, comp, sb));
             }
             _paramBox.AddChild(row); _paramControls.Add(row);
         }
     }
+
+    /// <summary>히스토리 항목의 파라미터 구성 서명(이름·종류). 같으면 파라미터 행을 재사용한다.</summary>
+    private static string ParamSig(HistoryEntry e) => e.Name + "|" + string.Join(";", e.Params.Items.Select(p => p.Name + ":" + p.Kind));
 
     /// <summary>
     /// 히스토리 파라미터 한 성분이 바뀌었을 때: 파라미터 복제본을 고쳐 값이 실제로 달라졌으면
@@ -383,6 +437,9 @@ public partial class PropertiesPanel : VBoxContainer
         if (_updating) return;
         var shape = _doc.Find(_node)?.MeshShape;
         if (shape == null || entryIndex < 0 || entryIndex >= shape.History.Count) return;
+        // 같은 MMB 드래그의 이전 편집은 되돌리고 원래 값부터 다시 편집한다(드래그 한 번 = Undo 한 단계)
+        UndoMergedDrag();
+        if (entryIndex >= shape.History.Count) return;
         var entry = shape.History[entryIndex];
         var np = entry.Params.Clone();
         var p = np[name];
@@ -392,7 +449,7 @@ public partial class PropertiesPanel : VBoxContainer
         if (np.ValuesEqual(entry.Params)) return;
         // 명령 후 RefreshHistory가 같은 항목을 계속 선택하도록 인덱스를 고정한다.
         _historyIndex = entryIndex;
-        _doc.Undo.Push(new EditHistoryCommand(_node, entryIndex, np, $"Edit {entry.Name}"));
+        PushMerged(new EditHistoryCommand(_node, entryIndex, np, $"Edit {entry.Name}"));
     }
 
     /// <summary>트랜스폼 필드 한 행(X/Y/Z)에 값을 소수 셋째 자리로 반올림해 넣는다.</summary>
@@ -402,34 +459,50 @@ public partial class PropertiesPanel : VBoxContainer
     }
 
     /// <summary>
-    /// 트랜스폼 숫자 칸 변경 처리. 해당 행/열 성분만 바꾼 새 로컬 트랜스폼을 만들어 노드에 바로 적용하고
-    /// <see cref="TransformNodesCommand"/>를 alreadyApplied로 넣는다. 피벗 행은 월드 행렬을 유지하며 피벗만 옮긴다.
+    /// 트랜스폼 숫자 칸 변경 처리. Maya 채널 박스처럼 오브젝트 모드에서는 선택된 모든 오브젝트의 같은 채널을 그 값으로 바꾼다
+    /// (표시 대상 노드 + 나머지 선택 오브젝트). 노드마다 해당 행/열 성분만 바꾼 새 로컬 트랜스폼을 바로 적용하고
+    /// <see cref="TransformNodesCommand"/> 하나를 alreadyApplied로 넣는다. 피벗 행은 월드 행렬을 유지하며 피벗만 옮긴다.
     /// </summary>
     /// <param name="idx">필드 인덱스(행×3+열).</param>
     /// <param name="value">새 값.</param>
     private void OnValueChanged(int idx, float value)
     {
         if (_updating || _node.IsNone) return;
-        var node = _doc.Find(_node); if (node == null) return;
-        var before = node.Local; var after = before;
-        // 행/열 분해 후 해당 벡터의 한 성분만 교체.
+        var main = _doc.Find(_node); if (main == null) return;
+        // 대상: 표시 노드가 먼저, 이어서 다른 선택 오브젝트(중복·없는 노드 제외)
+        var targets = new List<SceneNode> { main };
+        if (_doc.Selection.Mode == SelectMode.Object)
+            foreach (var id in _doc.Selection.Objects)
+                if (id != main.Id && _doc.Find(id) is { } n && !targets.Contains(n)) targets.Add(n);
         int row = idx / 3, col = idx % 3;
-        NVec3 v = row == 0 ? after.Translation : row == 1 ? after.RotationDegrees : row == 2 ? after.Scale : after.Pivot;
-        if (col == 0) v.X = value; else if (col == 1) v.Y = value; else v.Z = value;
-        if (row == 0) after.Translation = v; else if (row == 1) after.RotationDegrees = v; else if (row == 2) after.Scale = v;
-        else after = before.WithPivotKeepingMatrix(v); // 피벗 편집은 월드를 유지한다(Maya 피벗 이동과 같음)
-        if (after == before) return;
         // 가운데 버튼 드래그(SpinDrag) 한 번의 변경들은 Undo 한 단계로 합친다: 같은 드래그의 직전 명령을 빼고 처음 값부터의 명령으로 바꾼다
-        if (SpinDrag.ActiveDrag != 0 && SpinDrag.ActiveDrag == _dragId && _dragCmd != null && ReferenceEquals(_doc.Undo.LastCommand, _dragCmd) && _dragCmd.Ids.Count == 1 && _dragCmd.Ids[0] == node.Id)
+        if (SpinDrag.ActiveDrag != 0 && SpinDrag.ActiveDrag == _dragId && _dragCmd != null && ReferenceEquals(_doc.Undo.LastCommand, _dragCmd)
+            && _dragCmd.Ids.Count == targets.Count && targets.All(t => _dragCmd.Ids.Contains(t.Id)))
         {
-            var start = _dragCmd.Before[0];
+            bool was = _updating; _updating = true;
             _doc.Undo.Undo();
-            before = start;
+            _updating = was;
         }
+        var ids = new List<NodeId>(); var befores = new List<Transform3>(); var afters = new List<Transform3>();
+        foreach (var node in targets)
+        {
+            var before = node.Local; var after = before;
+            // 행/열 분해 후 해당 벡터의 한 성분만 교체.
+            NVec3 v = row == 0 ? after.Translation : row == 1 ? after.RotationDegrees : row == 2 ? after.Scale : after.Pivot;
+            if (col == 0) v.X = value; else if (col == 1) v.Y = value; else v.Z = value;
+            if (row == 0) after.Translation = v; else if (row == 1) after.RotationDegrees = v; else if (row == 2) after.Scale = v;
+            else after = before.WithPivotKeepingMatrix(v); // 피벗 편집은 월드를 유지한다(Maya 피벗 이동과 같음)
+            if (after == before) continue;
+            ids.Add(node.Id); befores.Add(before); afters.Add(after);
+        }
+        if (ids.Count == 0) { _dragCmd = null; return; }
         // 문서를 직접 갱신하고 통지한 뒤, 이미 적용된 명령으로 Undo 스택에 넣는다.
-        node.Local = after;
-        _doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
-        var cmd = new TransformNodesCommand("Set Attribute", new[] { node.Id }, new[] { before }, new[] { after });
+        for (int i = 0; i < ids.Count; i++)
+        {
+            _doc.Find(ids[i])!.Local = afters[i];
+            _doc.Notify(new DocChange(ChangeKind.TransformChanged, ids[i]));
+        }
+        var cmd = new TransformNodesCommand("Set Attribute", ids.ToArray(), befores.ToArray(), afters.ToArray());
         _doc.Undo.Push(cmd, alreadyApplied: true);
         // 이번 명령을 기억해 같은 드래그의 다음 변경에서 병합할 수 있게 한다.
         _dragId = SpinDrag.ActiveDrag; _dragCmd = SpinDrag.ActiveDrag != 0 ? cmd : null;

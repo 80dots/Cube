@@ -668,7 +668,7 @@ public partial class DebugDriver : Node
                     }
                     break;
                 }
-            default: GD.PrintErr($"[Drive] unknown step {p[0]}"); break;
+            default: if (!ExecUi(p)) GD.PrintErr($"[Drive] unknown step {p[0]}"); break;
         }
     }
 

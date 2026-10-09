@@ -163,7 +163,12 @@ public partial class FloatingPanel : PanelContainer
         if (LastDock != null && dm != null && dm.Redock(this)) return;
         if (size is { } sz) Size = sz;
         var host = GetParentControl()?.Size ?? GetViewportRect().Size;
+        // 창보다 크면(작은 창·UI 배율 변경 뒤) 창 안에 들어오게 줄인다 — 가운데 배치 위치가 음수가 되어 제목 바가 화면 밖으로 나가면 옮길 수 없었음
+        if (host.X > 0 && host.Y > 0 && (Size.X > host.X || Size.Y > host.Y))
+            Size = new Vector2(Mathf.Max(Mathf.Min(Size.X, host.X), Mathf.Min(MinPanelSize.X, host.X)), Mathf.Max(Mathf.Min(Size.Y, host.Y), Mathf.Min(MinPanelSize.Y, host.Y)));
         if (!_placed) { Position = (host - Size) / 2; _placed = true; }
+        // 제목 바가 항상 화면 안에 남게(위쪽 0 이상, 가로 60px 이상 보이게)
+        Position = new Vector2(Mathf.Clamp(Position.X, -Size.X + 60, Mathf.Max(0, host.X - 60)), Mathf.Clamp(Position.Y, 0, Mathf.Max(0, host.Y - 30)));
         Visible = true;
         MoveToFront();
     }
@@ -174,6 +179,9 @@ public partial class FloatingPanel : PanelContainer
     public void Close()
     {
         if (Docked) Docking.DockManager.Instance?.Undock(this, show: false);
+        // 떠 있는 상태로 닫았으면 다시 열 때도 떠 있던 자리에 연다(예전에 붙었던 자리 LastDock으로 다시 붙이지 않음).
+        // 전에는 한 번 붙였다 떼어 낸 패널을 닫았다 열면 도크로 되돌아갔다.
+        else if (Visible) LastDock = null;
         Visible = false;
         Closed?.Invoke();
     }

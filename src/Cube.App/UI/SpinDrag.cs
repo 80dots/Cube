@@ -18,6 +18,8 @@ public partial class SpinDrag : Node
     private SpinBox? _spin;
     /// <summary>진행 중인 드래그 번호(드래그가 아니면 0). 값 변경을 받는 쪽이 한 드래그의 변경을 Undo 한 단계로 합칠 때 쓴다.</summary>
     public static int ActiveDrag { get; private set; }
+    /// <summary>SpinBox 메타데이터 키: 있으면 MMB 드래그의 픽셀당 변화량(Shift 전)으로 쓴다.</summary>
+    public const string DragUnitMeta = "drag_unit";
     /// <summary>드래그 번호를 만들기 위한 전역 카운터(드래그마다 1 증가, 모든 SpinDrag 인스턴스가 공유).</summary>
     private static int _dragCounter;
     /// <summary>직전 마우스 이벤트의 X 좌표(뷰포트 로컬 px). 다음 모션의 dx 계산용.</summary>
@@ -63,6 +65,8 @@ public partial class SpinDrag : Node
                     // 픽셀당 변화량: 정수 칸(Step ≥ 1)은 0.2, 실수 칸은 Step(너무 작으면 0.005). Shift는 1/10.
                     double step = _spin.Step;
                     double unit = step >= 1 ? 0.2 : Math.Max(step, 0.005);
+                    // 칸이 픽셀당 변화량을 직접 지정했으면 그 값(예: Properties의 Rotate = 0.5°/px; 증분이 아주 작은 칸이 너무 느리지 않도록)
+                    if (_spin.HasMeta(DragUnitMeta)) unit = _spin.GetMeta(DragUnitMeta).AsDouble();
                     if (mm.ShiftPressed) unit *= 0.1;
                     _accum += dx * unit;
                     double v = _accum;

@@ -717,7 +717,7 @@ public partial class Shell
             .Item("anim.playToggle").Item("anim.rest").Separator()
             .Item("anim.start").Item("anim.end").Item("anim.prevFrame").Item("anim.nextFrame").Item("anim.prevKey").Item("anim.nextKey").Separator()
             .Item("anim.loop").Item("anim.nextClip").Separator()
-            .Item("windows.animationData").Item("display.timeSlider");
+            .Item("windows.animationData");
 
         Menus.Build(Add("Render"))
             .Item("windows.renderSettings").Separator()
@@ -730,7 +730,7 @@ public partial class Shell
         Menus.Build(Add("Bridge"))
             .Item("bridge.blenderAll").Item("bridge.blenderSelected").Separator().Item("bridge.rizom").Item("bridge.marmoset").Item("bridge.cascadeur").Separator()
             .Submenu("Add-ons", m => m.Item("bridge.installBlenderAddon").Item("bridge.saveBlenderAddon").Separator().Item("bridge.openAddonsFolder"))
-            .Submenu("Tripo3D", m => m.Item("bridge.tripo").Separator().Item("bridge.tripoImport").Item("bridge.tripoFolder").Item("bridge.settings", "Tripo API Key (Bridge Settings)...")).Separator()
+            .Submenu("Tripo3D", m => m.Item("bridge.tripo").Separator().Item("bridge.tripoImport").Item("bridge.tripoFolder")).Separator()
             .Item("bridge.reload").Item("bridge.autoReload").Item("bridge.openFolder").Separator()
             .Item("bridge.settings");
 

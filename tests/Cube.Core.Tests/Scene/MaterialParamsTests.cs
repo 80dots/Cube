@@ -114,4 +114,14 @@ public class MaterialParamsTests
         Assert.Equal(Vector3.One, m.Color);
         Assert.Equal("C:/t/wood.png", m.TexturePath);
     }
+    /// <summary>새 Lambert 이름은 내장 기본 머티리얼 이름(lambert1)과 겹치지 않아야 한다(Maya처럼 lambert2부터).</summary>
+    [Fact]
+    public void UniqueMaterialName_Skips_DefaultLambert1()
+    {
+        var doc = new Document();
+        Assert.Equal("lambert2", doc.UniqueMaterialName("lambert"));
+        Assert.Equal("pbr1", doc.UniqueMaterialName("pbr"));
+        doc.Materials.Add(new MaterialDef { Name = "lambert2" });
+        Assert.Equal("lambert3", doc.UniqueMaterialName("lambert"));
+    }
 }
