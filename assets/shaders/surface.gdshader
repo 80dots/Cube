@@ -8,7 +8,11 @@ uniform bool use_texture = false;
 uniform bool use_vertex_color = false;
 
 void fragment() {
-	if (!FRONT_FACING) {
+	// 음수 스케일(행렬식 < 0) 인스턴스는 화면 감기 방향이 뒤집혀 Godot의 FRONT_FACING과 양면 노멀 뒤집기가 반대로 나온다.
+	// 거울 변환이면 앞/뒤 판정과 노멀을 되돌려 Maya처럼 정상 표시한다(전에는 Scale -1 오브젝트가 통째로 검게 보였다).
+	bool mirrored = determinant(mat3(MODEL_MATRIX)) < 0.0;
+	if (mirrored) NORMAL = -NORMAL;
+	if (FRONT_FACING == mirrored) {
 		ALBEDO = vec3(0.0);
 		ROUGHNESS = 1.0;
 		METALLIC = 0.0;
