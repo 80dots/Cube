@@ -130,7 +130,7 @@ public partial class Shell
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
-        Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
+        Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.Mode != SelectMode.Uv && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.combine", "Combine", CombineSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count(id => doc.Find(id)?.Mesh != null) >= 2);
         Actions.Register("mesh.separate", "Separate", SeparateSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count == 1);
         Actions.Register("mesh.soften", "Soften Edge", () => SetEdgesHard(false), canExecute: () => HasEdgeTargets(), repeatable: true);
@@ -420,6 +420,9 @@ public partial class Shell
             var cmd = new DeleteNodesCommand(Document, sel.Objects);
             if (!cmd.IsEmpty) Document.Undo.Push(cmd);
         }
+        // UV 모드의 Delete는 메시 컴포넌트가 아니라 선택 UV가 덮는 면의 UV를 지운다(Maya UV Editor Edit > Delete).
+        // 전에는 정점 삭제 명령이 UV 점 ID를 받아 아무것도 지우지 않은 채 선택만 비우는 빈 Undo 단계를 남겼다.
+        else if (sel.Mode == SelectMode.Uv) Actions.Invoke("uv.deleteUvs");
         else Actions.Invoke("mesh.deleteComponents");
     }
 

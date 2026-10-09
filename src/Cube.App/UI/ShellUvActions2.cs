@@ -167,7 +167,8 @@ public partial class Shell
         RegisterOptionPair("uv.merge", "Merge UVs", new OptionSpec("Merge UVs Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Distance threshold", 0, 1, 0.0001) }, "Merge"),
             () => { float t = Options("uv.merge").Float("threshold"); ForEachUvPoints("Merge UVs", (m, tp, p) => UvOps.MergeUvs(m, tp, p, t)); }, HasUvPoints);
         Actions.Register("uv.moveAndSew", "Move and Sew UV Edges", MoveAndSew, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
-        Actions.Register("uv.deleteUvs", "Delete UVs", () => Project("Delete UVs", (m, f) => UvOps.DeleteUvs(m, f)), canExecute: () => sel.Mode == SelectMode.Face && HasTargets(), repeatable: true);
+        // 면 모드 = 선택 면, UV 모드 = 선택 UV 점이 모두 덮는 면(TargetFaces 규칙)의 UV를 지운다
+        Actions.Register("uv.deleteUvs", "Delete UVs", () => Project("Delete UVs", (m, f) => UvOps.DeleteUvs(m, f)), canExecute: () => sel.Mode is SelectMode.Face or SelectMode.Uv && sel.NodesWithComponents(sel.Mode).Any() && HasTargets(), repeatable: true);
         Actions.Register("uv.cutSewTool", "3D Cut and Sew UV Tool", () => Tools.SetTool("cutSewUv"), isChecked: () => Tools.Current?.Id == "cutSewUv");
 
         // ---------------------------------------------------------------- Modify: align / distribute / rotate

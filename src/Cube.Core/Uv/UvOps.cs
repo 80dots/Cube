@@ -730,7 +730,10 @@ public static partial class UvOps
             }
             for (int i = 0; i < k; i++) x[i] = pos[free[i]];
             SolveLaplacian(diag, offList, rhs, x, 60);
-            for (int i = 0; i < k; i++) pos[free[i]] = x[i];
+            // 수렴: 이번 반복에서 점들이 거의 움직이지 않았으면(평균 이동 < 셸 크기의 1e-6) 남은 반복을 건너뛴다
+            double moved = 0;
+            for (int i = 0; i < k; i++) { moved += Vector2.DistanceSquared(pos[free[i]], x[i]); pos[free[i]] = x[i]; }
+            if (moved / k < 1e-12 * MathF.Max(uvArea, 1e-6f)) break;
         }
         // 핀이 없는 셸은 결과를 처음 UV에 가장 잘 맞게 강체 정렬(회전+이동)해 셸이 제자리·원래 방향을 유지하게 한다
         // (고정한 점 하나는 임의로 고른 것이라 ARAP 해가 그 점을 중심으로 돌아가 있을 수 있다)
