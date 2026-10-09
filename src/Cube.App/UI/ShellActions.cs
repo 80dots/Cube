@@ -181,7 +181,7 @@ public partial class Shell
         Actions.Register("display.grid", "Grid", () => { bool on = !Viewport.Display.ShowGrid; Settings.ShowGrid = on; foreach (var p in Layout.Panels) p.Display.ShowGrid = on; }, isChecked: () => Viewport.Display.ShowGrid);
         Actions.Register("display.background", "Background Color", () => { Viewport.CycleBackground(); });
         // Hide/Show(Maya Ctrl+H / Shift+H / Show All): 숨긴 노드는 자손과 함께 보이지 않고 피킹·프레임에서 빠진다(Undo 가능)
-        Actions.Register("display.hideSelection", "Hide Selection", () => SetVisibility(sel.Objects, false), canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Visible == true), repeatable: true);
+        Actions.Register("display.hideSelection", "Hide Selection", () => SetVisibility(sel.Objects, false), canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Visible == true), repeatable: true); // 오브젝트 모드만(컴포넌트 숨기기는 미지원)
         Actions.Register("display.showSelection", "Show Selection", () => SetVisibility(sel.Objects, true), canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Visible == false));
         Actions.Register("display.showAll", "Show All", () => SetVisibility(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id), true), canExecute: () => doc.Nodes.Values.Any(n => !n.IsRoot && !n.Visible));
         Actions.Register("display.polyCount", "Poly Count (HUD)", () => { Settings.ShowPolyCount = !Settings.ShowPolyCount; Settings.Save(); }, isChecked: () => Settings.ShowPolyCount);
