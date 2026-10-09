@@ -127,6 +127,7 @@ public partial class Shell
 
         // Extrude(옵션 쌍), 컴포넌트 삭제(Maya Delete Edge/Vertex), Combine/Separate, 하드/소프트 엣지, 면 뒤집기, Bridge, 엣지 루프/크리즈 툴
         // --- 메시 편집
+        RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
         Actions.Register("mesh.deleteComponents", "Delete Edge/Vertex", DeleteComponents, canExecute: () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.combine", "Combine", CombineSelection, canExecute: () => sel.Mode == SelectMode.Object && sel.Objects.Count(id => doc.Find(id)?.Mesh != null) >= 2);
@@ -678,7 +679,7 @@ public partial class Shell
         Menus.Build(Add("Mesh"))
             .Item("mesh.combine").Item("mesh.separate").Separator()
             .Item("mesh.conform").Item("mesh.fillHole").Op("mesh.smooth").Item("mesh.triangulate").Op("mesh.quadrangulate").Separator()
-            .Op("mesh.mirror").Item("mesh.symmetrizeMesh").Separator()
+            .Op("mesh.mirror").Item("mesh.symmetrizeMesh").Op("mesh.array").Separator()
             .Item("mesh.cleanup");
 
         Menus.Build(Add("Edit Mesh"))

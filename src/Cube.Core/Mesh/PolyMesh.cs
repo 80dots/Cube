@@ -305,6 +305,9 @@ public sealed class PolyMesh
         if ((uint)faceId >= (uint)Faces.Count || !Faces[faceId].Alive) return;
         // 면 루프의 하프에지를 먼저 모은다(순회 중 구조를 바꾸므로)
         var f = Faces[faceId];
+        // 엣지 맵을 먼저 유효하게 만든다: 아래에서 엣지가 하나도 죽지 않으면 맵을 건드리지 않은 채 '유효'로 표시하므로,
+        // 이전 버전의 오래된 맵이 유효로 둔갑하지 않게 한다(v0.0.55; 슬롯을 직접 이어 붙인 뒤 RemoveFace를 부르는 Array에서 드러남)
+        EnsureEdgeMap();
         int start = f.HalfEdge, he = start;
         var loopList = new List<int>();
         do { loopList.Add(he); he = Hes[he].Next; } while (he != start);
