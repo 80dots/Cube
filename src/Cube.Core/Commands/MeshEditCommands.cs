@@ -85,7 +85,8 @@ public sealed class MergeVerticesCommand : MeshEditCommand
     {
         MergedCount = MeshOps.MergeVertices(mesh, _verts, _threshold);
         if (MergedCount == 0) return false;
-        doc.Selection.ClearCurrentMode();
+        // 컴포넌트 선택(옛 ID)만 비운다 — 오브젝트 모드에서 부르면 오브젝트 선택까지 지워졌다(v0.0.57)
+        if (doc.Selection.IsComponentMode) doc.Selection.ClearCurrentMode();
         return true;
     }
 
@@ -176,7 +177,9 @@ public sealed class CombineCommand : ICommand
             }
             MeshNormals.Recompute(mesh);
             // 결과는 단위 트랜스폼(원점)의 새 노드. 삭제 명령은 이 시점의 문서 상태로 만든다.
-            _combined = new SceneNode { Name = doc.UniqueName(name + "1"), Shape = new MeshShape(mesh) };
+            // 머티리얼은 오브젝트 단위이므로 첫 원본의 머티리얼을 이어받는다(전에는 lambert1로 초기화됐다, v0.0.57)
+            var firstMat = _sources.Select(doc.Find).FirstOrDefault(n => n?.Mesh != null)?.MaterialId ?? default;
+            _combined = new SceneNode { Name = doc.UniqueName(name + "1"), Shape = new MeshShape(mesh), MaterialId = firstMat };
             _delete = new DeleteNodesCommand(doc, _sources);
         }
         _delete!.Do(doc);
@@ -225,7 +228,8 @@ public sealed class SeparateCommand : ICommand
             // 요소의 면만 뽑아 독립 메시로 만들고 원본 로컬 트랜스폼을 그대로 복사한다.
             var mesh = MeshOps.ExtractFaces(n.Mesh, comps[i]);
             MeshNormals.Recompute(mesh);
-            _parts.Add(new SceneNode { Name = doc.UniqueName("polySurface1"), Local = n.Local, Shape = new MeshShape(mesh) });
+            // 머티리얼·표시 여부도 이어받는다(전에는 조각이 lambert1로 바뀌었다, v0.0.57)
+            _parts.Add(new SceneNode { Name = doc.UniqueName("polySurface1"), Local = n.Local, Shape = new MeshShape(mesh), MaterialId = n.MaterialId, Visible = n.Visible });
             // UniqueName은 문서에 추가되기 전이라 중복될 수 있어 번호를 덧붙인다
             _parts[^1].Name = $"polySurface{NextIndex(doc) + i}";
         }

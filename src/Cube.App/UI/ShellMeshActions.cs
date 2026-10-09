@@ -157,9 +157,9 @@ public partial class Shell
         // Quadrangulate = 각도 임계값 이하인 삼각형 쌍을 쿼드로 병합, Mirror/Symmetrize = 축 평면 기준 반사(+자르기),
         // Fill Hole = 선택 경계 구멍 메우기, Triangulate = 이어 깎기(EarClipping), Cleanup = 퇴화 면 제거, Conform = 마지막 선택 표면에 감싸기
         RegisterOptionPair("mesh.smooth", "Smooth", new OptionSpec("Smooth Options", v => v.Set("levels", 1), new[] { OptionField.I("levels", "Division levels", 1, 4) }, "Smooth"), SmoothSelection,
-            () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null));
+            () => sel.Mode == SelectMode.Object ? sel.Objects.Any(id => doc.Find(id)?.Mesh != null) : HasComponents(SelectMode.Vertex, SelectMode.Edge, SelectMode.Face));
         RegisterOptionPair("mesh.merge", "Merge Vertices", new OptionSpec("Merge Vertices Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Threshold", 0, 1000, 0.0001) }, "Merge"), MergeSelectedVertices,
-            () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any());
+            () => sel.IsComponentMode ? sel.NodesWithComponents(sel.Mode).Any() : HasMeshSelection());
         RegisterBevelActions(); // Blender식 Bevel 옵션 전체 + 대화형 툴(ShellBevel.cs)
         RegisterOptionPair("mesh.quadrangulate", "Quadrangulate", new OptionSpec("Quadrangulate Options", v => v.Set("angle", 30f), new[] { OptionField.F("angle", "Angle threshold (deg)", 0, 180, 1) }), () =>
         {
@@ -287,10 +287,19 @@ public partial class Shell
 
     /// <summary>
     /// Mesh → Smooth: 선택 메시 오브젝트마다 Catmull-Clark를 levels만큼 적용한다(히스토리 파라미터 Levels로 나중에 바꿀 수 있음).
+    /// 컴포넌트 모드면 선택을 면으로 바꿔 그 면들만 부드럽게 한다.
     /// </summary>
     private void SmoothSelection()
     {
         int levels = Options("mesh.smooth").Int("levels");
+        if (Document.Selection.IsComponentMode)
+        {
+            // 컴포넌트 모드(Maya와 같음): 선택을 면으로 바꿔 그 면들만 부드럽게(MeshOps.SmoothFaces; v0.0.57 전에는 오브젝트 모드에서만 실행됐다)
+            ForEachMeshTarget("Smooth", SelectMode.Face, (id, ids) => ParamOp("Smooth", id, HistoryParam.I("Levels", levels, 0, 4),
+                (m, p) => { var nf = MeshOps.SmoothFaces(m, ids, p.Int("Levels")); return (nf.Count > 0 && p.Int("Levels") > 0, SelectMode.Face, nf); }));
+            HelpLine.Text = $"Smooth (selected faces): {levels} level(s).";
+            return;
+        }
         var targets = Document.Selection.Objects.Where(id => Document.Find(id)?.Mesh != null).ToArray();
         using (Document.Undo.BeginGroup("Smooth"))
             foreach (var id in targets)
@@ -299,7 +308,7 @@ public partial class Shell
     }
 
     /// <summary>
-    /// Merge Vertices: 현재 모드 선택을 정점으로 변환해 임계값(threshold) 안의 정점을 병합한다(노드별 MergeVerticesCommand).
+    /// Merge Vertices: 현재 모드 선택을 정점으로 변환해(오브젝트 모드 = 선택 메시의 모든 정점) 임계값(threshold) 안의 정점을 병합한다(노드별 MergeVerticesCommand).
     /// 실행 후 마지막 Undo 명령(그룹이면 그 안의 Merge 명령들)의 MergedCount를 합해 병합 쌍 수를 알린다.
     /// </summary>
     private void MergeSelectedVertices()
@@ -307,6 +316,17 @@ public partial class Shell
         float threshold = Options("mesh.merge").Float("threshold");
         var sel = Document.Selection; var mode = sel.Mode;
         int total = 0;
+        if (mode == SelectMode.Object)
+        {
+            // 오브젝트 모드(Maya와 같음): 선택 메시 오브젝트의 모든 정점을 임계값으로 병합(Combine/Mirror 뒤 이음매 정리 등, v0.0.57)
+            using (Document.Undo.BeginGroup("Merge Vertices"))
+                foreach (var id in sel.Objects.ToArray())
+                {
+                    var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
+                    Document.Undo.Push(new MergeVerticesCommand(id, Enumerable.Range(0, mesh.VertexCount).Where(v => mesh.Verts[v].Alive).ToHashSet(), threshold));
+                }
+        }
+        else
         ForEachComponentNode("Merge Vertices", mode, (id, comps) =>
         {
             var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;
@@ -351,15 +371,21 @@ public partial class Shell
         ForEachMeshTarget("Circularize", SelectMode.Vertex, (id, ids) =>
         {
             var mesh = Document.Find(id)!.Mesh!;
+            int[] inner = Array.Empty<int>();
             if (sel.Mode == SelectMode.Face)
             {
                 var border = SelectionOps.BoundaryEdgesOfFaces(mesh, sel.GetComponents(id).Faces);
                 var bv = new HashSet<int>(); foreach (int e in border) { var (a, b) = mesh.EdgeVertices(e); bv.Add(a); bv.Add(b); }
-                if (bv.Count >= 3) ids = bv;
+                if (bv.Count >= 3)
+                {
+                    // 영역 안쪽 정점: 둘레를 원으로 옮긴 뒤 이완해 따라오게 한다(전에는 제자리라 안쪽 면이 찌그러졌다, v0.0.57)
+                    inner = ids.Where(v => !bv.Contains(v)).ToArray();
+                    ids = bv;
+                }
             }
             var verts = ids.ToArray();
             return ParamOp("Circularize", id, HistoryParam.F("Radial Offset", o.Float("radial"), -0.9f, 10f, 0.01f),
-                (m, p) => { MeshOps.Circularize(m, verts, p.Float("Radial Offset"), evenly); return (true, null, null); });
+                (m, p) => { MeshOps.Circularize(m, verts, p.Float("Radial Offset"), evenly); if (inner.Length > 0) MeshOps.AverageVertices(m, inner, 20, 1f); return (true, null, null); });
         });
     }
 
@@ -438,7 +464,7 @@ public partial class Shell
     /// <summary>Mirror 옵션 필드: 축, 남길 쪽(+/-), 평면 위치(바운딩 박스 중심/오브젝트 원점/월드 원점), 병합 여부·임계값, 자르기(Symmetrize).</summary>
     private static readonly OptionField[] MirrorFields =
     {
-        OptionField.E("axis", "Mirror axis", "X", "Y", "Z"), OptionField.E("direction", "Direction", "+ (keep positive side)", "- (keep negative side)"),
+        OptionField.E("axis", "Mirror axis", "X", "Y", "Z"), OptionField.E("direction", "Direction", "+ (mirror to / keep the positive side)", "- (mirror to / keep the negative side)"),
         OptionField.E("position", "Mirror axis position", "Bounding Box", "Object", "World"), OptionField.B("merge", "Merge vertices"), OptionField.F("threshold", "Merge threshold", 0, 10, 0.0001), OptionField.B("cut", "Cut geometry (symmetrize)"),
     };
     /// <summary>Mirror 옵션 기본값: X축, + 쪽 유지, 바운딩 박스, 병합 켬(0.001), 자르기 끔.</summary>
@@ -446,7 +472,7 @@ public partial class Shell
 
     /// <summary>
     /// Mirror / Symmetrize(cut = true): 선택 메시마다 오브젝트 공간의 반사 평면 좌표를 정하고 MeshOps.MirrorGeometry를 적용한다.
-    /// 평면 위치: 0 = 메시 AABB 중심, 1 = 오브젝트 원점(0), 2 = 월드 원점을 오브젝트 공간으로 옮긴 좌표.
+    /// 평면 위치: 0 = 메시 AABB(Symmetrize = 중심, Mirror = 방향 쪽 면), 1 = 오브젝트 원점(0), 2 = 월드 축 평면(월드 원점을 지남; 회전된 오브젝트면 오브젝트 공간에서 기울어진 평면).
     /// Plane/Merge Threshold는 이력 파라미터라 나중에 조정할 수 있다.
     /// </summary>
     private void MirrorSelection(bool cut)
@@ -461,20 +487,29 @@ public partial class Shell
             {
                 var node = doc.Find(id); var mesh = node?.Mesh; if (node == null || mesh == null) continue;
                 float plane = 0f;
+                // 반사 평면 법선(오브젝트 공간): 바운딩 박스/오브젝트 = 오브젝트 축, 월드 = 월드 축을 오브젝트 공간으로 옮긴 방향
+                var normal = new NVec3(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0);
                 if (position == 0)
                 {
                     float mn = float.MaxValue, mx = float.MinValue;
                     foreach (var v in mesh.Verts) if (v.Alive) { float c = axis == 0 ? v.Position.X : axis == 1 ? v.Position.Y : v.Position.Z; mn = MathF.Min(mn, c); mx = MathF.Max(mx, c); }
-                    plane = (mn + mx) * 0.5f;
+                    // Symmetrize(자르기)는 바운딩 박스 중심, Mirror는 방향 쪽 바운딩 박스 면(Maya: +면 최대, −면 최소)
+                    // (v0.0.57; 전에는 Mirror도 중심이라 대칭인 메시의 반사본이 원본과 그대로 겹쳤다)
+                    plane = cut ? (mn + mx) * 0.5f : keepPositive ? mx : mn;
                 }
                 else if (position == 2)
                 {
-                    System.Numerics.Matrix4x4.Invert(node.WorldMatrix, out var inv);
-                    var origin = NVec3.Transform(NVec3.Zero, inv);
-                    plane = axis == 0 ? origin.X : axis == 1 ? origin.Y : origin.Z;
+                    // 월드 축 평면 N·p_w = 0을 오브젝트 공간 평면 n·p = d로: n = W₃·N, d = −N·t (회전된 오브젝트도 월드 축으로 미러, v0.0.57;
+                    // 전에는 오브젝트 축 평면을 월드 원점으로 옮기기만 해서 회전된 오브젝트가 엉뚱한 평면으로 미러됐다)
+                    var w = node.WorldMatrix;
+                    var nw = normal;
+                    var no = NVec3.TransformNormal(nw, System.Numerics.Matrix4x4.Transpose(w));
+                    float len = no.Length();
+                    if (len > 1e-12f) { normal = no / len; plane = -NVec3.Dot(nw, w.Translation) / len; }
                 }
+                var n0 = normal;
                 doc.Undo.Push(new MeshOpCommand(cut ? "Symmetrize" : "Mirror", id, new HistoryParams(HistoryParam.F("Plane", plane), HistoryParam.F("Merge Threshold", threshold, 0f, 10f, 0.0001f)),
-                    (m, p) => { var nf = MeshOps.MirrorGeometry(m, axis, p.Float("Plane"), keepPositive, cut, p.Float("Merge Threshold")); return (nf.Count > 0, null, null); }));
+                    (m, p) => { var nf = MeshOps.MirrorAcrossPlane(m, n0, p.Float("Plane"), keepPositive, cut, p.Float("Merge Threshold")); return (nf.Count > 0, null, null); }));
             }
     }
 

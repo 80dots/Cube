@@ -91,17 +91,57 @@ public static partial class MeshOps
             EarClipping.Triangulate(poly, idx);
             plans.Add((corners, idx, material));
         }
+        // 캡처한 모든 면의 변(무향 정점 쌍): 다른 면의 대각선이 이 변을 먼저 차지하면 그 면을 다시 만들 수 없으므로 대각선으로 쓰지 않는다
+        var sides = new HashSet<long>(PairKeyComparer.Instance);
+        foreach (var (corners, _, _) in plans) for (int i = 0; i < corners.Count; i++) sides.Add(PairKey(corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
         rb.RemoveCaptured();
         foreach (var (corners, idx, material) in plans)
         {
-            for (int i = 0; i + 2 < idx.Count; i += 3)
+            // 귀 자르기 결과 → 실패하면 각 꼭짓점에서의 팬 → 모두 실패하면 원래 다각형을 되살린다.
+            // (대각선이 이미 다른 곳의 엣지면(두 면이 엣지 둘 이상을 공유하는 등) 그 삼각형이 엉뚱한 면과 이어지거나 거부되어 구멍이 났다, v0.0.57)
+            int n = corners.Count;
+            bool done = TryAddTriangles(m, rb, corners, idx, material, result, sides);
+            for (int k = 0; !done && k < n; k++)
             {
-                int nf = rb.AddFace(new[] { corners[idx[i]], corners[idx[i + 1]], corners[idx[i + 2]] }, material);
-                if (nf >= 0) result.Add(nf);
+                var fan = new List<int>();
+                for (int i = 1; i + 1 < n; i++) { fan.Add(k); fan.Add((k + i) % n); fan.Add((k + i + 1) % n); }
+                done = TryAddTriangles(m, rb, corners, fan, material, result, sides);
             }
+            if (!done) rb.AddFace(corners, material);
         }
         m.BumpTopology();
         return result;
+    }
+
+    /// <summary>무향 정점 쌍 키(작은 ID 상위 32비트).</summary>
+    private static long PairKey(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+
+    /// <summary>
+    /// 삼각형 인덱스 목록(코너 로컬 번호 3개씩)을 면으로 추가한다. 다각형 변이 아닌 대각선이 이미 메시에 엣지로 있으면 시도하지 않고,
+    /// 추가 도중 하나라도 거부되면 이번에 넣은 삼각형을 모두 지우고 false를 돌려준다(정점은 남긴다).
+    /// </summary>
+    /// <param name="sides">다시 만들 면들의 변(대각선으로 쓰면 안 되는 정점 쌍).</param>
+    private static bool TryAddTriangles(PolyMesh m, FaceRebuilder rb, List<Corner> corners, List<int> idx, int material, List<int> result, HashSet<long> sides)
+    {
+        int n = corners.Count;
+        if (idx.Count != (n - 2) * 3) return false;
+        // 대각선(이웃하지 않은 코너 쌍)이 이미 있는 엣지면 이 분할은 쓸 수 없다
+        for (int i = 0; i + 2 < idx.Count; i += 3)
+            for (int k = 0; k < 3; k++)
+            {
+                int x = idx[i + k], y = idx[i + (k + 1) % 3];
+                bool side = (x + 1) % n == y || (y + 1) % n == x;
+                if (!side && (m.FindEdge(corners[x].Vertex, corners[y].Vertex) >= 0 || sides.Contains(PairKey(corners[x].Vertex, corners[y].Vertex)))) return false;
+            }
+        var added = new List<int>();
+        for (int i = 0; i + 2 < idx.Count; i += 3)
+        {
+            int nf = rb.AddFace(new[] { corners[idx[i]], corners[idx[i + 1]], corners[idx[i + 2]] }, material);
+            if (nf < 0) { foreach (int f in added) m.RemoveFace(f, removeIsolated: false); return false; }
+            added.Add(nf);
+        }
+        result.AddRange(added);
+        return true;
     }
 
     /// <summary>Quadrangulate: 공유 엣지로 맞닿은 삼각형 쌍을 각도 임계 안에서 쿼드로 합친다. 반환값은 새 쿼드들.</summary>
@@ -135,7 +175,9 @@ public static partial class MeshOps
         {
             if (e >= m.EdgeCount || !m.Edges[e].Alive) continue;
             var (f0, f1) = m.EdgeFaces(e);
-            if (f1 < 0 || used.Contains(f0) || used.Contains(f1)) continue;
+            // 양쪽 모두 원래 선택 삼각형이어야 한다: 방금 합친 쿼드(새 ID라 used에 없음)가 다시 이웃 삼각형과 합쳐져
+            // 오각형·큰 n각형으로 불어나던 문제(v0.0.57: 토러스 480 삼각형 → 35면)
+            if (f1 < 0 || used.Contains(f0) || used.Contains(f1) || !set.Contains(f0) || !set.Contains(f1)) continue;
             var (ok, nf) = MergeFacesAcrossEdgeReturning(m, e);
             if (!ok) continue;
             used.Add(f0); used.Add(f1); result.Add(nf);
@@ -157,36 +199,124 @@ public static partial class MeshOps
     /// <param name="mergeThreshold">0보다 크면 평면에서 이 거리 안의 정점을 2배 임계로 병합해 이음매를 닫는다.</param>
     public static List<int> MirrorGeometry(PolyMesh m, int axis, float planeOffset, bool keepPositive, bool cut, float mergeThreshold)
     {
+        var n = Vector3.Zero; SetAxis(ref n, axis, 1f);
+        return MirrorAcrossPlane(m, n, planeOffset, keepPositive, cut, mergeThreshold);
+    }
+
+    /// <summary>
+    /// <see cref="MirrorGeometry"/>의 일반 평면판: 평면 {p | n·p = d}(오브젝트 공간, n은 정규화해서 쓴다)에 대해 반사해 덧붙인다.
+    /// 회전된 오브젝트를 월드 축 평면으로 미러할 때 쓴다(그 평면은 오브젝트 공간에서 축에 정렬되지 않는다, v0.0.57).
+    /// keepPositive = n 쪽(n·p &gt; d)을 남김/그쪽으로 복사.
+    /// </summary>
+    public static List<int> MirrorAcrossPlane(PolyMesh m, Vector3 normal, float d, bool keepPositive, bool cut, float mergeThreshold)
+    {
+        if (normal.LengthSquared() < 1e-20f) return new List<int>();
+        float len = normal.Length(); var nrm = normal / len; float dd = d / len;
+        // 평면 판정 허용 오차: 메시 크기에 비례(최소 1e-6)
+        var (bmin, bmax) = Bounds(m);
+        float eps = MathF.Max(1e-5f * (bmax - bmin).Length(), 1e-6f);
+        float D(Vector3 p) => Vector3.Dot(nrm, p) - dd;
         if (cut)
         {
+            // Maya Symmetrize: 평면을 가로지르는 면을 평면에서 잘라(v0.0.57; 전에는 면 중심으로만 골라 걸친 면이 통째로 남아 반사본과 겹쳤다)
+            // 버릴 쪽 면을 지운다. 남는 면이 없으면(평면이 메시 바깥) 아무것도 바꾸지 않는다.
+            var work = m.Clone();
+            SplitAlongPlane(work, nrm, dd, eps);
             var remove = new List<int>();
+            for (int f = 0; f < work.FaceCount; f++)
+            {
+                if (!work.Faces[f].Alive) continue;
+                float c = D(work.FaceCentroid(f));
+                if (keepPositive ? c < -eps : c > eps) remove.Add(f);
+            }
+            foreach (int f in remove) work.RemoveFace(f);
+            // 남길 쪽에 평면 위가 아닌 면이 하나도 없으면(평면이 메시 바깥이거나 경계에 닿기만 함) 그대로 둔다
+            var loopTmp = new List<int>();
+            bool anyOff = false;
+            for (int f = 0; f < work.FaceCount && !anyOff; f++)
+            {
+                if (!work.Faces[f].Alive) continue;
+                work.GetFaceVertices(f, loopTmp);
+                anyOff = loopTmp.Any(v => MathF.Abs(D(work.Verts[v].Position)) > eps);
+            }
+            if (!anyOff) return new List<int>();
+            m.CopyFrom(work);
+        }
+        // 평면 위에 놓인 면(모든 정점이 평면 위)은 반사본과 정확히 겹쳐 안쪽 이중 면이 되므로 병합할 때는 지운다
+        // (닫힌 메시를 그 면에서 미러하면 붙은 면이 남아 병합 뒤 비매니폴드로 구멍이 났다)
+        if (mergeThreshold > 0f || cut)
+        {
+            var onPlane = new List<int>(); var tmp = new List<int>();
             for (int f = 0; f < m.FaceCount; f++)
             {
                 if (!m.Faces[f].Alive) continue;
-                float c = GetAxis(m.FaceCentroid(f), axis) - planeOffset;
-                if (keepPositive ? c < -1e-6f : c > 1e-6f) remove.Add(f);
+                m.GetFaceVertices(f, tmp);
+                if (tmp.All(v => MathF.Abs(D(m.Verts[v].Position)) <= MathF.Max(eps, mergeThreshold))) onPlane.Add(f);
             }
-            foreach (int f in remove) m.RemoveFace(f);
+            if (onPlane.Count > 0 && onPlane.Count < m.AliveFaceCount) foreach (int f in onPlane) m.RemoveFace(f);
         }
-        // 현재 메시를 복제해 반사 행렬 T(−o)·S(축 −1)·T(o)로 덧붙인다(Append가 음의 행렬식이면 면 방향을 뒤집어 준다)
+        // 현재 메시를 복제해 반사 행렬(I − 2nnᵀ, 이동 2dn)로 덧붙인다(Append가 음의 행렬식이면 면 방향을 뒤집어 준다)
         var src = m.Clone();
-        var scale = Vector3.One; SetAxis(ref scale, axis, -1f);
-        var offset = Vector3.Zero; SetAxis(ref offset, axis, planeOffset);
-        var reflect = Matrix4x4.CreateTranslation(-offset) * Matrix4x4.CreateScale(scale) * Matrix4x4.CreateTranslation(offset);
+        var reflect = new Matrix4x4(
+            1 - 2 * nrm.X * nrm.X, -2 * nrm.X * nrm.Y, -2 * nrm.X * nrm.Z, 0,
+            -2 * nrm.Y * nrm.X, 1 - 2 * nrm.Y * nrm.Y, -2 * nrm.Y * nrm.Z, 0,
+            -2 * nrm.Z * nrm.X, -2 * nrm.Z * nrm.Y, 1 - 2 * nrm.Z * nrm.Z, 0,
+            2 * dd * nrm.X, 2 * dd * nrm.Y, 2 * dd * nrm.Z, 1);
         // 덧붙인 면은 기존 면 수 이후 슬롯에 생긴다(ID 재사용 없음)
         int before = m.FaceCount;
         Append(m, src, reflect);
         var result = new List<int>();
         for (int f = before; f < m.FaceCount; f++) if (m.Faces[f].Alive) result.Add(f);
-        if (mergeThreshold > 0f)
+        float mergeDist = cut ? MathF.Max(mergeThreshold, eps) : mergeThreshold;
+        if (mergeDist > 0f)
         {
             var near = new List<int>();
-            for (int v = 0; v < m.VertexCount; v++) if (m.Verts[v].Alive && MathF.Abs(GetAxis(m.Verts[v].Position, axis) - planeOffset) <= mergeThreshold) near.Add(v);
-            MergeVertices(m, near, mergeThreshold * 2f);
-            result = result.Where(f => f < m.FaceCount && m.Faces[f].Alive).ToList();
+            for (int v = 0; v < m.VertexCount; v++) if (m.Verts[v].Alive && MathF.Abs(D(m.Verts[v].Position)) <= mergeDist) near.Add(v);
+            MergeVertices(m, near, mergeDist * 2f);
+            // 병합된 이음매 정점은 정확히 평면 위로
+            foreach (int v in near) if (m.Verts[v].Alive) { var vt = m.Verts[v]; vt.Position -= nrm * D(vt.Position); m.Verts[v] = vt; }
+            // 병합이 이음매 면을 다시 만들어 새 슬롯으로 옮기므로, 덧붙인 뒤 생긴 모든 살아 있는 면을 결과로 본다
+            // (전에는 덧붙인 면이 모두 재생성되면 빈 목록 → 호출자가 '변경 없음'으로 보고 결과를 버렸다, v0.0.57)
+            result = Enumerable.Range(before, m.FaceCount - before).Where(f => m.Faces[f].Alive).ToList();
         }
         m.BumpTopology();
         return result;
+    }
+
+    /// <summary>
+    /// 평면(n·p = d, n 단위)에서 메시를 자른다(Symmetrize 전처리). 평면에서 eps 안의 정점은 평면 위로 붙이고,
+    /// 평면을 가로지르는 엣지는 교점에서 나누며, 양쪽에 정점이 있는 면은 평면 위 정점 쌍(루프 순서로 둘씩)을 이어 나눈다.
+    /// 기존 정점을 지나는 평면(구의 경선 등)도 면이 갈라진다는 점이 <see cref="SliceWithPlane"/>과 다르다.
+    /// </summary>
+    private static void SplitAlongPlane(PolyMesh m, Vector3 n, float d, float eps)
+    {
+        float D(int v) => Vector3.Dot(n, m.Verts[v].Position) - d;
+        void Snap(int v) { var vt = m.Verts[v]; vt.Position -= n * (Vector3.Dot(n, vt.Position) - d); m.Verts[v] = vt; }
+        for (int v = 0; v < m.VertexCount; v++)
+            if (m.Verts[v].Alive && MathF.Abs(D(v)) <= eps) Snap(v);
+        int edgeCount = m.EdgeCount;
+        for (int e = 0; e < edgeCount; e++)
+        {
+            if (!m.Edges[e].Alive) continue;
+            var (a, b) = m.EdgeVertices(e);
+            float da = D(a), db = D(b);
+            if (!(da > eps && db < -eps || da < -eps && db > eps)) continue;
+            int nv = SplitEdge(m, e, da / (da - db));
+            if (nv >= 0) Snap(nv);
+        }
+        int faceCount = m.FaceCount;
+        var loop = new List<int>();
+        for (int f = 0; f < faceCount; f++)
+        {
+            if (!m.Faces[f].Alive) continue;
+            m.GetFaceVertices(f, loop);
+            bool pos = false, neg = false;
+            foreach (int v in loop) { float dv = D(v); if (dv > eps) pos = true; else if (dv < -eps) neg = true; }
+            if (!pos || !neg) continue;
+            var on = loop.Where(v => MathF.Abs(D(v)) <= eps).ToList();
+            for (int i = 0; i + 1 < on.Count; i += 2) SplitFaceBetween(m, on[i], on[i + 1]);
+        }
+        m.BumpTopology();
     }
 
     // ------------------------------------------------------------ Cleanup
@@ -209,7 +339,7 @@ public static partial class MeshOps
             keys[key] = f;
         }
         // 면 삭제 후 남은 고립 정점 정리
-        for (int v = 0; v < m.VertexCount; v++) if (m.Verts[v].Alive) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, Enumerable.Range(0, m.VertexCount));
         m.BumpTopology();
         return removed;
     }

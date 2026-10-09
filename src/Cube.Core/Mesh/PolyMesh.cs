@@ -350,6 +350,16 @@ public sealed class PolyMesh
         int start = f.HalfEdge, he = start;
         var loopList = new List<int>();
         do { loopList.Add(he); he = Hes[he].Next; } while (he != start);
+        // 대표 하프에지 교체 후보(트윈을 끊기 전에): 같은 정점에서 나가는 이웃 면의 하프에지 = 이전 하프에지의 트윈, 또는 트윈의 다음.
+        // 전에는 매번 전체 하프에지를 선형 탐색(FindOutgoing)해 엣지 분할을 반복하는 연산(Add Divisions 엣지 32단계 등)이 O(n²)로 수 분 멈췄다(v0.0.57).
+        var candidates = new (int c1, int c2)[loopList.Count];
+        for (int i = 0; i < loopList.Count; i++)
+        {
+            var hh0 = Hes[loopList[i]];
+            int c1 = Hes[hh0.Prev].Twin;
+            int c2 = hh0.Twin >= 0 ? Hes[hh0.Twin].Next : -1;
+            candidates[i] = (c1, c2);
+        }
 
         // 하프에지마다: 엣지에서 떼고(He0이 빠지면 He1을 당김), 트윈의 Twin을 끊고, 엣지에 남은 하프에지가 없으면 엣지도 죽이고 엣지 맵에서 제거
         foreach (int h in loopList)
@@ -380,14 +390,20 @@ public sealed class PolyMesh
         _edgeMapVersion = TopologyVersion;
 
         // 정점의 대표 하프에지 보정 및 고립 정점 삭제
-        foreach (int h in loopList)
+        for (int i = 0; i < loopList.Count; i++)
         {
+            int h = loopList[i];
             int v = Hes[h].Vertex;
             var vert = Verts[v];
             // 대표 하프에지가 방금 죽은 하프에지면 살아 있는 다른 출발 하프에지로 교체, 없으면 고립 정점
-            if (vert.HalfEdge == h || !Hes[vert.HalfEdge].Alive)
+            if (vert.HalfEdge == h || vert.HalfEdge < 0 || !Hes[vert.HalfEdge].Alive)
             {
-                vert.HalfEdge = FindOutgoing(v);
+                var (c1, c2) = candidates[i];
+                if (c1 >= 0 && Hes[c1].Alive && Hes[c1].Vertex == v) vert.HalfEdge = c1;
+                else if (c2 >= 0 && Hes[c2].Alive && Hes[c2].Vertex == v) vert.HalfEdge = c2;
+                // 후보가 없으면 거의 항상 고립(면을 모두 지웠다 다시 만드는 패턴) 또는 꼬집힌 정점이다. 고립 정점을 지우지 않는 호출은
+                // 선형 탐색 없이 -1(미정)로 둔다 — 대표가 -1이어도 AddFace가 다시 정하고 RemoveVertexIfIsolated는 탐색으로 확인한다.
+                else vert.HalfEdge = removeIsolated ? FindOutgoing(v) : -1;
                 if (vert.HalfEdge == -1 && removeIsolated) vert.Alive = false;
                 Verts[v] = vert;
             }
@@ -399,6 +415,8 @@ public sealed class PolyMesh
     {
         var vert = Verts[v];
         if (!vert.Alive) return;
+        // 대표 하프에지가 살아 있고 이 정점에서 나가면 고립이 아니다(선형 탐색 생략)
+        if (vert.HalfEdge >= 0 && vert.HalfEdge < Hes.Count && Hes[vert.HalfEdge].Alive && Hes[vert.HalfEdge].Vertex == v) return;
         if (FindOutgoing(v) == -1) { vert.Alive = false; vert.HalfEdge = -1; Verts[v] = vert; TopologyVersion++; }
     }
 

@@ -199,7 +199,7 @@ public static partial class MeshOps
             int nf = rb.AddFace(corners.Select(c => dup.TryGetValue(c.Vertex, out int d) ? c with { Vertex = d } : c).ToList(), material);
             if (nf >= 0) result.Add(nf);
         }
-        foreach (int v in boundaryVerts) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, boundaryVerts);
         m.BumpTopology();
         return result;
     }
@@ -302,7 +302,7 @@ public static partial class MeshOps
                 if (cf >= 0) result.Add(cf);
             }
         }
-        foreach (int v in verts) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, verts);
         m.BumpTopology();
         return result;
     }
@@ -434,9 +434,9 @@ public static partial class MeshOps
         rb.Capture(f0); rb.Capture(f1);
         var loop = new List<Corner>();
         int cur = m.Hes[he0].Next;
-        while (cur != he0) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
+        while (cur != he0) { var h = m.Hes[cur]; loop.Add(Corner.Of(h, cur)); cur = h.Next; }
         cur = m.Hes[he1].Next;
-        while (cur != he1) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
+        while (cur != he1) { var h = m.Hes[cur]; loop.Add(Corner.Of(h, cur)); cur = h.Next; }
         int material = m.Faces[f0].Material;
         // 두 면이 엣지를 둘 이상 공유하거나 정점에서 맞닿으면 합친 루프에 같은 정점이 반복된다 → 합치지 않는다
         // (지운 뒤 새 면 추가가 실패하면 두 면이 사라져 구멍이 났다: 반복 라운드 Bevel의 D자 캡 병합)
@@ -446,7 +446,7 @@ public static partial class MeshOps
         {
             var list = new List<Corner>();
             int start = m.Faces[f].HalfEdge, c = start;
-            do { var h = m.Hes[c]; list.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); c = h.Next; } while (c != start);
+            do { var h = m.Hes[c]; list.Add(Corner.Of(h, c)); c = h.Next; } while (c != start);
             return list;
         }
         var old0 = Corners(f0); var old1 = Corners(f1); int mat1 = m.Faces[f1].Material;
@@ -492,6 +492,8 @@ public static partial class MeshOps
             int q = AddFaceWithCorners(m, new[] { new Corner(b, uvB, h.Normal), new Corner(a, uvA, h.Normal), new Corner(a2, uvA, h.Normal), new Corner(b2, uvB, h.Normal) }, m.Faces[h.Face].Material);
             if (q >= 0) { result.Add(q); SetFlags(m, a2, b2, flags); int ne = m.FindEdge(a2, b2); if (ne >= 0) newEdges.Add(ne); }
         }
+        // 비매니폴드라 쿼드를 못 붙인 엣지의 복제 정점은 고립으로 남으므로 지운다
+        RemoveIsolatedVertices(m, dup.Values);
         m.BumpTopology();
         return result;
     }
@@ -561,7 +563,7 @@ public static partial class MeshOps
 
     /// <summary>
     /// Circularize: 선택 정점(또는 면 영역의 둘레 정점)을 평균 평면 위의 원에 배치한다. radialOffset은 반지름 배율 보정(0 = 평균 거리), evenly면 각도를 균등 분배.
-    /// 면 영역이면 안쪽 정점은 둘레의 평균 이동만큼 따라간다.
+    /// 주어진 정점만 옮긴다(면 영역의 안쪽 정점 이완은 호출자가 AverageVertices로 한다).
     /// </summary>
     public static void Circularize(PolyMesh m, IEnumerable<int> vertIds, float radialOffset, bool evenly)
     /// <param name="radialOffset">반지름 보정 비율(radius = 평균 거리 × (1 + radialOffset)).</param>

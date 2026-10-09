@@ -273,7 +273,7 @@ public static partial class MeshOps
                 int nf = AddFaceWithCorners(m, mapped, material);
                 if (nf < 0) continue;
                 caps.Add(nf);
-                for (int i = 0; i < mapped.Count; i++) SetHard(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
+                for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
             }
             return caps;
         }
@@ -294,7 +294,7 @@ public static partial class MeshOps
         foreach (var (corners, material, hard) in captured)
         {
             // 바닥(뒤집음)
-            var rev = corners.AsEnumerable().Reverse().ToList();
+            var rev = corners.AsEnumerable().Reverse().Select(c => c.Flipped()).ToList();
             AddFaceWithCorners(m, rev, material);
             // 캡(원래 방향, 복제 정점)
             var mapped = corners.Select(c => c with { Vertex = D(c.Vertex) }).ToList();
@@ -302,9 +302,9 @@ public static partial class MeshOps
             if (nf >= 0)
             {
                 result.Add(nf);
-                for (int i = 0; i < mapped.Count; i++) SetHard(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
+                for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
             }
-            for (int i = 0; i < corners.Count; i++) SetHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
+            for (int i = 0; i < corners.Count; i++) SetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
         }
         // 테두리 엣지 a→b와 복제 엣지를 잇는 옆면 쿼드(a, b, b', a'). 상자 모서리이므로 네 엣지 모두 하드.
         foreach (var (a, b, uvA, uvB, hard) in borderHes)
@@ -316,11 +316,11 @@ public static partial class MeshOps
         return result;
     }
 
-    /// <summary>면 f의 둘레 엣지 하드 플래그를 코너 순서대로(코너 i → i+1 엣지) 돌려준다.</summary>
-    private static List<bool> HardFlags(PolyMesh m, int f)
+    /// <summary>면 f의 둘레 엣지 플래그(하드/심/크리즈)를 코너 순서대로(코너 i → i+1 엣지) 돌려준다.</summary>
+    private static List<EdgeFlags> HardFlags(PolyMesh m, int f)
     {
-        var c = CaptureCorners(m, f); var res = new List<bool>();
-        for (int i = 0; i < c.Count; i++) res.Add(IsHard(m, c[i].Vertex, c[(i + 1) % c.Count].Vertex));
+        var c = CaptureCorners(m, f); var res = new List<EdgeFlags>();
+        for (int i = 0; i < c.Count; i++) res.Add(GetFlags(m, c[i].Vertex, c[(i + 1) % c.Count].Vertex));
         return res;
     }
 }

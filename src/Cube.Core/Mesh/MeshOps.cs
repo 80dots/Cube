@@ -21,7 +21,16 @@ public static partial class MeshOps
     /// <param name="Vertex">코너가 가리키는 정점 ID(하프에지의 시작 정점).</param>
     /// <param name="Uv">코너 UV(Uv0, 하단 원점).</param>
     /// <param name="Normal">코너 노멀(재계산 전 값; 새 면에서는 Zero여도 호출자가 Recompute한다).</param>
-    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal);
+    /// <param name="Pin">UV 핀(<see cref="HalfEdge.PinUv"/>).</param>
+    /// <param name="Locked">코너 노멀 고정(<see cref="HalfEdge.NormalLocked"/>; Bevel Harden Normals 등). 면을 다시 만드는 연산이 이 두 표시를 잃지 않도록 함께 옮긴다(v0.0.57).</param>
+    /// <param name="SrcHe">이 코너를 캡처한 같은 메시의 하프에지 ID(-1 = 새 코너). 다시 만들 때 현재 세트 밖 UV 세트 값을 이 슬롯에서 옮긴다.</param>
+    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal, bool Pin = false, bool Locked = false, int SrcHe = -1)
+    {
+        /// <summary>하프에지의 코너 속성(정점·UV·노멀·핀·노멀 고정, 원본 하프에지 ID).</summary>
+        public static Corner Of(HalfEdge h, int index = -1) => new(h.Vertex, h.Uv0, h.Normal, h.PinUv, h.NormalLocked, index);
+        /// <summary>면을 뒤집어 다시 만들 때의 코너: 고정 노멀은 반대 방향으로(고정이 아니면 재계산되므로 그대로).</summary>
+        public Corner Flipped() => Locked ? this with { Normal = -Normal } : this;
+    }
 
     /// <summary>
     /// 면 f의 하프에지 루프를 처음부터 한 바퀴 돌며 코너(정점, UV, 노멀)를 순서대로 수집한다.
@@ -34,7 +43,7 @@ public static partial class MeshOps
     {
         var list = new List<Corner>();
         int start = m.Faces[f].HalfEdge, he = start;
-        do { var h = m.Hes[he]; list.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); he = h.Next; } while (he != start);
+        do { var h = m.Hes[he]; list.Add(Corner.Of(h, he)); he = h.Next; } while (he != start);
         return list;
     }
 
@@ -55,7 +64,22 @@ public static partial class MeshOps
         if (f < 0) return -1;
         // AddFace가 만든 하프에지 루프는 corners와 같은 순서로 시작하므로 i2번째 코너 속성을 차례로 복사한다
         int start = m.Faces[f].HalfEdge, he = start, i2 = 0;
-        do { var h = m.Hes[he]; h.Uv0 = corners[i2].Uv; h.Normal = corners[i2].Normal; m.Hes[he] = h; he = h.Next; i2++; } while (he != start);
+        do { var h = m.Hes[he]; h.Uv0 = corners[i2].Uv; h.Normal = corners[i2].Normal; h.PinUv = corners[i2].Pin; h.NormalLocked = corners[i2].Locked; m.Hes[he] = h; he = h.Next; i2++; } while (he != start);
+        // 현재 세트 밖 UV 세트: 같은 메시에서 캡처한 코너면 원래 슬롯 값을 새 하프에지로 옮긴다(전에는 면을 다시 만드는 모든 연산 뒤 0이 됐다, v0.0.57).
+        // 새로 생긴 코너(분할 정점 등)는 0으로 남는다.
+        if (m.UvSets.Count > 1)
+        {
+            int cur = Math.Clamp(m.CurrentUvSet, 0, m.UvSets.Count - 1);
+            for (int k = 0; k < m.UvSets.Count; k++)
+            {
+                if (k == cur) continue;
+                var set = m.UvSets[k];
+                var arr = set.Uvs;
+                if (arr.Length < m.Hes.Count) { Array.Resize(ref arr, m.Hes.Count); set.Uvs = arr; }
+                he = start; i2 = 0;
+                do { int src = corners[i2].SrcHe; arr[he] = src >= 0 && src < arr.Length ? arr[src] : Vector2.Zero; he = m.Hes[he].Next; i2++; } while (he != start);
+            }
+        }
         return f;
     }
 
@@ -69,6 +93,9 @@ public static partial class MeshOps
         if (e < 0) return;
         var ed = m.Edges[e]; ed.Hard = hard; m.Edges[e] = ed;
     }
+
+    /// <summary>두 엣지 플래그 합치기(하드·심은 하나라도 켜져 있으면 켬, 크리즈는 큰 값). 엣지를 녹이거나 정점을 합쳐 두 엣지가 하나가 될 때 쓴다.</summary>
+    internal static EdgeFlags Or(EdgeFlags a, EdgeFlags b) => new(a.Hard || b.Hard, a.Seam || b.Seam, MathF.Max(a.Crease, b.Crease));
 
     /// <summary>정점 a-b 사이 엣지가 존재하고 Hard로 표시되어 있으면 true.</summary>
     internal static bool IsHard(PolyMesh m, int a, int b)
@@ -133,12 +160,12 @@ public static partial class MeshOps
             }
 
         // 원본 면 코너 캡처 + 내부 엣지 하드 플래그
-        var faceCorners = new Dictionary<int, (List<Corner> corners, List<int> hes, int material, List<bool> hard)>();
+        var faceCorners = new Dictionary<int, (List<Corner> corners, List<int> hes, int material, List<EdgeFlags> hard)>();
         foreach (int f in region)
         {
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             faceCorners[f] = (corners, faceHes[f], m.Faces[f].Material, hard);
         }
 
@@ -167,7 +194,7 @@ public static partial class MeshOps
             if (nf >= 0)
             {
                 result.Add(nf);
-                for (int i = 0; i < mapped.Count; i++) SetHard(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
+                for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
             }
         }
 
@@ -203,8 +230,41 @@ public static partial class MeshOps
     /// </summary>
     public static void DeleteFaces(PolyMesh m, IEnumerable<int> faceIds)
     {
-        foreach (int f in faceIds.ToArray()) m.RemoveFace(f);
+        // 고립 정점은 마지막에 한 번에 정리한다(면마다 전체 하프에지를 훑지 않도록)
+        var orphans = new HashSet<int>();
+        foreach (int f in faceIds.ToArray()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
+        RemoveIsolatedVertices(m, orphans);
         m.BumpTopology();
+    }
+
+    /// <summary>
+    /// 후보 정점 중 더 이상 어떤 면에도 속하지 않는(고립) 정점을 지운다. 면을 지우거나 다시 만드는 연산이 끝에 부른다
+    /// (고립 정점은 보이지 않지만 정점 모드에서 점으로 그려지고 집히며 내보내기에도 남는다; Maya는 남기지 않는다).
+    /// </summary>
+    internal static void RemoveIsolatedVertices(PolyMesh m, IEnumerable<int> candidates)
+    {
+        // 먼저 (유효한 출발 캐시로) 모두 판정한 뒤 한꺼번에 죽인다 — 하나씩 지우면 위상 버전이 바뀌어 캐시를 매번 다시 만든다
+        var dead = new List<int>();
+        foreach (int v in candidates.Distinct().ToArray())
+        {
+            if (v < 0 || v >= m.Verts.Count || !m.Verts[v].Alive) continue;
+            var outs = m.VertexOutgoing(v);
+            if (outs.Length == 0) { dead.Add(v); continue; }
+            // 면을 대량으로 지우면 대표 하프에지가 미정(-1)으로 남을 수 있으므로(PolyMesh.RemoveFace) 살아 있는 출발 하프에지로 채운다
+            var vt = m.Verts[v];
+            if (vt.HalfEdge < 0 || !m.Hes[vt.HalfEdge].Alive || m.Hes[vt.HalfEdge].Vertex != v) { vt.HalfEdge = outs[0]; m.Verts[v] = vt; }
+        }
+        if (dead.Count == 0) return;
+        foreach (int v in dead) { var vt = m.Verts[v]; vt.Alive = false; vt.HalfEdge = -1; m.Verts[v] = vt; }
+        m.BumpTopology();
+    }
+
+    /// <summary>면 루프의 정점들을 set에 더한다(삭제·재구성 전에 고립 정점 후보를 모을 때).</summary>
+    internal static void CollectFaceVertices(PolyMesh m, int f, HashSet<int> set)
+    {
+        if (f < 0 || f >= m.Faces.Count || !m.Faces[f].Alive) return;
+        int start = m.Faces[f].HalfEdge, he = start;
+        do { set.Add(m.Hes[he].Vertex); he = m.Hes[he].Next; } while (he != start);
     }
 
     /// <summary>엣지 삭제(Maya Delete Edge): 양쪽 면을 하나로 합친다. 경계 엣지는 인접 면을 지운다. 결과로 생긴 2가 정점은 녹인다.</summary>
@@ -212,6 +272,8 @@ public static partial class MeshOps
     {
         // touched: 삭제된 엣지의 양끝 정점 — 마지막에 2가 정점 정리/고립 정점 제거 대상
         var touched = new HashSet<int>();
+        // orphans: 경계 엣지로 지운 면의 나머지 정점(고립 후보; 2가 정점 녹이기 대상은 아님)
+        var orphans = new HashSet<int>();
         foreach (int e in edgeIds.ToArray())
         {
             if (e < 0 || e >= m.Edges.Count || !m.Edges[e].Alive) continue;
@@ -219,12 +281,12 @@ public static partial class MeshOps
             touched.Add(a); touched.Add(b);
             // 경계 엣지(한쪽 면만)는 합칠 상대가 없으니 그 면을 지운다. 내부 엣지는 두 면을 하나로 병합.
             var (f0, f1) = m.EdgeFaces(e);
-            if (f1 < 0) { m.RemoveFace(f0, removeIsolated: false); continue; }
+            if (f1 < 0) { CollectFaceVertices(m, f0, orphans); m.RemoveFace(f0, removeIsolated: false); continue; }
             MergeFacesAcrossEdgeReturning(m, e);
         }
         // 엣지를 지우면 직선 위에 엣지 2개만 남은 정점이 생기므로 녹이고, 남은 고립 정점을 지운다
         foreach (int v in touched) DissolveIfValence2(m, v);
-        foreach (int v in touched) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, touched.Concat(orphans));
         m.BumpTopology();
     }
 
@@ -241,22 +303,25 @@ public static partial class MeshOps
         var edges = new List<int>(); m.GetVertexEdges(v, edges);
         if (edges.Count != 2) return false;
         var faces = new List<int>(); m.GetVertexFaces(v, faces);
+        var orphans = new List<int>();
         foreach (int f in faces.Distinct().ToArray())
         {
             // v를 뺀 코너 목록과 새 엣지(c[i]-c[i+1])의 하드 여부: 원래 엣지 또는 v를 거치던 두 엣지 중 하나가 하드면 하드
             var corners = CaptureCorners(m, f).Where(c => c.Vertex != v).ToList();
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex) || IsHard(m, corners[i].Vertex, v) || IsHard(m, v, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(Or(Or(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex), GetFlags(m, corners[i].Vertex, v)), GetFlags(m, v, corners[(i + 1) % corners.Count].Vertex)));
             int material = m.Faces[f].Material;
             m.RemoveFace(f, removeIsolated: false);
-            // 삼각형에서 정점을 빼면 면이 사라진다(선분) — 다시 만들지 않는다
+            // 삼각형에서 정점을 빼면 면이 사라진다(선분) — 다시 만들지 않는다(남은 두 정점은 아래에서 고립 정리)
             if (corners.Count >= 3)
             {
                 int nf = AddFaceWithCorners(m, corners, material);
-                if (nf >= 0) for (int i = 0; i < corners.Count; i++) SetHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
+                if (nf >= 0) for (int i = 0; i < corners.Count; i++) SetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
             }
+            orphans.AddRange(corners.Select(c => c.Vertex));
         }
         m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, orphans);
         return true;
     }
 
@@ -267,6 +332,8 @@ public static partial class MeshOps
     /// </remarks>
     public static void DeleteVertices(PolyMesh m, IEnumerable<int> vertIds)
     {
+        // 지운 면의 정점들: 마지막에 고립된 것을 정리한다(경계 정점 삭제로 부채꼴 면이 사라지면 이웃 정점이 남던 문제)
+        var orphans = new HashSet<int>();
         foreach (int v in vertIds.ToArray())
         {
             if (v < 0 || v >= m.Verts.Count || !m.Verts[v].Alive) continue;
@@ -277,7 +344,7 @@ public static partial class MeshOps
             if (boundary || outgoing.Length == 0)
             {
                 var faces = new List<int>(); m.GetVertexFaces(v, faces);
-                foreach (int f in faces.Distinct()) m.RemoveFace(f, removeIsolated: false);
+                foreach (int f in faces.Distinct()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
                 m.RemoveVertexIfIsolated(v);
                 continue;
             }
@@ -292,23 +359,39 @@ public static partial class MeshOps
                 var h = m.Hes[cur];
                 visitedFaces.Add(h.Face);
                 int walk = h.Next;
-                while (m.Hes[walk].Next != cur) { var w = m.Hes[walk]; loop.Add(new Corner(w.Vertex, w.Uv0, w.Normal)); walk = w.Next; }
+                while (m.Hes[walk].Next != cur) { var w = m.Hes[walk]; loop.Add(Corner.Of(w, walk)); walk = w.Next; }
                 // 마지막 정점(v 직전)은 다음 면의 첫 정점과 같으므로 건너뜀
                 cur = m.Hes[m.Hes[cur].Prev].Twin; // 다음 면에서 v에서 나가는 하프에지
                 if (cur < 0 || guard++ > 10000) break;
             } while (cur != startHe);
-            var hard = new List<bool>();
-            for (int i = 0; i < loop.Count; i++) hard.Add(IsHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
+            // 합친 루프에 같은 정점이 반복되면(부채꼴 면들이 v 말고도 정점·엣지를 공유: 큐브의 대각 두 모서리를 함께 지울 때 등) 한 면으로 만들 수 없다
+            // → 이 정점은 지우지 않는다(전에는 면만 지워지고 새 면 추가가 실패해 메시가 통째로 사라졌다, v0.0.57)
+            if (loop.Count < 3 || loop.Select(c => c.Vertex).Distinct().Count() != loop.Count) continue;
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < loop.Count; i++) hard.Add(GetFlags(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
             // 새 면의 머티리얼은 부채꼴 첫 면을 따른다
             int material = m.Faces[visitedFaces[0]].Material;
-            foreach (int f in visitedFaces.Distinct()) m.RemoveFace(f, removeIsolated: false);
-            m.RemoveVertexIfIsolated(v);
-            if (loop.Count >= 3)
+            // 실패 시 복구용 원래 부채꼴 면
+            var fan = visitedFaces.Distinct().Select(f => (corners: CaptureCorners(m, f), mat: m.Faces[f].Material)).ToList();
+            var fanHard = fan.Select(fc => Enumerable.Range(0, fc.corners.Count).Select(i => GetFlags(m, fc.corners[i].Vertex, fc.corners[(i + 1) % fc.corners.Count].Vertex)).ToList()).ToList();
+            foreach (int f in visitedFaces.Distinct()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
+            int nf = AddFaceWithCorners(m, loop, material);
+            if (nf >= 0)
             {
-                int nf = AddFaceWithCorners(m, loop, material);
-                if (nf >= 0) for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
+                for (int i = 0; i < loop.Count; i++) SetFlags(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
+                m.RemoveVertexIfIsolated(v);
+            }
+            else
+            {
+                // 새 면을 만들 수 없으면(비매니폴드) 원래 면을 되살린다
+                for (int k = 0; k < fan.Count; k++)
+                {
+                    int rf = AddFaceWithCorners(m, fan[k].corners, fan[k].mat);
+                    if (rf >= 0) for (int i = 0; i < fan[k].corners.Count; i++) SetFlags(m, fan[k].corners[i].Vertex, fan[k].corners[(i + 1) % fan[k].corners.Count].Vertex, fanHard[k][i]);
+                }
             }
         }
+        RemoveIsolatedVertices(m, orphans);
         m.BumpTopology();
     }
 
@@ -327,15 +410,33 @@ public static partial class MeshOps
         var rep = new Dictionary<int, int>();
         float t2 = threshold * threshold;
         int merged = 0;
-        // 대표가 정해지지 않은 정점 i를 기준으로 가까운 뒤쪽 정점들을 묶는다
+        // 균일 격자(칸 = 임계값)로 이웃 칸만 본다 — 전에는 모든 쌍을 비교(O(n²))해 오브젝트 전체 병합이 큰 메시에서 멈췄다(v0.0.57).
+        // 결과는 이전과 같다: 목록 순서대로 대표가 정해지지 않은 정점 i가 뒤쪽(j > i)의 미배정 정점 중 거리 이하인 것을 모두 묶는다.
+        float cell = MathF.Max(threshold, 1e-6f);
+        (long, long, long) Cell(Vector3 p) => ((long)MathF.Floor(p.X / cell), (long)MathF.Floor(p.Y / cell), (long)MathF.Floor(p.Z / cell));
+        var grid = new Dictionary<(long, long, long), List<int>>();
+        for (int i = 0; i < verts.Count; i++)
+        {
+            var key = Cell(m.Verts[verts[i]].Position);
+            if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<int>();
+            list.Add(i);
+        }
         for (int i = 0; i < verts.Count; i++)
         {
             if (rep.ContainsKey(verts[i])) continue;
-            for (int j = i + 1; j < verts.Count; j++)
-            {
-                if (rep.ContainsKey(verts[j])) continue;
-                if (Vector3.DistanceSquared(m.Verts[verts[i]].Position, m.Verts[verts[j]].Position) <= t2) { rep[verts[j]] = verts[i]; merged++; }
-            }
+            var pi = m.Verts[verts[i]].Position;
+            var (cx, cy, cz) = Cell(pi);
+            for (long dx = -1; dx <= 1; dx++)
+                for (long dy = -1; dy <= 1; dy++)
+                    for (long dz = -1; dz <= 1; dz++)
+                    {
+                        if (!grid.TryGetValue((cx + dx, cy + dy, cz + dz), out var list)) continue;
+                        foreach (int j in list)
+                        {
+                            if (j <= i || rep.ContainsKey(verts[j])) continue;
+                            if (Vector3.DistanceSquared(pi, m.Verts[verts[j]].Position) <= t2) { rep[verts[j]] = verts[i]; merged++; }
+                        }
+                    }
         }
         if (merged == 0) return 0;
         // 대표 정점 위치 = 클러스터 평균
@@ -362,32 +463,46 @@ public static partial class MeshOps
         var affected = new HashSet<int>();
         var tmp = new List<int>();
         foreach (int v in map.Keys) { m.GetVertexFaces(v, tmp); affected.UnionWith(tmp); }
-        var rebuilt = new List<(List<Corner> corners, int material, List<bool> hard)>();
+        // 대표 정점 쪽 면도 함께 다시 만든다: 병합으로 기존 면과 같은 정점 집합이 되는 면(라미나 쌍)을 둘 다 찾아 버려야 하므로
+        foreach (int v in map.Values.Distinct()) { m.GetVertexFaces(v, tmp); affected.UnionWith(tmp); }
+        var rebuilt = new List<(List<Corner> corners, int material, List<EdgeFlags> hard)>();
         foreach (int f in affected)
         {
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             rebuilt.Add((corners, m.Faces[f].Material, hard));
         }
-        foreach (int f in affected) m.RemoveFace(f, removeIsolated: false);
+        var orphans = new HashSet<int>();
+        foreach (int f in affected) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
         // 면을 모두 지운 뒤에 다시 만들어야 일시적인 같은 방향 엣지 충돌이 없다
+        var plans = new List<(List<Corner> mapped, List<EdgeFlags> flags, int material)>();
         foreach (var (corners, material, hard) in rebuilt)
         {
-            var mapped = new List<Corner>(); var mappedHard = new List<bool>();
+            var mapped = new List<Corner>(); var mappedHard = new List<EdgeFlags>();
             for (int i = 0; i < corners.Count; i++)
             {
                 var c = corners[i] with { Vertex = map.TryGetValue(corners[i].Vertex, out int r) ? r : corners[i].Vertex };
-                if (mapped.Count > 0 && mapped[^1].Vertex == c.Vertex) { mappedHard[^1] |= hard[i]; continue; }
+                if (mapped.Count > 0 && mapped[^1].Vertex == c.Vertex) { mappedHard[^1] = Or(mappedHard[^1], hard[i]); continue; }
                 mapped.Add(c); mappedHard.Add(hard[i]);
             }
             while (mapped.Count > 1 && mapped[0].Vertex == mapped[^1].Vertex) { mapped.RemoveAt(mapped.Count - 1); mappedHard.RemoveAt(mappedHard.Count - 1); }
             if (mapped.Count < 3) continue;
-            int nf = AddFaceWithCorners(m, mapped, material);
-            if (nf >= 0) for (int i = 0; i < mapped.Count; i++) SetHard(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, mappedHard[i]);
+            plans.Add((mapped, mappedHard, material));
         }
-        foreach (int v in map.Keys) m.RemoveVertexIfIsolated(v);
-        foreach (int v in map.Values.Distinct()) m.RemoveVertexIfIsolated(v);
+        // 병합 뒤 같은 정점 집합이 된 면 쌍(맞붙은 두 오브젝트의 접촉면 등 = 안쪽 라미나)은 둘 다 버린다.
+        // 남겨 두면 먼저 들어간 라미나가 엣지를 차지해 주변 면이 비매니폴드로 거부되어 구멍이 났다(v0.0.57: Mirror(병합 없음) 뒤 Merge).
+        var byKey = plans.GroupBy(pl => string.Join(",", pl.mapped.Select(c => c.Vertex).OrderBy(x => x))).Where(g => g.Count() >= 2).SelectMany(g => g).ToHashSet();
+        foreach (var (mapped, mappedHard, material) in plans)
+        {
+            if (byKey.Contains((mapped, mappedHard, material))) continue;
+            int nf = AddFaceWithCorners(m, mapped, material);
+            if (nf >= 0) for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, mappedHard[i]);
+        }
+        // 사라진 정점(맵 키), 대표 정점, 그리고 퇴화(2각 이하)로 버린 면이나 비매니폴드로 다시 못 만든 면의 나머지 정점 중
+        // 고립된 것을 한 번에 지운다(정점마다 전체 하프에지를 훑지 않도록)
+        orphans.UnionWith(map.Keys); orphans.UnionWith(map.Values);
+        RemoveIsolatedVertices(m, orphans);
     }
 
     // ------------------------------------------------------------ 기타
@@ -403,25 +518,25 @@ public static partial class MeshOps
         var faces = new HashSet<int>();
         foreach (var comp in ConnectedComponents(m)) if (comp.Any(selected.Contains)) faces.UnionWith(comp);
         // 1) 모든 면을 캡처하고 제거한 뒤 2) 뒤집어 재생성 (동시에 해야 같은 방향 충돌이 없다)
-        var captured = new List<(List<Corner> corners, int material, List<bool> hard)>();
+        var captured = new List<(List<Corner> corners, int material, List<EdgeFlags> hard)>();
         foreach (int f in faces)
         {
             if (f < 0 || f >= m.Faces.Count || !m.Faces[f].Alive) continue;
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             captured.Add((corners, m.Faces[f].Material, hard));
         }
         foreach (int f in faces) if (f >= 0 && f < m.Faces.Count && m.Faces[f].Alive) m.RemoveFace(f, removeIsolated: false);
         foreach (var (corners, material, hard) in captured)
         {
             // 코너 순서를 뒤집으면 면 법선 방향이 반대가 된다
-            var rev = corners.AsEnumerable().Reverse().ToList();
+            var rev = corners.AsEnumerable().Reverse().Select(c => c.Flipped()).ToList();
             int nf = AddFaceWithCorners(m, rev, material);
             if (nf < 0) continue;
             int n = corners.Count;
             // 원래 엣지 i는 (c[i], c[i+1]); 뒤집힌 루프에서 (rev[j], rev[j+1]) = (c[n-1-j], c[n-2-j]) → 원래 엣지 n-2-j
-            for (int j = 0; j < n; j++) SetHard(m, rev[j].Vertex, rev[(j + 1) % n].Vertex, hard[((n - 2 - j) % n + n) % n]);
+            for (int j = 0; j < n; j++) SetFlags(m, rev[j].Vertex, rev[(j + 1) % n].Vertex, hard[((n - 2 - j) % n + n) % n]);
         }
         m.BumpTopology();
     }
@@ -452,19 +567,77 @@ public static partial class MeshOps
         for (int v = 0; v < source.Verts.Count; v++)
             vmap[v] = source.Verts[v].Alive ? target.AddVertex(Vector3.Transform(source.Verts[v].Position, transform)) : -1;
         bool flip = Matrix4x4.Invert(transform, out _) && Det3(transform) < 0;
+        var sets = new UvSetCopier(source, target);
         for (int f = 0; f < source.Faces.Count; f++)
         {
             if (!source.Faces[f].Alive) continue;
-            var corners = CaptureCorners(source, f).Select(c => c with { Vertex = vmap[c.Vertex], Normal = Vector3.Normalize(Vector3.TransformNormal(c.Normal, transform)) }).ToList();
+            var corners = CaptureCorners(source, f).Select(c => c with { Vertex = vmap[c.Vertex], Normal = Vector3.Normalize(Vector3.TransformNormal(c.Normal, transform)), SrcHe = -1 }).ToList();
             if (flip) corners.Reverse();
             // 하드 플래그 조회용 원본 코너(뒤집기 전 순서) — 엣지는 무향이라 순서와 무관하게 짝을 찾는다
             var srcCorners = CaptureCorners(source, f);
             int nf = AddFaceWithCorners(target, corners, source.Faces[f].Material);
             if (nf < 0) continue;
             for (int i = 0; i < srcCorners.Count; i++)
-                SetHard(target, vmap[srcCorners[i].Vertex], vmap[srcCorners[(i + 1) % srcCorners.Count].Vertex], IsHard(source, srcCorners[i].Vertex, srcCorners[(i + 1) % srcCorners.Count].Vertex));
+                SetFlags(target, vmap[srcCorners[i].Vertex], vmap[srcCorners[(i + 1) % srcCorners.Count].Vertex], GetFlags(source, srcCorners[i].Vertex, srcCorners[(i + 1) % srcCorners.Count].Vertex));
+            sets.CopyFace(f, nf, flip);
         }
+        // 정점 단위 고정 노멀도 옮긴다(방향은 변환)
+        foreach (var (v, n) in source.LockedNormals.ToArray())
+            if (v < vmap.Length && vmap[v] >= 0) { var tn = Vector3.TransformNormal(n, transform); if (tn.LengthSquared() > 1e-20f) target.LockedNormals[vmap[v]] = Vector3.Normalize(tn); }
         target.BumpTopology();
+    }
+
+    /// <summary>
+    /// 면을 다른 메시로 옮길 때 현재 세트 밖의 UV 세트 값도 함께 옮기는 도우미(Separate/Extract/Combine/Mirror; 전에는 현재 세트만 옮겨
+    /// 다른 세트의 UV가 0이 되거나 사라졌다, v0.0.57). 세트는 이름으로 짝짓고 대상에 없으면 만든다. 원본에 세트가 하나뿐이면 아무것도 하지 않는다.
+    /// </summary>
+    private sealed class UvSetCopier
+    {
+        /// <summary>원본/대상 메시.</summary>
+        private readonly PolyMesh _src, _dst;
+        /// <summary>원본 세트 번호 → 대상 세트 번호(null = 복사할 세트 없음).</summary>
+        private readonly int[]? _map;
+
+        /// <summary>원본의 현재 UV를 세트에 저장하고 대상에 같은 이름의 세트를 준비한다.</summary>
+        public UvSetCopier(PolyMesh src, PolyMesh dst)
+        {
+            _src = src; _dst = dst;
+            if (src.UvSets.Count <= 1) return;
+            src.StoreCurrentUvs();
+            if (dst.UvSets.Count == 0) { dst.EnsureUvSets(); dst.UvSets[0].Name = src.UvSets[Math.Clamp(src.CurrentUvSet, 0, src.UvSets.Count - 1)].Name; }
+            else dst.StoreCurrentUvs();
+            _map = new int[src.UvSets.Count];
+            for (int k = 0; k < src.UvSets.Count; k++)
+            {
+                int i = dst.UvSets.FindIndex(t => t.Name == src.UvSets[k].Name);
+                if (i < 0) { dst.UvSets.Add(new UvSet { Name = src.UvSets[k].Name, Uvs = new Vector2[dst.Hes.Count] }); i = dst.UvSets.Count - 1; }
+                _map[k] = i;
+            }
+        }
+
+        /// <summary>원본 면 sf의 코너 UV(모든 세트)를 대상 면 df로 옮긴다. reversed면 대상 코너 i = 원본 코너 n−1−i.</summary>
+        public void CopyFace(int sf, int df, bool reversed)
+        {
+            if (_map == null) return;
+            var sh = new List<int>(); _src.GetFaceHalfEdges(sf, sh);
+            var dh = new List<int>(); _dst.GetFaceHalfEdges(df, dh);
+            int n = Math.Min(sh.Count, dh.Count);
+            int cur = Math.Clamp(_dst.CurrentUvSet, 0, _dst.UvSets.Count - 1);
+            for (int k = 0; k < _map.Length; k++)
+            {
+                var srcArr = _src.UvSets[k].Uvs;
+                var set = _dst.UvSets[_map[k]];
+                if (set.Uvs.Length < _dst.Hes.Count) { var a = set.Uvs; Array.Resize(ref a, _dst.Hes.Count); set.Uvs = a; }
+                for (int i = 0; i < n; i++)
+                {
+                    int s = sh[reversed ? n - 1 - i : i];
+                    var uv = s < srcArr.Length ? srcArr[s] : Vector2.Zero;
+                    set.Uvs[dh[i]] = uv;
+                    // 대상의 현재 세트는 하프에지 Uv0에 올라와 있으므로 그 값도 맞춘다
+                    if (_map[k] == cur) { var h = _dst.Hes[dh[i]]; h.Uv0 = uv; _dst.Hes[dh[i]] = h; }
+                }
+            }
+        }
     }
 
     /// <summary>행렬 좌상단 3×3(회전/스케일 부분)의 행렬식. 음수면 반사 변환이다.</summary>
@@ -509,19 +682,23 @@ public static partial class MeshOps
         var target = new PolyMesh();
         // vmap: 원본 정점 ID -> 새 메시 정점 ID(처음 등장할 때 생성)
         var vmap = new Dictionary<int, int>();
+        var sets = new UvSetCopier(m, target);
         foreach (int f in faceIds)
         {
             var corners = CaptureCorners(m, f);
             var mapped = corners.Select(c =>
             {
                 if (!vmap.TryGetValue(c.Vertex, out int nv)) { nv = target.AddVertex(m.Verts[c.Vertex].Position); vmap[c.Vertex] = nv; }
-                return c with { Vertex = nv };
+                return c with { Vertex = nv, SrcHe = -1 };
             }).ToList();
             int nf = AddFaceWithCorners(target, mapped, m.Faces[f].Material);
             if (nf < 0) continue;
             for (int i = 0; i < corners.Count; i++)
-                SetHard(target, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+                SetFlags(target, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            sets.CopyFace(f, nf, false);
         }
+        foreach (var (v, n) in m.LockedNormals) if (vmap.TryGetValue(v, out int nv)) target.LockedNormals[nv] = n;
+        if (m.UvSets.Count > 1) target.CurrentUvSet = target.UvSets.FindIndex(t => t.Name == m.UvSets[Math.Clamp(m.CurrentUvSet, 0, m.UvSets.Count - 1)].Name) is var ci && ci >= 0 ? ci : 0;
         target.BumpTopology();
         return target;
     }

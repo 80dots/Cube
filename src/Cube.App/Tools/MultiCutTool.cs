@@ -15,8 +15,8 @@ namespace Cube.App.Tools;
 /// - Shift+드래그: 화면에 그은 선으로 메시 전체를 슬라이스(평면 컷).
 /// </summary>
 /// <remarks>
-/// 체인 컷은 클릭마다 별도 'Multi-Cut' MeshOpCommand(Undo 한 단계)다: 엣지를 찍으면 SplitEdge로 새 정점을 만들고,
-/// 직전 점(<see cref="_lastVertex"/>)과 같은 면을 공유하면 SplitFaceBetween으로 면을 나눈다.
+/// 체인 컷은 체인 전체가 'Multi-Cut' MeshOpCommand 하나(Undo 한 단계)다: 클릭마다 직전 체인 명령을 되돌리고 모든 점을 다시 적용한다.
+/// 엣지를 찍으면 SplitEdge로 새 정점을 만들고, 직전 점(<see cref="_lastVertex"/>)과 같은 면을 공유하면 SplitFaceBetween으로 면을 나눈다.
 /// 슬라이스는 화면 선의 두 끝을 역투영한 두 레이가 이루는 평면으로 대상 메시들을 SliceWithPlane한다(한 Undo 그룹).
 /// 선택 모드는 엣지로 유지하며, 결과 새 엣지를 선택한다.
 /// </remarks>
@@ -33,6 +33,10 @@ public sealed class MultiCutTool : SelectTool
     private NodeId _chainNode = NodeId.None;
     /// <summary>체인의 마지막 정점 ID(-1 = 체인 없음). 명령 람다 안에서 갱신되어 다음 클릭의 연결 시작점이 된다.</summary>
     private int _lastVertex = -1;
+    /// <summary>현재 체인의 점들(맞은 정점 또는 엣지+비율). 클릭마다 체인 전체를 다시 적용하는 명령 하나로 바꾼다.</summary>
+    private readonly List<(int vertex, int edge, float t)> _steps = new();
+    /// <summary>현재 체인을 적용한 마지막 명령(Undo 스택의 마지막이면 다음 클릭이 이것을 되돌리고 교체한다).</summary>
+    private MeshOpCommand? _chainCmd;
     /// <summary>체인에서 찍은 점들의 월드 위치(오버레이 폴리라인 표시용).</summary>
     private readonly List<NVec3> _chainWorld = new();
     /// <summary>_slicing = Shift 드래그 슬라이스 중, _sliceStart/_sliceEnd = 화면 선의 시작·끝(뷰포트 로컬 픽셀).</summary>
@@ -52,7 +56,7 @@ public sealed class MultiCutTool : SelectTool
     public override void Cancel() { ResetChain(); ClearOverlay(); base.Cancel(); }
 
     /// <summary>체인 상태와 슬라이스 상태를 비우고 오버레이를 갱신(빈 선)한다.</summary>
-    private void ResetChain() { _chainNode = NodeId.None; _lastVertex = -1; _chainWorld.Clear(); _slicing = false; UpdateOverlay(); }
+    private void ResetChain() { _chainNode = NodeId.None; _lastVertex = -1; _chainWorld.Clear(); _steps.Clear(); _chainCmd = null; _slicing = false; UpdateOverlay(); }
 
     /// <summary>Enter = 체인 끝, Esc = 체인 초기화, 슬라이스 중 이동 = 선 갱신, 슬라이스 중 뗌 = 슬라이스 실행. 그 외는 SelectTool.</summary>
     public override bool HandleInput(InputEvent e)
@@ -90,30 +94,49 @@ public sealed class MultiCutTool : SelectTool
         var node = Ctx.Doc.Find(nodeId); var mesh = node?.Mesh;
         if (node == null || mesh == null) return false;
         if (_chainNode != NodeId.None && _chainNode != nodeId) ResetChain();
-        // 명령 람다가 캡처할 값: 직전 정점, 엣지와 비율(정점이 맞았으면 정점 그대로), 맞은 정점
-        int prev = _lastVertex;
+        // 이번 점: 엣지와 비율(정점이 맞았으면 정점 그대로)
         int edge = eh?.Component ?? -1; float t = 0.5f;
         if (vh == null && edge >= 0) t = ParamOnEdge(node, mesh, edge, px);
         int vertexHit = vh?.Component ?? -1;
+        // 체인 전체를 Undo 한 단계로(Maya와 같음, v0.0.57; 전에는 클릭마다 한 단계라 Undo하면 엣지 위 정점만 남았다):
+        // 같은 체인의 직전 명령이 아직 마지막이면 되돌리고, 지금까지의 모든 점을 처음부터 다시 적용하는 명령 하나로 바꾼다.
+        // 슬롯 ID는 재사용되지 않으므로 같은 순서로 다시 적용하면 앞 점들이 만든 정점·엣지 ID가 그대로 재현된다.
+        bool continuing = _chainCmd != null && _chainNode == nodeId && ReferenceEquals(Ctx.Undo.LastCommand, _chainCmd);
+        if (continuing) Ctx.Undo.Undo(); else { _steps.Clear(); _chainWorld.Clear(); }
+        _steps.Add((vertexHit, edge, t));
+        var steps = _steps.ToArray();
         var cmd = new MeshOpCommand("Multi-Cut", nodeId, m =>
         {
-            // 정점이 아니면 엣지를 t 위치에서 나눠 새 정점을 만든다
-            int v = vertexHit;
-            if (v < 0 && edge >= 0 && edge < m.EdgeCount && m.Edges[edge].Alive) v = MeshOps.SplitEdge(m, edge, t);
-            if (v < 0) return (false, null, null);
-            _lastVertex = v;
+            int prev = -1; bool any = false;
             var sel = new List<int>();
-            // 직전 점과 같은 면에 있으면 두 정점 사이로 면을 나누고 새 엣지를 선택
-            if (prev >= 0 && prev < m.VertexCount && m.Verts[prev].Alive && prev != v)
+            foreach (var (vHit, e, tt) in steps)
             {
-                int ne = MeshOps.SplitFaceBetween(m, prev, v);
-                if (ne >= 0) sel.Add(ne);
+                // 정점이 아니면 엣지를 t 위치에서 나눠 새 정점을 만든다
+                int v = vHit >= 0 && vHit < m.VertexCount && m.Verts[vHit].Alive ? vHit : -1;
+                if (v < 0 && e >= 0 && e < m.EdgeCount && m.Edges[e].Alive) v = MeshOps.SplitEdge(m, e, tt);
+                if (v < 0) continue;
+                any = true;
+                // 직전 점과 같은 면에 있으면 두 정점 사이로 면을 나누고 새 엣지를 선택
+                if (prev >= 0 && prev != v && m.Verts[prev].Alive)
+                {
+                    int ne = MeshOps.SplitFaceBetween(m, prev, v);
+                    if (ne >= 0) sel.Add(ne);
+                }
+                prev = v;
             }
-            return (true, sel.Count > 0 ? SelectMode.Edge : null, sel.Count > 0 ? sel : null);
+            _lastVertex = prev;
+            return (any, sel.Count > 0 ? SelectMode.Edge : null, sel.Count > 0 ? sel : null);
         });
         Ctx.Undo.Push(cmd);
+        if (!cmd.DidChange)
+        {
+            // 이번 점이 아무것도 못 했으면 이전 체인 상태로 되돌린다
+            _steps.RemoveAt(_steps.Count - 1);
+            if (continuing) Ctx.Undo.Redo();
+            return true;
+        }
+        _chainCmd = cmd;
         // 성공 시 체인 상태 갱신(오버레이에 새 점 추가)
-        if (!cmd.DidChange) { return true; }
         _chainNode = nodeId;
         _chainWorld.Add(NVec3.Transform(mesh.Verts[_lastVertex].Position, node.WorldMatrix));
         UpdateOverlay();

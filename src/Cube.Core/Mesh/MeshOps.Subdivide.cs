@@ -149,4 +149,62 @@ public static partial class MeshOps
         m.CopyFrom(cur);
         m.BumpTopology();
     }
+
+    /// <summary>
+    /// 선택 면만 Smooth(Maya: 면을 선택하고 Mesh → Smooth). levels단계마다 영역을 Add Divisions(쿼드)와 같은 위상으로 나눈 뒤
+    /// Catmull-Clark 규칙으로 위치를 다시 잡는다: 면 점 = 면 중심, 영역 안쪽 엣지 점 = (양끝 + 두 면 중심)/4,
+    /// 영역 경계 엣지 점 = 중점(이웃 면에 같은 점이 끼워지므로 틈이 없다), 모든 면이 영역 안이고 메시 경계가 아닌 원래 정점 = (F + 2R + (n−3)P)/n,
+    /// 그 밖의 원래 정점은 제자리. 반환값은 마지막 단계의 영역 면들.
+    /// </summary>
+    public static List<int> SmoothFaces(PolyMesh m, IEnumerable<int> faceIds, int levels)
+    {
+        var current = faceIds.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive).Distinct().ToList();
+        levels = Math.Clamp(levels, 0, 4);
+        for (int l = 0; l < levels && current.Count > 0; l++)
+        {
+            var region = new HashSet<int>(current);
+            // ① 나누기 전 위치로 계산할 값들: 면 중심, 엣지 점, 원래 정점의 새 위치
+            var centroid = new Dictionary<int, Vector3>();
+            foreach (int f in region) centroid[f] = m.FaceCentroid(f);
+            long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+            var edgePoint = new Dictionary<long, Vector3>(PairKeyComparer.Instance);
+            var regionVerts = new HashSet<int>();
+            var hes = new List<int>();
+            foreach (int f in region)
+            {
+                m.GetFaceHalfEdges(f, hes);
+                foreach (int he in hes)
+                {
+                    int a = m.Hes[he].Vertex, b = m.Hes[m.Hes[he].Next].Vertex;
+                    regionVerts.Add(a);
+                    long k = K(a, b);
+                    if (edgePoint.ContainsKey(k)) continue;
+                    var pa = m.Verts[a].Position; var pb = m.Verts[b].Position;
+                    int tw = m.Hes[he].Twin;
+                    int g = tw >= 0 ? m.Hes[tw].Face : -1;
+                    edgePoint[k] = g >= 0 && region.Contains(g) ? (pa + pb + centroid[f] + centroid[g]) * 0.25f : (pa + pb) * 0.5f;
+                }
+            }
+            var vertexPoint = new Dictionary<int, Vector3>();
+            var vf = new List<int>(); var ve = new List<int>();
+            foreach (int v in regionVerts)
+            {
+                m.GetVertexFaces(v, vf); m.GetVertexEdges(v, ve);
+                if (vf.Count < 3 || vf.Any(f => !region.Contains(f)) || ve.Any(m.IsBoundaryEdge) || ve.Count != vf.Count) continue;
+                int n = vf.Count;
+                var F = Vector3.Zero; foreach (int f in vf) F += centroid[f]; F /= n;
+                var R = Vector3.Zero; foreach (int e in ve) { var (a, b) = m.EdgeVertices(e); R += (m.Verts[a].Position + m.Verts[b].Position) * 0.5f; } R /= n;
+                vertexPoint[v] = (F + 2f * R + (n - 3) * m.Verts[v].Position) / n;
+            }
+            // ② 위상 나누기(Add Divisions 쿼드 한 단계)
+            current = SubdivideOnce(m, current, DivisionMode.Quads, out var mid, out var centers);
+            // ③ 위치 적용
+            void Put(int v, Vector3 p) { var vt = m.Verts[v]; vt.Position = p; m.Verts[v] = vt; }
+            foreach (var (k, v) in mid) if (edgePoint.TryGetValue(k, out var p)) Put(v, p);
+            foreach (var (f, v) in centers) if (centroid.TryGetValue(f, out var p)) Put(v, p);
+            foreach (var (v, p) in vertexPoint) if (m.Verts[v].Alive) Put(v, p);
+        }
+        m.BumpTopology();
+        return current;
+    }
 }

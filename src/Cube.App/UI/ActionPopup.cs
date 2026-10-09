@@ -65,6 +65,8 @@ public partial class ActionPopup : PanelContainer
         /// <summary>드래그 값 파라미터(사본, 팝업에서 편집).</summary>
         public HistoryParams Params = new();
         public bool Thickness;                                   // Extrude Thickness(면별 법선 오프셋)
+        /// <summary>두께 단계를 붙일 때 Extrude 옵션의 Flip Normals 값. 옵션에서 뒤집기를 바꾸면 캡 법선이 반대가 되므로 두께 부호를 바꿔 같은 쪽으로 민다.</summary>
+        public bool FlipAtCapture;
         /// <summary>다시 적용할 대상: 노드와 변형 연산(Op; Thickness 단계는 null).</summary>
         public readonly List<(NodeId node, ComponentTransformOp? op)> Targets = new();
         public ICommand? Command;                                // 이 단계가 넣은 명령(Undo 대상)
@@ -572,6 +574,9 @@ public partial class ActionPopup : PanelContainer
 
     private ICommand? _baseCommand; // ① 기능이 넣은 명령(후속 단계 아래)
 
+    /// <summary>현재 ① 기능이 Extrude이고 그 옵션의 Flip Normals가 켜져 있는지.</summary>
+    private bool ExtrudeFlipOption() => _optionId == "mesh.extrude" && _shell.Options("mesh.extrude").Bool("flip");
+
     /// <summary>새 명령이 조작기 드래그(두께/이동/회전/스케일)면 현재 ① 기능의 후속 단계로 붙인다.</summary>
     private bool TryAppendFollowUp(ICommand last)
     {
@@ -581,7 +586,7 @@ public partial class ActionPopup : PanelContainer
         // 첫 후속 단계라면 지금의 명령이 기능 명령(바탕)이다.
         if (_follow.Count == 0) _baseCommand = _command;
         var first = (MoveVerticesCommand)moves[0];
-        var fu = new FollowUp { Name = first.Name, Params = first.Params!.Clone(), Thickness = first.Name == "Extrude Thickness", Command = last };
+        var fu = new FollowUp { Name = first.Name, Params = first.Params!.Clone(), Thickness = first.Name == "Extrude Thickness", Command = last, FlipAtCapture = ExtrudeFlipOption() };
         foreach (MoveVerticesCommand mv in moves) fu.Targets.Add((mv.Node, mv.Op));
         _follow.Add(fu);
         _command = last;
@@ -624,7 +629,10 @@ public partial class ActionPopup : PanelContainer
                     if (fu.Thickness)
                     {
                         var faces = sel.Mode == SelectMode.Face ? comps.Faces.ToArray() : SelectionOps.Convert(mesh, comps, sel.Mode, SelectMode.Face).ToArray();
-                        if (Tools.ExtrudeThickness.Make(doc, node, faces, fu.Params.Float("Thickness")) is { } tc) doc.Undo.Push(tc);
+                        // Flip Normals를 바꿨으면 캡 법선이 뒤집혔으므로 부호를 바꿔 원래 드래그한 쪽으로 민다(v0.0.57; 전에는 두께가 안쪽으로 들어갔다)
+                        float th = fu.Params.Float("Thickness");
+                        if (ExtrudeFlipOption() != fu.FlipAtCapture) th = -th;
+                        if (Tools.ExtrudeThickness.Make(doc, node, faces, th) is { } tc) doc.Undo.Push(tc);
                         continue;
                     }
                     // 변형 단계: 선택을 정점으로 바꿔 살아 있는 정점에 Op의 로컬 행렬(파라미터로 계산)을 곱한다.
