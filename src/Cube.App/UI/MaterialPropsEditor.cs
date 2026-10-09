@@ -99,9 +99,15 @@ public partial class MaterialPropsEditor : VBoxContainer
     {
         if (_updating) return;
         var m = _shell.Document.FindMaterial(MaterialId); if (m == null) return;
+        // 첫 미리보기 직전 값을 원본으로 고정한다. 미리보기 통지(MaterialChanged)로 Refresh가 다시 불려도 원본을 덮어쓰지 않아야
+        // Commit이 미리보기 전 값으로 되돌린 뒤 명령을 넣을 수 있다(전에는 원본이 미리보기 값으로 바뀌어 명령이 생기지 않고 Undo가 안 됐음).
+        if (!_previewing || _original == null || _original.Id != m.Id) { _original = m.Clone(); _previewing = true; }
         change(m);
         NotifyUsers(MaterialId);
     }
+
+    /// <summary>미리보기(색 고르기·MMB 드래그) 중이면 true. 이 동안 Refresh는 <see cref="_original"/>을 갱신하지 않는다.</summary>
+    private bool _previewing;
 
     /// <remarks>
     /// 순서: 현재 머티리얼을 복제해 change를 적용한 "after"를 만든다 → 미리보기로 바뀌었을 수 있는 문서 머티리얼을
@@ -114,7 +120,9 @@ public partial class MaterialPropsEditor : VBoxContainer
         if (_updating) return;
         var m = _shell.Document.FindMaterial(MaterialId); if (m == null) return;
         var after = m.Clone(); change(after);
-        if (_original != null && _original.Id == m.Id) m.CopyFrom(_original);
+        // 미리보기로 바뀐 값만 원본으로 되돌린다(미리보기가 없었으면 문서 값이 곧 원본)
+        if (_previewing && _original != null && _original.Id == m.Id) m.CopyFrom(_original);
+        _previewing = false;
         if (after.ValuesEqual(m)) { NotifyUsers(MaterialId); return; }
         _shell.Document.Undo.Push(new SetMaterialCommand(MaterialId, after));
     }
@@ -288,13 +296,13 @@ public partial class MaterialPropsEditor : VBoxContainer
         _name.Editable = has; _type.Disabled = !has;
         if (m != null)
         {
-            _original = m.Clone();
+            if (!_previewing || _original == null || _original.Id != m.Id) { _original = m.Clone(); _previewing = false; }
             _name.Text = m.Name; _type.Selected = (int)m.Type;
             if (_built != (m.Id, m.Type)) { Build(m); _built = (m.Id, m.Type); }
             foreach (var u in _updaters.Values) u(m);
             _body.Visible = true;
         }
-        else { _original = null; _name.Text = ""; _body.Visible = false; _built = null; }
+        else { _original = null; _previewing = false; _name.Text = ""; _body.Visible = false; _built = null; }
         _updating = false;
     }
 }

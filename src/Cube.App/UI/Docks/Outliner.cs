@@ -140,9 +140,24 @@ public partial class Outliner : Tree
     {
         var it = GetEdited(); if (it == null) return;
         var id = new NodeId(it.GetMetadata(0).AsInt32());
-        var name = it.GetText(0).Trim();
+        var name = SanitizeName(it.GetText(0));
         var node = _doc.Find(id);
         if (node == null || name.Length == 0 || name == node.Name) { if (node != null) it.SetText(0, node.Name); return; }
+        // Maya처럼 다른 노드가 이미 쓰는 이름이면 번호를 붙여 고유하게 만든다(같은 이름이 둘이면 내보낸 씬의 노드 경로·애니메이션 트랙이 엇갈림)
+        if (_doc.Nodes.Values.Any(n => n.Id != id && n.Name == name)) name = _doc.UniqueName(name);
         _doc.Undo.Push(new RenameNodeCommand(_doc, id, name));
+        it.SetText(0, name);
+    }
+
+    /// <summary>
+    /// 이름 정리: 앞뒤 공백을 자르고, 공백과 Godot 노드 이름에 쓸 수 없는 문자(. : @ / " %)를 '_'로 바꾼다
+    /// (그대로 두면 glTF 내보내기에서 Godot이 이름을 바꿔 애니메이션 트랙 경로와 어긋난다).
+    /// </summary>
+    public static string SanitizeName(string raw)
+    {
+        var t = raw.Trim();
+        var sb = new System.Text.StringBuilder(t.Length);
+        foreach (char ch in t) sb.Append(char.IsWhiteSpace(ch) || ".:@/\"%".IndexOf(ch) >= 0 ? '_' : ch);
+        return sb.ToString();
     }
 }

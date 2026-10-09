@@ -268,6 +268,8 @@ public partial class DockManager : Node
     private DockOverlay _overlay = null!;
     /// <summary>PanelId → 등록된 패널(떠 있는 패널 위치 저장·복원용).</summary>
     private readonly Dictionary<string, FloatingPanel> _panels = new();
+    /// <summary>등록된 모든 패널(떠 있거나 붙어 있거나 닫힌 것 모두; 점검용).</summary>
+    public IEnumerable<FloatingPanel> RegisteredPanels => _panels.Values;
     /// <summary>뷰포트 최대화(Ctrl+Space) 중이면 true — 도크를 숨긴다.</summary>
     private bool _maximized;
     /// <summary>패널을 붙이며 도크를 넓힌 기록: 그 패널을 뗄 때 폭이 그대로면 원래 폭으로 되돌린다.</summary>

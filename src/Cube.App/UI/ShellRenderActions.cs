@@ -67,6 +67,8 @@ public partial class Shell
         Settings.Save();
         foreach (var p in Layout.Panels) p.ApplyRenderSettings();
         RenderSettingsWindow?.Rebuild();
+        // Render Settings 창에서 바꾼 값도 셸프 토글(IBL/Glow 등) 표시에 반영
+        RefreshShelf();
     }
 
     /// <summary>Render Settings 패널을 지연 생성하고 DockManager에 등록한다(레이아웃 복원에서도 호출).</summary>
