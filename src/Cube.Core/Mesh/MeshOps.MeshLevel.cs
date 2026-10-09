@@ -275,7 +275,9 @@ public static partial class MeshOps
             MergeVertices(m, near, mergeDist * 2f);
             // 병합된 이음매 정점은 정확히 평면 위로
             foreach (int v in near) if (m.Verts[v].Alive) { var vt = m.Verts[v]; vt.Position -= nrm * D(vt.Position); m.Verts[v] = vt; }
-            result = result.Where(f => f < m.FaceCount && m.Faces[f].Alive).ToList();
+            // 병합이 이음매 면을 다시 만들어 새 슬롯으로 옮기므로, 덧붙인 뒤 생긴 모든 살아 있는 면을 결과로 본다
+            // (전에는 덧붙인 면이 모두 재생성되면 빈 목록 → 호출자가 '변경 없음'으로 보고 결과를 버렸다, v0.0.57)
+            result = Enumerable.Range(before, m.FaceCount - before).Where(f => m.Faces[f].Alive).ToList();
         }
         m.BumpTopology();
         return result;

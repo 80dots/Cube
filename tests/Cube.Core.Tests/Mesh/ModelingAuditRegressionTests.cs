@@ -370,4 +370,16 @@ public class ModelingAuditRegressionTests
         foreach (var p in worldBefore)
             Assert.Contains(worldAfter, q => System.Numerics.Vector3.Distance(q, new System.Numerics.Vector3(-p.X, p.Y, p.Z)) < 1e-4f);
     }
+
+    /// <summary>Mirror 결과 목록은 병합으로 이음매 면이 다시 만들어져도 비지 않는다(전에는 빈 목록 → 앱이 '변경 없음'으로 보고 결과를 버렸다).</summary>
+    [Fact]
+    public void Mirror_ResultNotEmptyWhenSeamFacesAreRebuilt()
+    {
+        var m = MeshBuilder.Plane(1, 1, 1, 1);
+        var r = MeshOps.MirrorGeometry(m, 0, 0.5f, true, false, 0.001f);
+        Assert.NotEmpty(r);
+        Assert.Equal(2, m.AliveFaceCount);
+        Assert.Equal(6, m.AliveVertexCount);
+        AssertSound(m);
+    }
 }
