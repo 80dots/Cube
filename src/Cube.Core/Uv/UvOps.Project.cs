@@ -48,7 +48,7 @@ public static partial class UvOps
         var list = faces.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive).ToList();
         if (list.Count == 0) return 0;
         // 3평면은 축 부호를 무시(앞뒤 면이 같은 투영 방향을 공유)
-        var dirs = AutomaticDirections(planes);
+        var dirs = AutomaticDirections(planes).ToList();
         bool unsigned = planes == 3;
         // 면 → 투영 방향 인덱스. 법선과 내적이 가장 큰 방향
         var assign = new Dictionary<int, int>();
@@ -57,7 +57,20 @@ public static partial class UvOps
             var n = MeshNormals.FaceNormalUnnormalized(m, f);
             if (n.LengthSquared() > 1e-18f) n = Vector3.Normalize(n);
             int best = 0; float bestDot = float.MinValue;
-            for (int i = 0; i < dirs.Length; i++) { float d = Vector3.Dot(n, dirs[i]); if (unsigned) d = MathF.Abs(d); if (d > bestDot) { bestDot = d; best = i; } }
+            for (int i = 0; i < dirs.Count; i++) { float d = Vector3.Dot(n, dirs[i]); if (unsigned) d = MathF.Abs(d); if (d > bestDot) { bestDot = d; best = i; } }
+            // 어느 평면도 이 면을 마주 보지 않으면(5평면의 바닥 등) 투영이 납작해지거나 뒤집히므로,
+            // 절댓값이 가장 큰 평면의 반대 방향을 방향 목록에 더해 그 방향으로 투영한다
+            if (!unsigned && bestDot < 0.3f)
+            {
+                int flip = 0; float flipDot = float.MinValue;
+                for (int i = 0; i < dirs.Count; i++) { float d = -Vector3.Dot(n, dirs[i]); if (d > flipDot) { flipDot = d; flip = i; } }
+                if (flipDot > bestDot)
+                {
+                    var opp = -dirs[flip];
+                    best = dirs.FindIndex(x => Vector3.DistanceSquared(x, opp) < 1e-8f);
+                    if (best < 0) { dirs.Add(opp); best = dirs.Count - 1; }
+                }
+            }
             assign[f] = best;
         }
         // 조건: 같은 방향을 쓰는 이웃이 2개 이상이고 그 방향이 이 면 법선과 0.3 이상 맞을 때만 바꾼다
@@ -181,15 +194,108 @@ public static partial class UvOps
         PlanarProjectBestFit(m, list);
         CreateUvShell(m, list);
         var topo = UvTopology.Build(m);
-        int shell = topo.Points[topo.HeToPoint[m.Faces[list[0]].HalfEdge]].Shell;
-        // 시작 점: 경계에서 UV가 가장 왼쪽 아래인 점
-        var loops = ShellBorderLoops(m, topo, shell);
-        int start = loops.Count > 0 ? loops.OrderByDescending(l => l.Count).First().OrderBy(p => topo.Points[p].Uv.X + topo.Points[p].Uv.Y).First() : -1;
-        // 경계를 정사각형에 붙이고 내부를 이완
-        MapBorder(m, topo, shell, square: true, startPoint: start);
-        Optimize(m, topo, new[] { shell }, iterations);
+        // 경계가 없는 닫힌 영역(큐브 전체 등)은 정사각형에 붙일 테두리가 없으므로 자동 심으로 원반이 되게 먼저 자른다
+        var set = new HashSet<int>(list);
+        var shells = list.Select(f => topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell).Distinct().ToList();
+        if (shells.Any(s => ShellBorderLoops(m, topo, s).Count == 0))
+        {
+            var cut = AutoSeams.Select(m).Where(e => { var (f0, f1) = m.EdgeFaces(e); return f0 >= 0 && f1 >= 0 && set.Contains(f0) && set.Contains(f1); });
+            CutEdges(m, cut);
+            // 잘린 영역마다 연속인 초기 UV를 다시 만든다
+            foreach (var region in AutoSeams.Regions(m, new HashSet<int>(Enumerable.Range(0, m.EdgeCount).Where(e => m.Edges[e].Alive && m.Edges[e].Seam))).Where(r => set.Contains(r[0])))
+            {
+                PlanarProjectBestFit(m, region);
+            }
+            CutEdges(m, cut);
+            topo = UvTopology.Build(m);
+            shells = list.Select(f => topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell).Distinct().ToList();
+        }
+        foreach (int shell in shells)
+        {
+            // 시작 점: 경계에서 UV가 가장 왼쪽 아래인 점
+            var loops = ShellBorderLoops(m, topo, shell);
+            int start = loops.Count > 0 ? loops.OrderByDescending(l => l.Count).First().OrderBy(p => topo.Points[p].Uv.X + topo.Points[p].Uv.Y).First() : -1;
+            // 경계를 정사각형에 붙이고 내부를 이완
+            MapBorder(m, topo, shell, square: true, startPoint: start);
+            // 안쪽은 먼저 Tutte(볼록한 정사각형 경계 → 겹침 없음)로 채우고 Optimize로 이완한다. 이완이 접으면 Tutte 결과로 되돌린다.
+            bool tutte = TutteDiskInit(m, topo, shell, keepBorder: true);
+            var before = new Dictionary<int, Vector2>();
+            foreach (int p in topo.PointsInShell(shell)) before[p] = topo.Points[p].Uv;
+            Optimize(m, topo, new[] { shell }, iterations);
+            if (tutte && FoldedShells(m, topo).Contains(shell))
+                foreach (var (p, uv) in before) SetPointUv(m, topo, p, uv);
+        }
+        if (shells.Count > 1) Layout(m, topo, shells, 0.01f);
     }
 
-    // 참고: 아래 summary는 대응하는 메서드 없이 남아 있는 주석이다(Core에 CreateShellGrid 메서드는 없다).
-    /// <summary>Create Shell (Grid): 선택 면을 셸로 만들고 Contour Stretch처럼 0..1 격자에 펼친다.</summary>
+    /// <summary>
+    /// Create UV Shell (Grid): 선택 면(쿼드)을 하나의 셸로 떼어 내고 쿼드마다 같은 크기의 정사각형 칸이 되도록 격자로 펼친 뒤
+    /// 종횡비를 유지해 0..1에 맞춘다(Maya Create UV Shell (Grid)). 연결 영역마다 따로 펼친다.
+    /// </summary>
+    /// <remarks>
+    /// 영역의 첫 쿼드를 (0,0)-(1,0)-(1,1)-(0,1)에 놓고 공유 엣지를 건너(BFS) 이웃 쿼드를 그 엣지의 바깥쪽 한 칸에 놓는다
+    /// (면 안쪽이 반시계 왼쪽이므로 이웃은 엣지 방향의 왼쪽 법선 쪽). 격자로 맞지 않는 곳(극점·나선)은 먼저 놓인 칸이 우선하고
+    /// 양쪽 코너 UV가 달라지는 엣지는 심이 된다. 쿼드가 아닌 면이 섞인 영역은 <see cref="ContourStretch"/>로 대신한다.
+    /// 영역들은 끝에 <see cref="Layout(PolyMesh, UvTopology, IEnumerable{int}, float)"/>으로 0..1에 나란히 놓는다.
+    /// </remarks>
+    /// <returns>격자로 펼친 영역 수.</returns>
+    public static int CreateShellGrid(PolyMesh m, IEnumerable<int> faces)
+    {
+        var list = faces.Where(f => f >= 0 && f < m.FaceCount && m.Faces[f].Alive).Distinct().ToList();
+        if (list.Count == 0) return 0;
+        var set = new HashSet<int>(list);
+        var visited = new HashSet<int>();
+        int grids = 0;
+        var regions = new List<List<int>>();
+        foreach (int seed in list)
+        {
+            if (visited.Contains(seed)) continue;
+            // 선택 안에서 엣지로 이어진 영역
+            var region = new List<int>(); var stack = new Stack<int>(); stack.Push(seed); visited.Add(seed);
+            while (stack.Count > 0)
+            {
+                int f = stack.Pop(); region.Add(f);
+                foreach (int h in FaceHalfEdges(m, f))
+                {
+                    int tw = m.Hes[h].Twin; if (tw < 0) continue; int g = m.Hes[tw].Face;
+                    if (set.Contains(g) && visited.Add(g)) stack.Push(g);
+                }
+            }
+            regions.Add(region);
+        }
+        foreach (var region in regions)
+        {
+            if (region.Any(f => FaceHalfEdges(m, f).Count() != 4)) { ContourStretch(m, region); continue; }
+            var regionSet = new HashSet<int>(region);
+            var placed = new HashSet<int>();
+            var queue = new Queue<int>();
+            var first = FaceHalfEdges(m, region[0]).ToList();
+            var unit = new[] { new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1) };
+            for (int i = 0; i < 4; i++) SetUv(m, first[i], unit[i]);
+            placed.Add(region[0]); queue.Enqueue(region[0]);
+            while (queue.Count > 0)
+            {
+                int f = queue.Dequeue();
+                foreach (int h in FaceHalfEdges(m, f).ToList())
+                {
+                    int tw = m.Hes[h].Twin; if (tw < 0) continue;
+                    int g = m.Hes[tw].Face;
+                    if (!regionSet.Contains(g) || placed.Contains(g)) continue;
+                    // f의 h: a→b(UV pa, pb). g의 twin: b→a, 그다음 두 코너는 b→a 방향 왼쪽 법선만큼 바깥 칸
+                    var pa = m.Hes[h].Uv0; var pb = m.Hes[m.Hes[h].Next].Uv0;
+                    var d = pa - pb; var left = new Vector2(-d.Y, d.X);
+                    int c0 = tw, c1 = m.Hes[c0].Next, c2 = m.Hes[c1].Next, c3 = m.Hes[c2].Next;
+                    SetUv(m, c0, pb); SetUv(m, c1, pa); SetUv(m, c2, pa + left); SetUv(m, c3, pb + left);
+                    placed.Add(g); queue.Enqueue(g);
+                }
+            }
+            grids++;
+        }
+        // 선택 둘레와 격자가 어긋난 엣지를 심으로(내부 일치 엣지는 심 해제)
+        MarkSeamsAroundSelection(m, list);
+        var topo = UvTopology.Build(m);
+        var shellIds = new HashSet<int>(); foreach (int f in list) shellIds.Add(topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell);
+        Layout(m, topo, shellIds, 0.01f);
+        return grids;
+    }
 }

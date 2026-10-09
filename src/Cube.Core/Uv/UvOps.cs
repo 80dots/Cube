@@ -365,12 +365,166 @@ public static partial class UvOps
         }
         // 투영이 심을 다시 쓰므로 자동 심을 복원
         for (int e = 0; e < m.EdgeCount; e++) { if (!m.Edges[e].Alive) continue; var ed = m.Edges[e]; ed.Seam = seams.Contains(e); m.Edges[e] = ed; }
+        // 투영이 접히거나(앞/뒷면이 섞임) 스스로 겹친 영역은 Tutte 임베딩(경계를 원에, 안쪽은 이웃 평균)으로 다시 초기화한다 —
+        // 토러스·구·베벨처럼 휘어진 영역의 투영은 겹친 채 남아 Unfold가 풀지 못하지만 Tutte는 겹침 없는 시작점을 보장한다.
+        // (겹침 없이 펼쳐진 평평한 영역의 투영은 왜곡이 없으므로 그대로 둔다)
+        var refold = new List<List<int>>();
+        foreach (var region in AutoSeams.Regions(m, seams))
+        {
+            int pos = 0, neg = 0;
+            foreach (int f in region) { float a = FaceUvSignedArea(m, f); if (a > 1e-12f) pos++; else neg++; }
+            bool folded = pos > 0 && neg > 0 || pos == 0 || OverlappingFaces(m, new HashSet<int>(region)).Count > 0;
+            if (!folded) continue;
+            // 원통 투영의 랩 불연속이 영역 안에 남으면 셸이 갈라지므로 연속인 평면 투영으로 바꾼 뒤 Tutte
+            PlanarProjectBestFit(m, region);
+            refold.Add(region);
+        }
+        if (refold.Count > 0)
+        {
+            for (int e = 0; e < m.EdgeCount; e++) { if (!m.Edges[e].Alive) continue; var ed = m.Edges[e]; ed.Seam = seams.Contains(e); m.Edges[e] = ed; }
+            var t0 = UvTopology.Build(m);
+            foreach (var region in refold) TutteDiskInit(m, t0, t0.Points[t0.HeToPoint[m.Faces[region[0]].HalfEdge]].Shell);
+        }
         // 심이 반영된 셸 구조로 이완 후 다시 구조를 만들어 패킹
         var topo = UvTopology.Build(m);
+        var before = new Vector2[m.HalfEdgeCount];
+        for (int h = 0; h < m.HalfEdgeCount; h++) before[h] = m.Hes[h].Uv0;
+        var foldedBefore = FoldedShells(m, topo);
         UnfoldRelax(m, topo, Enumerable.Range(0, topo.ShellCount), unfoldIterations);
+        // Unfold가 새로 접거나 겹치게 만든 셸(심하게 휜 원반)은 겹침 없는 초기 배치로 되돌린다
+        topo = UvTopology.Build(m);
+        foreach (int s in FoldedShells(m, topo))
+        {
+            if (foldedBefore.Contains(s)) continue;
+            foreach (int p in topo.PointsInShell(s)) foreach (int h in topo.Points[p].HalfEdges) SetUv(m, h, before[h]);
+        }
         topo = UvTopology.Build(m);
         Layout(m, topo, Enumerable.Range(0, topo.ShellCount));
         return seams.Count;
+    }
+
+    /// <summary>앞/뒷면 UV가 섞였거나(접힘) 같은 셸 안에서 면끼리 겹치는 셸 번호들.</summary>
+    internal static HashSet<int> FoldedShells(PolyMesh m, UvTopology topo)
+    {
+        var shellFaces = new Dictionary<int, HashSet<int>>();
+        for (int f = 0; f < m.FaceCount; f++)
+        {
+            if (!m.Faces[f].Alive) continue;
+            int s = topo.Points[topo.HeToPoint[m.Faces[f].HalfEdge]].Shell;
+            if (!shellFaces.TryGetValue(s, out var fs)) shellFaces[s] = fs = new HashSet<int>();
+            fs.Add(f);
+        }
+        var result = new HashSet<int>();
+        foreach (var (s, fs) in shellFaces)
+        {
+            int pos = 0, neg = 0;
+            foreach (int f in fs) { float a = FaceUvSignedArea(m, f); if (a > 1e-12f) pos++; else if (a < -1e-12f) neg++; }
+            if (pos > 0 && neg > 0 || OverlappingFaces(m, fs).Count > 0) result.Add(s);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Tutte 임베딩 초기화: 원반 위상(경계 루프 1개, 오일러 특성 1)인 셸의 경계 UV 점을 원 둘레에 3D 호 길이 비례로 놓고
+    /// 안쪽 점을 이웃(UV 엣지로 이어진 점) 평균 위치로 푼다(균일 가중 라플라스 방정식, 켤레 기울기법).
+    /// 볼록 경계 + 양의 가중이면 뒤집히거나 겹치는 면이 없는 배치가 보장된다(Tutte 정리). 원반이 아니면 아무것도 하지 않는다.
+    /// </summary>
+    /// <param name="keepBorder">true면 경계 점을 지금 UV 그대로 두고(Map Border 결과 등) 안쪽만 푼다.</param>
+    /// <returns>초기화했으면 true.</returns>
+    public static bool TutteDiskInit(PolyMesh m, UvTopology topo, int shell, bool keepBorder = false)
+    {
+        var loops = ShellBorderLoops(m, topo, shell);
+        if (loops.Count != 1) return false;
+        var loop = loops[0];
+        // 셸의 UV 점·UV 엣지(점 쌍)·면 수로 오일러 특성 확인
+        var inShell = new HashSet<int>(topo.PointsInShell(shell));
+        var adj = new Dictionary<int, HashSet<int>>();
+        int faces = 0;
+        for (int f = 0; f < m.FaceCount; f++)
+        {
+            if (!m.Faces[f].Alive || !inShell.Contains(topo.HeToPoint[m.Faces[f].HalfEdge])) continue;
+            faces++;
+            foreach (int he in FaceHalfEdges(m, f))
+            {
+                int a = topo.HeToPoint[he], b = topo.HeToPoint[m.Hes[he].Next];
+                if (a == b) continue;
+                if (!adj.TryGetValue(a, out var la)) adj[a] = la = new HashSet<int>(); la.Add(b);
+                if (!adj.TryGetValue(b, out var lb)) adj[b] = lb = new HashSet<int>(); lb.Add(a);
+            }
+        }
+        int uvEdges = adj.Values.Sum(s => s.Count) / 2;
+        if (inShell.Count - uvEdges + faces != 1 || loop.Count < 3) return false;
+        // 경계: 3D 호 길이 비례로 원 둘레(반시계 = 셸 안쪽이 왼쪽)에 배치
+        int n = loop.Count;
+        var len = new float[n]; float total = 0;
+        for (int i = 0; i < n; i++)
+        {
+            len[i] = MathF.Max(Vector3.Distance(m.Verts[topo.Points[loop[i]].Vertex].Position, m.Verts[topo.Points[loop[(i + 1) % n]].Vertex].Position), 1e-6f);
+            total += len[i];
+        }
+        var uv = new Dictionary<int, Vector2>();
+        float acc = 0;
+        for (int i = 0; i < n; i++)
+        {
+            float t = acc / total * MathF.Tau; acc += len[i];
+            uv[loop[i]] = keepBorder ? topo.Points[loop[i]].Uv : new Vector2(0.5f + 0.5f * MathF.Cos(t), 0.5f + 0.5f * MathF.Sin(t));
+        }
+        // 안쪽 점: 차수·x = 이웃 합(경계 이웃은 우변으로) — 대칭 양의 정부호이므로 켤레 기울기법
+        var interior = inShell.Where(p => !uv.ContainsKey(p)).ToList();
+        if (interior.Count > 0)
+        {
+            var index = new Dictionary<int, int>(); for (int i = 0; i < interior.Count; i++) index[interior[i]] = i;
+            int k = interior.Count;
+            var rhs = new Vector2[k];
+            var nbr = new List<int>[k]; var deg = new float[k];
+            for (int i = 0; i < k; i++)
+            {
+                nbr[i] = new List<int>();
+                if (!adj.TryGetValue(interior[i], out var ns)) { deg[i] = 1; continue; }
+                deg[i] = ns.Count;
+                foreach (int q in ns) { if (uv.TryGetValue(q, out var b)) rhs[i] += b; else nbr[i].Add(index[q]); }
+            }
+            var xs = new Vector2[k]; for (int i = 0; i < k; i++) xs[i] = new Vector2(0.5f, 0.5f);
+            SolveLaplacian(deg, nbr.Select(l => l.Select(j => (j, 1f)).ToArray()).ToArray(), rhs, xs, 4 * k + 50);
+            for (int i = 0; i < k; i++) uv[interior[i]] = xs[i];
+        }
+        foreach (var (pt, val) in uv) SetPointUv(m, topo, pt, val);
+        return true;
+    }
+
+    /// <summary>
+    /// 대칭 양의 정부호 희소 시스템 (diag_i·x_i − Σ w_ij·x_j = rhs_i)을 켤레 기울기법으로 푼다(x와 y 성분을 따로, x는 시작값이자 결과).
+    /// Tutte 초기화와 Unfold(ARAP) 글로벌 단계가 쓴다.
+    /// </summary>
+    /// <param name="diag">대각 성분.</param>
+    /// <param name="off">행마다 (열, 가중치) — 행렬 성분은 −가중치.</param>
+    /// <param name="rhs">우변.</param>
+    /// <param name="x">시작값(결과를 덮어씀).</param>
+    /// <param name="maxIter">최대 반복 횟수.</param>
+    internal static void SolveLaplacian(float[] diag, (int j, float w)[][] off, Vector2[] rhs, Vector2[] x, int maxIter)
+    {
+        int k = x.Length;
+        Vector2[] Mul(Vector2[] v) { var y = new Vector2[k]; for (int i = 0; i < k; i++) { var s = v[i] * diag[i]; foreach (var (j, w) in off[i]) s -= v[j] * w; y[i] = s; } return y; }
+        var r = Mul(x); for (int i = 0; i < k; i++) r[i] = rhs[i] - r[i];
+        var p = (Vector2[])r.Clone();
+        double rrX = 0, rrY = 0; foreach (var v in r) { rrX += v.X * (double)v.X; rrY += v.Y * (double)v.Y; }
+        double stop = 1e-14 * Math.Max(1, k);
+        for (int it = 0; it < maxIter && (rrX > stop || rrY > stop); it++)
+        {
+            var ap = Mul(p);
+            double pApX = 0, pApY = 0; for (int i = 0; i < k; i++) { pApX += p[i].X * (double)ap[i].X; pApY += p[i].Y * (double)ap[i].Y; }
+            float ax = pApX > 1e-30 ? (float)(rrX / pApX) : 0, ay = pApY > 1e-30 ? (float)(rrY / pApY) : 0;
+            double nX = 0, nY = 0;
+            for (int i = 0; i < k; i++)
+            {
+                x[i] += new Vector2(ax * p[i].X, ay * p[i].Y);
+                r[i] -= new Vector2(ax * ap[i].X, ay * ap[i].Y);
+                nX += r[i].X * (double)r[i].X; nY += r[i].Y * (double)r[i].Y;
+            }
+            float bx = rrX > 1e-30 ? (float)(nX / rrX) : 0, by = rrY > 1e-30 ? (float)(nY / rrY) : 0;
+            for (int i = 0; i < k; i++) p[i] = r[i] + new Vector2(bx * p[i].X, by * p[i].Y);
+            rrX = nX; rrY = nY;
+        }
     }
 
     /// <summary>Cut UV Edges: 선택 엣지를 심으로 만든다.</summary>
@@ -441,7 +595,7 @@ public static partial class UvOps
 
     /// <summary>
     /// Unfold(이완): 셸마다 각 삼각형이 3D 모양(프로크루스테스 맞춤)을 따르도록 반복해서 UV 점을 당긴다.
-    /// 초기값은 현재 UV. 저폴리용 단순 ARAP 근사.
+    /// 초기값은 현재 UV. 로컬/글로벌 교대 ARAP(균일 가중).
     /// </summary>
     /// <remarks>핀 집합 없이 호출하는 오버로드. UvPoint.Pinned만 고정된다.</remarks>
     public static void UnfoldRelax(PolyMesh m, UvTopology topo, IEnumerable<int> shells, int iterations = 60) => UnfoldRelax(m, topo, shells, iterations, null);
@@ -451,8 +605,9 @@ public static partial class UvOps
     /// 알고리즘(로컬/글로벌 교대 ARAP의 단순화):
     /// 1) 셸에 속한 렌더 삼각형마다 3D 모양을 자기 평면 2D로 펼친 로컬 좌표(a=(0,0), b=(|ab|,0), c)를 만든다.
     /// 2) 3D 넓이와 현재 UV 넓이 비로 스케일을 정해 전체 크기를 유지한다.
-    /// 3) 반복마다 각 삼각형에 대해 현재 UV 삼각형에 로컬 삼각형을 최적 회전(2D 프로크루스테스: atan2(Σ l×q, Σ l·q))으로 맞춘 목표 위치를 계산하고,
-    ///    점마다 모든 목표의 평균으로 옮긴다(핀 점은 고정).
+    /// 3) 반복마다 로컬 단계에서 각 삼각형에 최적 회전(2D 프로크루스테스: atan2(Σ l×q, Σ l·q))을 구하고,
+    ///    글로벌 단계에서 Σ_변 |(u_i − u_j) − R(l_i − l_j)|²를 최소화하는 라플라스 방정식을 켤레 기울기법으로 푼다(핀 점은 고정,
+    ///    핀이 없는 셸은 점 하나를 고정). 셸 전체가 거울상(부호 넓이 음수)이면 로컬 삼각형도 뒤집어 맞춘다.
     /// 4) 결과를 셸 내 점에만 기록한다.
     /// </remarks>
     /// <param name="pinned">추가로 고정할 UV 점 ID(Optimize가 경계 고정에 사용). null 가능.</param>
@@ -481,6 +636,19 @@ public static partial class UvOps
         if (tris.Count == 0) return;
         // 점별 작업 위치(전체 점 배열; 셸 밖 점은 건드리지 않음)
         var pos = topo.Points.Select(p => p.Uv).ToArray();
+        // 거울상(부호 넓이 음수) 셸은 로컬 삼각형도 뒤집어 맞춘다 — 회전만으로는 반사를 맞출 수 없어 셸이 접히거나 무너진다
+        var shellArea = new Dictionary<int, float>();
+        foreach (var (pts, _) in tris)
+        {
+            int s = topo.Points[pts[0]].Shell;
+            shellArea[s] = shellArea.GetValueOrDefault(s) + Cross(pos[pts[1]] - pos[pts[0]], pos[pts[2]] - pos[pts[0]]);
+        }
+        for (int i = 0; i < tris.Count; i++)
+        {
+            if (shellArea[topo.Points[tris[i].pts[0]].Shell] >= 0) continue;
+            var l = tris[i].local;
+            for (int c = 0; c < 3; c++) l[c] = new Vector2(l[c].X, -l[c].Y);
+        }
         // 스케일 정규화: 현재 UV 면적과 3D 면적 비율
         float uvArea = 0, area3 = 0;
         foreach (var (pts, local) in tris)
@@ -489,14 +657,40 @@ public static partial class UvOps
             area3 += MathF.Abs(Cross(local[1] - local[0], local[2] - local[0]));
         }
         float scale = uvArea > 1e-12f && area3 > 1e-12f ? MathF.Sqrt(uvArea / area3) : 1f;
-        // acc/cnt: 반복마다 점별 목표 위치 합과 개수
-        var acc = new Vector2[pos.Length]; var cnt = new int[pos.Length];
-        for (int it = 0; it < iterations; it++)
+        // 글로벌 단계 행렬(균일 가중 ARAP): 삼각형 변 (i, j)마다 A_ii += 1, A_ij −= 1. 고정점은 우변으로 옮긴다.
+        // 고정점이 없는 셸은 첫 점 하나를 현재 위치에 고정해 평행 이동 자유도를 없앤다(셸 위치는 Layout이 다시 정한다).
+        var fixedPts = new HashSet<int>();
+        var shellHasPin = new HashSet<int>();
+        foreach (var (pts, _) in tris) foreach (int p in pts) if (IsPinned(p)) { fixedPts.Add(p); shellHasPin.Add(topo.Points[p].Shell); }
+        foreach (var (pts, _) in tris)
         {
-            Array.Clear(acc); Array.Clear(cnt);
-            foreach (var (pts, local) in tris)
+            int s = topo.Points[pts[0]].Shell;
+            if (shellHasPin.Add(s)) fixedPts.Add(pts[0]);
+        }
+        var index = new Dictionary<int, int>();
+        var free = new List<int>();
+        foreach (var (pts, _) in tris) foreach (int p in pts) if (!fixedPts.Contains(p) && !index.ContainsKey(p)) { index[p] = free.Count; free.Add(p); }
+        int k = free.Count;
+        var diag = new float[k];
+        var off = new Dictionary<int, float>[k];
+        for (int i = 0; i < k; i++) off[i] = new Dictionary<int, float>();
+        foreach (var (pts, _) in tris)
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++)
+                {
+                    if (a == b || !index.TryGetValue(pts[a], out int ia)) continue;
+                    diag[ia] += 1;
+                    if (index.TryGetValue(pts[b], out int ib)) off[ia][ib] = off[ia].GetValueOrDefault(ib) + 1;
+                }
+        var offList = off.Select(d => d.Select(kv => (kv.Key, kv.Value)).ToArray()).ToArray();
+        var rhs = new Vector2[k]; var x = new Vector2[k];
+        var rot = new (float cs, float sn)[tris.Count];
+        for (int it = 0; it < iterations && k > 0; it++)
+        {
+            // 로컬 단계: 삼각형마다 현재 UV에 가장 잘 맞는 회전(2D 프로크루스테스)
+            for (int t = 0; t < tris.Count; t++)
             {
-                // 현재 UV 삼각형에 로컬 삼각형을 강체(회전+이동, 스케일 고정)로 맞춘다
+                var (pts, local) = tris[t];
                 var cu = (pos[pts[0]] + pos[pts[1]] + pos[pts[2]]) / 3f;
                 var cl = (local[0] + local[1] + local[2]) / 3f;
                 float sxx = 0, sxy = 0;
@@ -506,16 +700,45 @@ public static partial class UvOps
                     sxx += l.X * q.X + l.Y * q.Y; sxy += l.X * q.Y - l.Y * q.X;
                 }
                 float ang = MathF.Atan2(sxy, sxx);
-                float cs = MathF.Cos(ang), sn = MathF.Sin(ang);
-                for (int i = 0; i < 3; i++)
+                rot[t] = (MathF.Cos(ang), MathF.Sin(ang));
+            }
+            // 글로벌 단계: Σ_변 |(u_i − u_j) − R(l_i − l_j)|² 최소화 → 라플라스 방정식(켤레 기울기법, 현재 위치에서 시작)
+            Array.Clear(rhs);
+            for (int t = 0; t < tris.Count; t++)
+            {
+                var (pts, local) = tris[t]; var (cs, sn) = rot[t];
+                for (int a = 0; a < 3; a++)
                 {
-                    var l = (local[i] - cl) * scale;
-                    var target = cu + new Vector2(l.X * cs - l.Y * sn, l.X * sn + l.Y * cs);
-                    acc[pts[i]] += target; cnt[pts[i]]++;
+                    if (!index.TryGetValue(pts[a], out int ia)) continue;
+                    for (int b = 0; b < 3; b++)
+                    {
+                        if (a == b) continue;
+                        var l = (local[a] - local[b]) * scale;
+                        rhs[ia] += new Vector2(l.X * cs - l.Y * sn, l.X * sn + l.Y * cs);
+                        if (!index.ContainsKey(pts[b])) rhs[ia] += pos[pts[b]];
+                    }
                 }
             }
-            // 글로벌 단계: 목표 평균으로 이동(고정점 제외)
-            for (int i = 0; i < pos.Length; i++) if (cnt[i] > 0 && !IsPinned(i)) pos[i] = acc[i] / cnt[i];
+            for (int i = 0; i < k; i++) x[i] = pos[free[i]];
+            SolveLaplacian(diag, offList, rhs, x, 60);
+            for (int i = 0; i < k; i++) pos[free[i]] = x[i];
+        }
+        // 핀이 없는 셸은 결과를 처음 UV에 가장 잘 맞게 강체 정렬(회전+이동)해 셸이 제자리·원래 방향을 유지하게 한다
+        // (고정한 점 하나는 임의로 고른 것이라 ARAP 해가 그 점을 중심으로 돌아가 있을 수 있다)
+        var userPinnedShells = new HashSet<int>();
+        foreach (var (pts, _) in tris) foreach (int p in pts) if (IsPinned(p)) userPinnedShells.Add(topo.Points[p].Shell);
+        var shellPts = new Dictionary<int, HashSet<int>>();
+        foreach (var (pts, _) in tris) foreach (int p in pts) { int s = topo.Points[p].Shell; if (!shellPts.TryGetValue(s, out var l)) shellPts[s] = l = new HashSet<int>(); l.Add(p); }
+        foreach (var (s, ps) in shellPts)
+        {
+            if (userPinnedShells.Contains(s)) continue;
+            var c0 = Vector2.Zero; var c1 = Vector2.Zero;
+            foreach (int p in ps) { c0 += topo.Points[p].Uv; c1 += pos[p]; }
+            c0 /= ps.Count; c1 /= ps.Count;
+            float sDot = 0, sCross = 0;
+            foreach (int p in ps) { var f = pos[p] - c1; var o = topo.Points[p].Uv - c0; sDot += Vector2.Dot(f, o); sCross += Cross(f, o); }
+            float ang = MathF.Atan2(sCross, sDot); float cs = MathF.Cos(ang), sn = MathF.Sin(ang);
+            foreach (int p in ps) { var f = pos[p] - c1; pos[p] = c0 + new Vector2(f.X * cs - f.Y * sn, f.X * sn + f.Y * cs); }
         }
         // 대상 셸 점만 메시에 반영
         for (int i = 0; i < pos.Length; i++) if (shellSet.Contains(topo.Points[i].Shell) && !IsPinned(i)) SetPointUv(m, topo, i, pos[i]);
@@ -531,7 +754,7 @@ public static partial class UvOps
     /// <remarks>
     /// 1) rotateToFit이면 세로가 긴 셸을 −90° 돌려 눕힌다.
     /// 2) 셸마다 UV 경계 상자를 구하고 (간격 포함) 전체 넓이로 첫 스케일 √(0.85/넓이)를 추정한다.
-    /// 3) 높이 내림차순으로 정렬해 왼쪽→오른쪽 행을 채우고 넘치면 다음 행(선반 패킹). 0..1을 넘으면 스케일 ×0.9로 최대 12번 재시도.
+    /// 3) 높이 내림차순으로 정렬해 왼쪽→오른쪽 행을 채우고 넘치면 다음 행(선반 패킹). 0..1을 넘으면 스케일 ×0.9로 최대 80번 재시도(시작 스케일은 가장 큰 셸이 타일에 들어가는 값 이하).
     /// 4) 배치 위치 + (점 − 셸 min)·scale 을 타일 원점/크기로 옮겨 기록한다. 셸 안 모양은 균일 스케일만 되므로 상대 비율이 유지된다.
     /// </remarks>
     public static void Layout(PolyMesh m, UvTopology topo, IEnumerable<int> shells, float spacing, bool rotateToFit, Vector2 tileOrigin, float tileSize)
@@ -558,9 +781,14 @@ public static partial class UvOps
         // 전체 면적으로 스케일 추정 후 높이 내림차순 선반 패킹; 안 들어가면 스케일을 줄여 재시도
         float total = boxes.Sum(b => (b.size.X + spacing) * (b.size.Y + spacing));
         float scale = total > 0 ? MathF.Sqrt(0.85f / total) : 1f;
+        // 가장 긴 셸 하나가 타일 폭/높이를 넘지 않도록 시작 스케일을 제한(가늘고 긴 셸은 넓이 추정만으로는 12번 줄여도 안 들어갔다)
+        float maxW = boxes.Count > 0 ? boxes.Max(b => b.size.X) : 0, maxH = boxes.Count > 0 ? boxes.Max(b => b.size.Y) : 0;
+        float room = MathF.Max(1f - 2f * spacing, 1e-3f);
+        if (maxW > 0) scale = MathF.Min(scale, room / maxW);
+        if (maxH > 0) scale = MathF.Min(scale, room / maxH);
         boxes.Sort((a, b) => b.size.Y.CompareTo(a.size.Y));
         var placed = new Dictionary<int, Vector2>();
-        for (int attempt = 0; attempt < 12; attempt++)
+        for (int attempt = 0; attempt < 80; attempt++)
         {
             placed.Clear();
             float x = spacing, y = spacing, rowH = 0; bool ok = true;
@@ -575,7 +803,7 @@ public static partial class UvOps
             if (ok) break;
             scale *= 0.9f;
         }
-        // 배치된 셸의 점을 최종 위치로 이동(12번 재시도 후에도 못 넣은 셸은 그대로)
+        // 배치된 셸의 점을 최종 위치로 이동(80번 재시도 후에도 못 넣은 셸은 그대로)
         foreach (var (shell, min, _) in boxes)
         {
             if (!placed.TryGetValue(shell, out var origin)) continue;

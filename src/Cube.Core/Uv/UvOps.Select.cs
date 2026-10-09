@@ -26,7 +26,10 @@ public static partial class UvOps
     /// 3) 버킷 안 면 쌍만 경계 상자 → 이미 검사한 쌍 → <see cref="PolygonsOverlap"/> 순으로 검사한다.
     /// 공유 변·점은 엄격 판정이 무시하므로 인접 면은 자연스럽게 겹침에서 빠진다.
     /// </remarks>
-    public static List<int> OverlappingFaces(PolyMesh m)
+    public static List<int> OverlappingFaces(PolyMesh m) => OverlappingFaces(m, null);
+
+    /// <summary>면 부분 집합(null = 전체) 안에서만 서로 겹치는 면을 찾는다(Auto Wrap의 셸 자기 겹침 검사).</summary>
+    public static List<int> OverlappingFaces(PolyMesh m, HashSet<int>? subset)
     {
         // (면 ID, UV 다각형, 경계 min/max)
         var faces = new List<(int f, Vector2[] poly, Vector2 min, Vector2 max)>();
@@ -35,7 +38,7 @@ public static partial class UvOps
         double sumW = 0, sumH = 0;
         for (int f = 0; f < m.FaceCount; f++)
         {
-            if (!m.Faces[f].Alive) continue;
+            if (!m.Faces[f].Alive || (subset != null && !subset.Contains(f))) continue;
             m.GetFaceHalfEdges(f, hes);
             var poly = new Vector2[hes.Count];
             for (int i = 0; i < hes.Count; i++) poly[i] = m.Hes[hes[i]].Uv0;

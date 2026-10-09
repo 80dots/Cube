@@ -87,7 +87,53 @@ public static class AutoSeams
             // 이번 패스에서 아무것도 자르지 않았으면 모든 영역이 원반이거나 더 할 수 있는 것이 없다
             if (!changed) break;
         }
+        // 3) 아직 손잡이가 남은 영역(토러스 등, χ < 1)은 경로 자르기로는 원반이 되지 않으므로 트리-코트리 절단 그래프를 더한다
+        foreach (var region in Regions(m, seams))
+        {
+            var (verts, edges, boundaryEdges) = RegionStats(m, region, seams);
+            if (verts.Count - edges.Count + region.Count < 1) seams.UnionWith(CutGraph(m, region, edges, boundaryEdges));
+        }
         return seams;
+    }
+
+    /// <summary>
+    /// 트리-코트리 절단 그래프: 영역을 원반으로 만드는 내부 엣지 집합.
+    /// 면 쌍대 그래프의 최대 신장 트리(긴 엣지를 트리에 남겨 짧은 엣지를 자름)에 들지 않은 내부 엣지와 영역 경계로 그래프를 만들고,
+    /// 차수 1인 정점에 매달린 내부 엣지를 반복해서 떼어 내면(가지치기) 손잡이를 끊는 고리와 경계로 가는 경로만 남는다.
+    /// </summary>
+    private static List<int> CutGraph(PolyMesh m, List<int> region, HashSet<int> edges, HashSet<int> boundaryEdges)
+    {
+        var set = new HashSet<int>(region);
+        // 영역 안 내부 엣지(양쪽 면이 영역 안, 경계 아님)를 길이 내림차순으로 크루스칼
+        var interior = edges.Where(e => !boundaryEdges.Contains(e)).ToList();
+        float Len(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
+        interior.Sort((x, y) => Len(y).CompareTo(Len(x)));
+        var parent = new Dictionary<int, int>(); foreach (int f in region) parent[f] = f;
+        int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+        var cut = new HashSet<int>();
+        foreach (int e in interior)
+        {
+            var (f0, f1) = m.EdgeFaces(e);
+            if (f0 < 0 || f1 < 0 || !set.Contains(f0) || !set.Contains(f1)) continue;
+            int a = Find(f0), b = Find(f1);
+            if (a != b) parent[a] = b; else cut.Add(e);
+        }
+        // 가지치기: (절단 후보 ∪ 경계) 그래프에서 차수 1 정점에 닿은 절단 후보를 반복 제거
+        var deg = new Dictionary<int, int>();
+        void Inc(int v, int d) => deg[v] = deg.GetValueOrDefault(v) + d;
+        foreach (int e in cut.Concat(boundaryEdges)) { var (a, b) = m.EdgeVertices(e); Inc(a, 1); Inc(b, 1); }
+        bool removed = true;
+        while (removed)
+        {
+            removed = false;
+            foreach (int e in cut.ToList())
+            {
+                var (a, b) = m.EdgeVertices(e);
+                if (deg[a] > 1 && deg[b] > 1) continue;
+                cut.Remove(e); Inc(a, -1); Inc(b, -1); removed = true;
+            }
+        }
+        return cut.ToList();
     }
 
     /// <summary>심/경계로 나뉜 면 연결 영역.</summary>
