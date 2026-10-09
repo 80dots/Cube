@@ -22,7 +22,13 @@ public partial class ViewportOverlay : Control
     /// <summary>페인트 브러시 원(중심 픽셀, 반지름 픽셀).</summary>
     public (Vector2 center, float radiusPx)? Brush;
     /// <summary>Create Polygon Tool 미리보기(화면 점 목록).</summary>
-    public List<Vector2>? Polyline;
+    public List<Vector2>? Polyline { get => _polyline; set { _polyline = value; PolylineSource = null; } }
+    private List<Vector2>? _polyline;
+    /// <summary>
+    /// 월드 점을 매 프레임 화면에 다시 투영해 <see cref="Polyline"/>을 만드는 함수(v0.0.54). 툴이 점을 찍은 뒤 뷰를 돌려도
+    /// 선이 화면에 고정되지 않고 모델을 따라간다(Multi-Cut/Create Polygon/Append Polygon). <see cref="Polyline"/>을 직접 설정하면 해제된다.
+    /// </summary>
+    public Func<List<Vector2>?>? PolylineSource;
     /// <summary>좌상단 Poly Count HUD 수치(Shell이 갱신). null이면 그리지 않는다.</summary>
     public PolyCount? Stats;
 
@@ -124,7 +130,8 @@ public partial class ViewportOverlay : Control
             DrawCircle(br.center, 2 * s, new Color(1f, 0.35f, 0.35f, 0.9f));
         }
         // Create Polygon Tool: 찍은 점을 잇는 선, 3점 이상이면 닫는 선(반투명), 각 점에 원
-        if (Polyline is { Count: > 0 } pl)
+        if (PolylineSource != null) _polyline = PolylineSource();
+        if (_polyline is { Count: > 0 } pl)
         {
             for (int i = 0; i + 1 < pl.Count; i++) DrawLine(pl[i], pl[i + 1], MathConvert.Rgb(0xffe034), 1.5f * s, true);
             if (pl.Count > 2) DrawLine(pl[^1], pl[0], new Color(1f, 0.88f, 0.2f, 0.4f), 1f * s, true);

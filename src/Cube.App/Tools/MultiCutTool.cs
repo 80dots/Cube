@@ -191,14 +191,22 @@ public sealed class MultiCutTool : SelectTool
     {
         if (Ctx == null) return;
         var overlay = Ctx.Viewport.Overlay;
-        var pts = new List<Godot.Vector2>();
-        if (_slicing) { pts.Add(new Godot.Vector2(_sliceStart.X, _sliceStart.Y)); pts.Add(new Godot.Vector2(_sliceEnd.X, _sliceEnd.Y)); }
-        else
+        if (_slicing)
         {
-            var proj = Picker.Projection();
-            foreach (var p in _chainWorld) { var sp = proj.Project(p, out _); if (sp != null) pts.Add(new Godot.Vector2(sp.Value.X, sp.Value.Y)); }
+            // 슬라이스 선은 화면 공간 그대로
+            overlay.Polyline = new List<Godot.Vector2> { new(_sliceStart.X, _sliceStart.Y), new(_sliceEnd.X, _sliceEnd.Y) };
+            return;
         }
-        overlay.Polyline = pts.Count > 0 ? pts : null;
+        if (_chainWorld.Count == 0) { overlay.Polyline = null; return; }
+        // 체인 점은 월드 좌표 → 매 프레임 그 패널의 카메라로 다시 투영(뷰를 돌려도 자른 위치를 따라감)
+        var picker = Picker;
+        overlay.PolylineSource = () =>
+        {
+            var proj = picker.Projection();
+            var pts = new List<Godot.Vector2>(_chainWorld.Count);
+            foreach (var p in _chainWorld) { var sp = proj.Project(p, out _); if (sp != null) pts.Add(new Godot.Vector2(sp.Value.X, sp.Value.Y)); }
+            return pts.Count > 0 ? pts : null;
+        };
     }
 
     /// <summary>모든 패널의 오버레이 폴리라인을 지운다.</summary>

@@ -101,10 +101,16 @@ public sealed class CreatePolygonTool : ToolBase
     private void UpdateOverlay()
     {
         var overlay = Ctx.Viewport.Overlay;
-        var proj = Ctx.Viewport.Picker.Projection();
-        var pts = new List<Godot.Vector2>();
-        foreach (var p in _points) { var sp = proj.Project(p, out _); if (sp != null) pts.Add(new Godot.Vector2(sp.Value.X, sp.Value.Y)); }
-        overlay.Polyline = pts.Count > 0 ? pts : null;
+        if (_points.Count == 0) { overlay.Polyline = null; return; }
+        // 매 프레임 그 패널의 카메라로 다시 투영(뷰를 돌려도 찍은 점을 따라감)
+        var picker = Ctx.Viewport.Picker;
+        overlay.PolylineSource = () =>
+        {
+            var proj = picker.Projection();
+            var pts = new List<Godot.Vector2>(_points.Count);
+            foreach (var p in _points) { var sp = proj.Project(p, out _); if (sp != null) pts.Add(new Godot.Vector2(sp.Value.X, sp.Value.Y)); }
+            return pts.Count > 0 ? pts : null;
+        };
     }
 
     /// <summary>모든 패널의 오버레이 폴리라인을 지운다(활성 패널이 바뀌었을 수 있으므로 전부).</summary>

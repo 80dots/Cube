@@ -114,7 +114,15 @@ public sealed class AppendPolygonTool : SelectTool
     private void UpdateOverlay()
     {
         var overlay = Ctx.Viewport.Overlay;
-        var proj = Picker.Projection();
+        if (_node == NodeId.None && _points.Count == 0) { overlay.Polyline = null; return; }
+        // 매 프레임 그 패널의 카메라로 다시 투영(뷰를 돌려도 경계 엣지·찍은 점을 따라감)
+        var picker = Picker;
+        overlay.PolylineSource = () => BuildOverlay(picker.Projection());
+    }
+
+    /// <summary>경계 엣지 두 끝점과 찍은 점들의 화면 투영 목록(없으면 null).</summary>
+    private List<Godot.Vector2>? BuildOverlay(Core.Picking.CameraProjection proj)
+    {
         var pts = new List<Godot.Vector2>();
         var node = Ctx.Doc.Find(_node);
         if (node?.Mesh != null && _edge >= 0 && _edge < node.Mesh.EdgeCount)
@@ -123,6 +131,6 @@ public sealed class AppendPolygonTool : SelectTool
             foreach (int v in new[] { b, a }) { var sp = proj.Project(NVec3.Transform(node.Mesh.Verts[v].Position, node.WorldMatrix), out _); if (sp != null) pts.Add(new Godot.Vector2(sp.Value.X, sp.Value.Y)); }
         }
         foreach (var p in _points) { var sp = proj.Project(p, out _); if (sp != null) pts.Add(new Godot.Vector2(sp.Value.X, sp.Value.Y)); }
-        overlay.Polyline = pts.Count > 0 ? pts : null;
+        return pts.Count > 0 ? pts : null;
     }
 }
