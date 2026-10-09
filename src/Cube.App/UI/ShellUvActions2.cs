@@ -130,17 +130,17 @@ public partial class Shell
         }, HasTargets);
         Actions.Register("uv.cameraBased", "Camera-Based Mapping", () =>
         {
-            // 활성 뷰포트 카메라의 오른쪽/위쪽 벡터(월드)를 노드 로컬 축으로 바꿔 화면 평면에 투영한다.
-            // 방향 벡터는 월드 행렬의 전치로 변환한다(회전 성분의 역 = 전치이므로 월드 방향 → 로컬 방향; 스케일 영향은 정규화로 제거).
+            // 활성 뷰포트 카메라의 오른쪽/위쪽 벡터(월드)로 화면 좌표를 만든다. 로컬 점 p의 월드 화면 좌표 = dot(p·M, r) = dot(p, r·Mᵀ)이므로
+            // 축을 월드 행렬의 전치로 변환해 로컬 위치에 내적한다. 정규화하지 않는다 — 비균등 스케일 오브젝트에서 두 축을 따로 정규화하면
+            // 화면에 보이는 비율과 UV 비율이 달라졌다(균등 스케일은 CameraProject가 0..1로 맞추며 사라진다).
             var proj = Viewport.Picker.Projection();
             var right = proj.Right; var up = NVec3Cross(right, proj.Forward);
             var targets = UvTargetNodes().ToList();
             using (Document.Undo.BeginGroup("Camera-Based Mapping"))
                 foreach (var (node, faces) in targets)
                 {
-                    Matrix4x4.Invert(node.WorldMatrix, out var inv);
-                    var r = System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(right, Matrix4x4.Transpose(node.WorldMatrix)));
-                    var u = System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(up, Matrix4x4.Transpose(node.WorldMatrix)));
+                    var r = System.Numerics.Vector3.TransformNormal(right, Matrix4x4.Transpose(node.WorldMatrix));
+                    var u = System.Numerics.Vector3.TransformNormal(up, Matrix4x4.Transpose(node.WorldMatrix));
                     Document.Undo.Push(new UvEditCommand("Camera-Based", node.Id, m => UvOps.CameraProject(m, faces, r, u)));
                 }
             UvEditorWindow?.Canvas.Invalidate();
