@@ -65,4 +65,43 @@ public class SelectionOpsTests
         var edgesFromVerts = SelectionOps.Convert(m, comps, SelectMode.Vertex, SelectMode.Edge);
         Assert.Equal(4, edgesFromVerts.Count); // 양 끝이 모두 선택된 엣지만
     }
+    /// <summary>
+    /// 엣지 → 면 변환은 엣지 양쪽에 붙은 면만(Maya). 격자 내부 엣지 하나는 면 2개, 경계 엣지는 1개.
+    /// 예전에는 양끝 정점에 닿는 모든 면(6개)이었다.
+    /// </summary>
+    [Fact]
+    public void Convert_EdgeToFace_AdjacentFacesOnly()
+    {
+        var m = MeshBuilder.Plane(3, 3, 3, 3);
+        int inner = -1, border = -1;
+        for (int e = 0; e < m.EdgeCount; e++)
+        {
+            var (f0, f1) = m.EdgeFaces(e);
+            if (f0 >= 0 && f1 >= 0 && inner < 0) inner = e;
+            if ((f0 < 0 || f1 < 0) && border < 0) border = e;
+        }
+        var comps = new ComponentSet();
+        comps.Edges.Add(inner);
+        Assert.Equal(2, SelectionOps.Convert(m, comps, SelectMode.Edge, SelectMode.Face).Count);
+        comps.Edges.Clear(); comps.Edges.Add(border);
+        Assert.Single(SelectionOps.Convert(m, comps, SelectMode.Edge, SelectMode.Face));
+    }
+
+    /// <summary>
+    /// UV 점 Grow/Shrink: 평면(UV 연속) 가운데 UV 점에서 Grow하면 이웃(같은 면의 앞뒤 코너)이 더해지고 Shrink하면 원래대로.
+    /// 심으로 끊긴 큐브에서는 Grow가 심 건너편 UV 점을 더하지 않는다(같은 정점이라도 다른 UV 점).
+    /// </summary>
+    [Fact]
+    public void GrowShrinkUv_FollowsUvNeighbors()
+    {
+        var m = MeshBuilder.Plane(2, 2, 2, 2); // 정점 3x3, 가운데 정점 4
+        var topo = Cube.Core.Uv.UvTopology.Build(m);
+        int center = topo.Points.FindIndex(p => p.Vertex == 4);
+        Assert.True(center >= 0);
+        var set = new HashSet<int> { center };
+        SelectionOps.GrowUv(m, topo, set);
+        Assert.Equal(5, set.Count); // 자신 + 쿼드 엣지 이웃 4
+        SelectionOps.ShrinkUv(m, topo, set);
+        Assert.Equal(new HashSet<int> { center }, set);
+    }
 }

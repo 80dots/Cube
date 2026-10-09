@@ -315,33 +315,58 @@ public partial class ViewportPanel : SubViewportContainer
         CameraController.Frame(total.Value, Aspect);
     }
 
-    /// <summary>A: 모든 메시 노드의 월드 AABB에 카메라를 맞춘다(메시가 없으면 원점 주변 12×12 영역).</summary>
+    /// <summary>A: 보이는 모든 메시·조인트·라이트의 월드 AABB에 카메라를 맞춘다(아무것도 없으면 원점 주변 12×12 영역).</summary>
+    /// <remarks>예전에는 메시만 보아 조인트/라이트만 있는 씬에서 원점 영역을 프레임했고, 숨긴 메시도 포함했다.</remarks>
     public void FrameAll()
     {
         if (_doc == null) return;
         Aabb? total = null;
-        foreach (var n in _doc.MeshNodes())
+        foreach (var n in _doc.Nodes.Values)
         {
-            var aabb = ObjectAabb(n.Id);
+            if (n.IsRoot || n.Shape == null) continue;
+            if (Scene.GetView(n.Id) is not { } v || !v.IsVisibleInTree()) continue;
+            var aabb = ShapeAabb(n.Id);
             if (aabb == null) continue;
             total = total == null ? aabb : total.Value.Merge(aabb.Value);
         }
         CameraController.Frame(total ?? new Aabb(new Vector3(-6, 0, -6), new Vector3(12, 0.01f, 12)), Aspect);
     }
 
-    /// <summary>메시 뷰의 렌더 점(정점)들을 월드로 변환해 감싼 AABB(변형·스킨 표시 위치 반영). 메시가 없거나 비면 null.</summary>
+    /// <summary>
+    /// 오브젝트의 월드 AABB(F 프레임). 메시는 렌더 점(변형·스킨 표시 위치 반영), 조인트·라이트는 월드 위치 한 점,
+    /// 셰이프가 없는 그룹 노드는 자손들의 AABB 합. 대상이 없으면 null.
+    /// </summary>
+    /// <remarks>예전에는 메시만 다뤄 조인트·라이트·그룹을 선택하고 F를 누르면 씬 전체를 프레임했다.</remarks>
     private Aabb? ObjectAabb(NodeId id)
     {
-        var mv = Scene.GetMeshView(id);
-        if (mv == null || mv.Render.PointCount == 0) return null;
-        var xf = mv.GlobalTransform;
+        if (ShapeAabb(id) is { } own) return own;
+        var n = _doc?.Find(id);
+        if (n == null || n.Shape != null) return null;
         Aabb? box = null;
-        for (int i = 0; i < mv.Render.PointCount; i++)
-        {
-            var p = xf * mv.Render.PointPositions[i].ToGodot();
-            box = box == null ? new Aabb(p, Vector3.Zero) : box.Value.Expand(p);
-        }
+        foreach (var d in n.Descendants())
+            if (ShapeAabb(d.Id) is { } b) box = box == null ? b : box.Value.Merge(b);
         return box;
+    }
+
+    /// <summary>노드 자신의 셰이프(메시 렌더 점 / 조인트·라이트 위치)만의 월드 AABB. 셰이프가 없으면 null.</summary>
+    private Aabb? ShapeAabb(NodeId id)
+    {
+        var mv = Scene.GetMeshView(id);
+        if (mv != null)
+        {
+            if (mv.Render.PointCount == 0) return null;
+            var xf = mv.GlobalTransform;
+            Aabb? box = null;
+            for (int i = 0; i < mv.Render.PointCount; i++)
+            {
+                var p = xf * mv.Render.PointPositions[i].ToGodot();
+                box = box == null ? new Aabb(p, Vector3.Zero) : box.Value.Expand(p);
+            }
+            return box;
+        }
+        var n = _doc?.Find(id);
+        if (n != null && (n.IsJoint || n.IsLight) && Scene.GetView(id) is { } v) return new Aabb(v.GlobalPosition, Vector3.Zero);
+        return null;
     }
 
     /// <summary>

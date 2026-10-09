@@ -1,6 +1,7 @@
 using System.Numerics;
 using Cube.Core.Mesh;
 using Cube.Core.Scene;
+using Cube.Core.Selection;
 
 namespace Cube.Core.Commands;
 
@@ -142,18 +143,21 @@ public sealed class EditHistoryCommand : ICommand
             _meshBefore = shape.Mesh.Clone();
             _beforeSnapshots = entries.Skip(_index + 1).Select(e => e.Before).ToList();
             entries[_index].Params = _newParams.Clone();
-            doc.Selection.GetComponents(_node).ClearAll();
+            var keep = TakeSelection(doc);
             HistoryReplay.Rebuild(shape.Mesh, entries, _index);
             _meshAfter = shape.Mesh.Clone();
+            RestoreSelectionIfSameTopology(doc, keep, _meshBefore, shape.Mesh);
         }
         else
         {
             // Redo: 새 파라미터를 다시 넣고 재평가(뒤 항목 Before도 함께 다시 만들어진다).
             entries[_index].Params = _newParams.Clone();
-            doc.Selection.GetComponents(_node).ClearAll();
+            var keep = TakeSelection(doc);
+            var prev = shape.Mesh.Clone();
             shape.Mesh.CopyFrom(_meshAfter);
             // 뒤 항목 Before 재계산(결정적이므로 다시 실행)
             HistoryReplay.Rebuild(shape.Mesh, entries, _index);
+            RestoreSelectionIfSameTopology(doc, keep, prev, shape.Mesh);
         }
         doc.Notify(new DocChange(ChangeKind.MeshTopology, _node));
     }
@@ -165,9 +169,33 @@ public sealed class EditHistoryCommand : ICommand
         var entries = shape.History;
         if (_oldParams != null && _index < entries.Count) entries[_index].Params = _oldParams.Clone();
         if (_beforeSnapshots != null) for (int i = 0; i < _beforeSnapshots.Count && _index + 1 + i < entries.Count; i++) entries[_index + 1 + i].Before = _beforeSnapshots[i];
-        doc.Selection.GetComponents(_node).ClearAll();
+        var keep = TakeSelection(doc);
+        var prev = shape.Mesh.Clone();
         if (_meshBefore != null) shape.Mesh.CopyFrom(_meshBefore);
+        RestoreSelectionIfSameTopology(doc, keep, prev, shape.Mesh);
         doc.Notify(new DocChange(ChangeKind.MeshTopology, _node));
+    }
+
+    /// <summary>이 노드의 컴포넌트 선택을 복사해 두고 비운다(재평가 중 옛 ID를 참조하지 않도록).</summary>
+    private ComponentSet TakeSelection(Document doc)
+    {
+        var comps = doc.Selection.GetComponents(_node);
+        var keep = comps.Clone();
+        comps.ClearAll();
+        return keep;
+    }
+
+    /// <summary>
+    /// 재평가 전후 위상(슬롯 수와 살아 있는 정점·엣지·면 수)이 같으면 비워 둔 컴포넌트 선택을 되살린다.
+    /// 예전에는 이동/회전/스케일처럼 위상이 그대로인 항목의 파라미터만 바꿔도(Properties History, Action Popup) 컴포넌트 선택이 사라졌다.
+    /// </summary>
+    private void RestoreSelectionIfSameTopology(Document doc, ComponentSet keep, PolyMesh? before, PolyMesh after)
+    {
+        if (before == null || keep.IsEmpty) return;
+        if (before.VertexCount != after.VertexCount || before.EdgeCount != after.EdgeCount || before.FaceCount != after.FaceCount
+            || before.AliveVertexCount != after.AliveVertexCount || before.AliveFaceCount != after.AliveFaceCount) return;
+        var comps = doc.Selection.GetComponents(_node);
+        comps.Verts.UnionWith(keep.Verts); comps.Edges.UnionWith(keep.Edges); comps.Faces.UnionWith(keep.Faces); comps.Uvs.UnionWith(keep.Uvs);
     }
 }
 

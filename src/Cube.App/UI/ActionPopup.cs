@@ -137,6 +137,8 @@ public partial class ActionPopup : PanelContainer
         if (id is "edit.undo" or "edit.redo") { Hide(); SnapshotHistoryCounts(); return; } // Undo/Redo는 조정할 작업이 아니다
         var last = _shell.Document.Undo.LastCommand;
         if (inv == null || last == null || ReferenceEquals(last, inv.Value.last)) { SnapshotHistoryCounts(); return; } // 명령을 만들지 않은 액션(모드 전환 등)
+        // 선택 액션(Select All/Grow/Convert 등)은 조정할 파라미터가 없는 선택 변경이다(예전에는 이름만 있는 "Select" 팝업이 떴다)
+        if (last is SelectionCommand) { Hide(); SnapshotHistoryCounts(); return; }
         ShowFor(last, id);
     }
 
@@ -209,8 +211,8 @@ public partial class ActionPopup : PanelContainer
             _kind = Kind.Extrude; _thickness = 0f; _title = "Extrude";
             foreach (ExtrudeFacesCommand e in flat) _extrude.Add((e.NodeIdPublic, e.NewFaces.ToArray()));
         }
-        // ④ 오브젝트 변형: 첫 노드 기준 이동/회전 차이와 스케일 비율.
-        else if (flat.Count == 1 && flat[0] is TransformNodesCommand tn)
+        // ④ 오브젝트 변형: 첫 노드 기준 이동/회전 차이와 스케일 비율. 모든 노드에 같은 델타로 다시 적용할 수 있을 때만(아래 IsUniformTransform)
+        else if (flat.Count == 1 && flat[0] is TransformNodesCommand tn && IsUniformTransform(tn))
         {
             _kind = Kind.Transform; _transform = tn; _tMove = NVec3.Zero; _tRotate = NVec3.Zero; _tScale = NVec3.One;
             if (tn.Ids.Count > 0)
@@ -235,6 +237,28 @@ public partial class ActionPopup : PanelContainer
         }
         Rebuild();
         Visible = true;
+    }
+
+    /// <summary>
+    /// 오브젝트 변형 명령을 "모든 노드에 같은 델타"로 다시 적용해도 원래 결과와 같은지. 피벗이 바뀌었거나(Edit Pivot/Center Pivot),
+    /// 노드마다 이동·회전·스케일 델타가 다르면(여러 오브젝트를 공통 피벗으로 회전/스케일, Ctrl 조인트 드래그의 자식 보정) false →
+    /// 이름만 보여 준다. 예전에는 이런 명령도 값을 바꾸면 첫 노드 델타를 모두에 적용해 피벗 변경이 사라지거나 자식이 엉뚱하게 움직였다.
+    /// </summary>
+    private static bool IsUniformTransform(TransformNodesCommand tn)
+    {
+        if (tn.Ids.Count == 0) return false;
+        static bool Near(NVec3 a, NVec3 b) => NVec3.DistanceSquared(a, b) < 1e-10f;
+        var m0 = tn.After[0].Translation - tn.Before[0].Translation;
+        var r0 = tn.After[0].RotationDegrees - tn.Before[0].RotationDegrees;
+        var s0 = new NVec3(Ratio(tn.After[0].Scale.X, tn.Before[0].Scale.X), Ratio(tn.After[0].Scale.Y, tn.Before[0].Scale.Y), Ratio(tn.After[0].Scale.Z, tn.Before[0].Scale.Z));
+        for (int i = 0; i < tn.Ids.Count; i++)
+        {
+            var b = tn.Before[i]; var a = tn.After[i];
+            if (!Near(a.Pivot, b.Pivot)) return false;
+            if (!Near(a.Translation - b.Translation, m0) || !Near(a.RotationDegrees - b.RotationDegrees, r0)) return false;
+            if (!Near(new NVec3(Ratio(a.Scale.X, b.Scale.X), Ratio(a.Scale.Y, b.Scale.Y), Ratio(a.Scale.Z, b.Scale.Z)), s0)) return false;
+        }
+        return true;
     }
 
     /// <summary>스케일 비율 a/b(b가 0에 가까우면 1).</summary>

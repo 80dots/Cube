@@ -223,7 +223,8 @@ public class MoveTool : TransformToolBase
             bool exclude = ExcludeMovingFromPointSnap;
             var movingVerts = new HashSet<(Core.Scene.NodeId, int)>();
             if (exclude) foreach (var (id, verts, _, _, _) in ComponentTargets) foreach (int v in verts) movingVerts.Add((id, v));
-            var movingNodes = new HashSet<Core.Scene.NodeId>(exclude ? ObjectTargets.Select(t => t.node.Id) : Enumerable.Empty<Core.Scene.NodeId>());
+            // 움직이는 오브젝트와 그 자손(함께 움직이므로 스냅하면 커서를 따라 미끄러짐)은 후보에서 뺀다
+            var movingNodes = new HashSet<Core.Scene.NodeId>(exclude ? ObjectTargets.SelectMany(t => t.node.Descendants().Prepend(t.node)).Select(n => n.Id) : Enumerable.Empty<Core.Scene.NodeId>());
             // 후보 점을 화면으로 투영해 커서와의 거리 제곱이 최소면 채택
             void Consider(NVec3 w)
             {
@@ -232,8 +233,8 @@ public class MoveTool : TransformToolBase
                 float d2 = NVec2.DistanceSquared(p.Value, px);
                 if (d2 < best) { best = d2; target = w; }
             }
-            // 후보 1: 피킹 대상 메시의 모든 살아 있는 정점(월드)
-            foreach (var t in Picker.Targets())
+            // 후보 1: 보이는 모든 메시의 살아 있는 정점(월드). 컴포넌트 모드에서도 다른 오브젝트의 정점에 붙을 수 있게 편집 대상 제한 없이
+            foreach (var t in Picker.Targets(componentFilter: false))
             {
                 if (movingNodes.Contains(t.Id)) continue;
                 var m = t.Mesh;

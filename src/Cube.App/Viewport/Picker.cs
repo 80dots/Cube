@@ -46,15 +46,16 @@ public sealed class Picker
     /// 메시 피킹 대상 목록(노드 ID, 메시, 케이지 렌더 데이터, 월드 행렬)을 만든다. 숨긴 노드는 제외하고,
     /// 컴포넌트 모드에서 편집 대상이 정해져 있으면 그 개체(또는 컴포넌트를 가진 노드)만 넣는다.
     /// </summary>
-    public List<PickTarget> Targets()
+    /// <param name="componentFilter">false면 컴포넌트 편집 대상 제한 없이 보이는 메시 전부(점 스냅 후보 등).</param>
+    public List<PickTarget> Targets(bool componentFilter = true)
     {
         var list = new List<PickTarget>();
         foreach (var (id, mv) in _panel.Scene.MeshViews)
         {
-            if (!mv.Visible || mv.Node.Mesh == null) continue;
+            if (!mv.IsVisibleInTree() || mv.Node.Mesh == null) continue; // 부모 그룹이 숨겨진 메시도 제외(로컬 Visible만 보면 숨은 계층의 메시가 집혔음)
             // 컴포넌트 모드: 편집 대상 개체(하나)만. 대상이 아직 없으면 처음 집을 개체를 고를 수 있게 전부.
             var sel = UI.Shell.Instance?.Document.Selection;
-            if (sel != null && sel.IsComponentMode && sel.ComponentTarget != Core.Scene.NodeId.None && !sel.IsComponentEditable(id)) continue;
+            if (componentFilter && sel != null && sel.IsComponentMode && sel.ComponentTarget != Core.Scene.NodeId.None && !sel.IsComponentEditable(id)) continue;
             list.Add(new PickTarget { Id = id, Mesh = mv.Node.Mesh, Render = mv.Render, World = mv.GlobalTransform.ToNumerics() });
         }
         return list;
@@ -142,7 +143,7 @@ public sealed class Picker
         float best = 12f * Scale; PickHit? hit = null;
         foreach (var (id, lv) in _panel.Scene.LightViews)
         {
-            if (!lv.Visible) continue;
+            if (!lv.IsVisibleInTree()) continue;
             var w = lv.GlobalPosition.ToNumerics();
             var sp = proj.Project(w, out float depth);
             if (sp == null) continue;
@@ -204,7 +205,7 @@ public sealed class Picker
             }
             foreach (var (id, lv) in _panel.Scene.LightViews)
             {
-                if (!lv.Visible) continue;
+                if (!lv.IsVisibleInTree()) continue;
                 var sp = proj.Project(lv.GlobalPosition.ToNumerics(), out _);
                 if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
             }
@@ -234,7 +235,7 @@ public sealed class Picker
             }
             foreach (var (id, lv) in _panel.Scene.LightViews)
             {
-                if (!lv.Visible) continue;
+                if (!lv.IsVisibleInTree()) continue;
                 var sp = proj.Project(lv.GlobalPosition.ToNumerics(), out _);
                 if (sp != null && RayPicker.InsidePolygon(sp.Value, poly)) items.Add(new SelItem(id, -1));
             }

@@ -64,7 +64,7 @@ public partial class JointView : Node3D
     public float Radius => (Node.Joint?.Radius ?? 0.08f) * Math.Clamp(CubeApp.Instance.Settings.JointDisplayScale, 0.01f, 100f);
 
     /// <summary>뷰포트에서 집을 수 있는지(노드가 보이고 Display → Joints가 켜져 있음).</summary>
-    public bool Pickable => Visible && CubeApp.Instance.Settings.ShowJoints;
+    public bool Pickable => IsVisibleInTree() && CubeApp.Instance.Settings.ShowJoints;
 
     // 마지막으로 만든 본의 입력(반지름/표시/자식 끝점). 같으면 메시를 다시 만들지 않는다(재생 중 매 프레임 호출되지만 회전만 하는 리그는 끝점이 그대로)
     /// <summary>마지막으로 만든 표시 반지름(-1 = 아직 없음).</summary>

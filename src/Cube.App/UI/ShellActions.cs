@@ -78,7 +78,7 @@ public partial class Shell
 
         // select.* = 전체 선택/해제, Grow/Shrink, 컴포넌트 변환(To Vertices/Edges/Faces/Boundary/UV/UV Island), 계층 선택.
         // 모두 RecordSelection으로 감싸 선택 변경이 Undo 가능(Maya와 동일).
-        Actions.Register("select.all", "Select All", () => RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); }));
+        Actions.Register("select.all", "Select All", SelectAll);
         Actions.Register("select.none", "Deselect All", () => RecordSelection(s => s.ClearAll()), canExecute: () => !sel.IsEmpty);
         Actions.Register("select.grow", "Grow Selection", () => GrowShrink(true), canExecute: () => sel.IsComponentMode);
         Actions.Register("select.shrink", "Shrink Selection", () => GrowShrink(false), canExecute: () => sel.IsComponentMode);
@@ -245,10 +245,13 @@ public partial class Shell
             {
                 var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
                 var set = s.GetComponents(id).Get(mode);
-                if (grow) SelectionOps.Grow(mesh, mode, set); else SelectionOps.Shrink(mesh, mode, set);
+                // UV 모드는 UV 점 이웃으로(예전에는 SelectionOps.Grow가 UV를 다루지 않아 아무 일도 없었다)
+                if (mode == SelectMode.Uv) { var topo = UvTopology.Build(mesh); if (grow) SelectionOps.GrowUv(mesh, topo, set); else SelectionOps.ShrinkUv(mesh, topo, set); }
+                else if (grow) SelectionOps.Grow(mesh, mode, set); else SelectionOps.Shrink(mesh, mode, set);
             }
         });
         Viewport.Display.RefreshAll();
+        UvEditorWindow?.Canvas.QueueRedraw();
     }
 
     /// <summary>UV 모드 선택은 정점 집합으로 바꾼 ComponentSet을 돌려준다(그 외 모드는 그대로).</summary>
@@ -348,6 +351,33 @@ public partial class Shell
             foreach (var (id, set) in converted) { s.SelectComponents(id, SelectMode.Uv, set, replace: first); first = false; }
         });
         UvEditorWindow?.Canvas.QueueRedraw();
+    }
+
+    /// <summary>
+    /// Select All. 오브젝트 모드 = 모든 노드. 컴포넌트 모드(Maya와 같이) = 편집 대상 개체의 현재 모드 컴포넌트 전부(UV 모드 = 모든 UV 점).
+    /// 컴포넌트 모드인데 편집 대상이 없으면 오브젝트 모드로 바꿔 모든 노드를 선택한다.
+    /// </summary>
+    /// <remarks>예전에는 컴포넌트 모드에서도 오브젝트 모드로 빠져 모든 노드를 선택했다(UV 편집기 파이의 Select All도 같은 액션).</remarks>
+    private void SelectAll()
+    {
+        var doc = Document; var sel = doc.Selection;
+        var target = doc.Find(sel.ComponentTarget);
+        if (sel.IsComponentMode && target?.Mesh != null)
+        {
+            var mesh = target.Mesh; var mode = sel.Mode;
+            IEnumerable<int> ids = mode switch
+            {
+                SelectMode.Vertex => Enumerable.Range(0, mesh.VertexCount).Where(v => mesh.Verts[v].Alive),
+                SelectMode.Edge => Enumerable.Range(0, mesh.EdgeCount).Where(e => mesh.Edges[e].Alive),
+                SelectMode.Face => Enumerable.Range(0, mesh.FaceCount).Where(f => mesh.Faces[f].Alive),
+                _ => Enumerable.Range(0, UvTopology.Build(mesh).Points.Count),
+            };
+            var list = ids.ToList();
+            RecordSelection(s => s.SelectComponents(target.Id, mode, list));
+            UvEditorWindow?.Canvas.QueueRedraw();
+            return;
+        }
+        RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); });
     }
 
     /// <summary>Select Hierarchy: 선택 오브젝트의 모든 자손을 선택에 더한다.</summary>
@@ -557,24 +587,29 @@ public partial class Shell
     }
 
     /// <summary>
-    /// Duplicate: 선택 오브젝트마다 이름을 고유하게 바꾼 새 SceneNode(같은 Local 트랜스폼, 메시 복제)를 같은 부모 아래에 추가하고
-    /// 만든 노드들을 선택한다. 메시가 없는 노드는 트랜스폼만 복제된다(자식은 복제하지 않음). 한 Undo 그룹.
+    /// Duplicate(Maya 기본): 선택 오브젝트마다 자식 계층·셰이프(메시/조인트/라이트)·머티리얼·피벗·가시성을 복제한 트리를
+    /// 같은 부모 아래에 추가하고 만든 최상위 노드들을 선택한다(NodeDuplicate.CloneTree). 선택된 조상이 있는 노드는 조상과 함께 복제되므로 건너뛴다.
+    /// 메시는 구성 이력·스킨 없이 복제된다. 한 Undo 그룹.
     /// </summary>
+    /// <remarks>예전에는 메시만 복제해(자식·머티리얼·조인트/라이트 셰이프 누락) 조인트나 라이트를 복제하면 빈 노드가 생겼다.</remarks>
     private void DuplicateSelection()
     {
         var doc = Document;
         var ids = doc.Selection.Objects.ToArray();
         if (ids.Length == 0) return;
+        var set = new HashSet<NodeId>(ids);
+        var names = new HashSet<string>();
         using (doc.Undo.BeginGroup("Duplicate"))
         {
             var created = new List<NodeId>();
             foreach (var id in ids)
             {
-                var src = doc.Get(id);
-                var copy = new SceneNode { Name = doc.UniqueName(src.Name), Local = src.Local, Visible = src.Visible };
-                if (src.Mesh != null) copy.Shape = new MeshShape(src.Mesh.Clone());
-                var cmd = new AddNodeCommand("Duplicate", copy, src.Parent != null && !src.Parent.IsRoot ? src.Parent.Id : NodeId.None);
-                doc.Undo.Push(cmd);
+                var src = doc.Find(id); if (src == null) continue;
+                bool ancestorSel = false;
+                for (var p = src.Parent; p != null && !p.IsRoot; p = p.Parent) if (set.Contains(p.Id)) { ancestorSel = true; break; }
+                if (ancestorSel) continue;
+                var copy = NodeDuplicate.CloneTree(doc, src, names);
+                doc.Undo.Push(new AddNodeCommand("Duplicate", copy, src.Parent != null && !src.Parent.IsRoot ? src.Parent.Id : NodeId.None));
                 created.Add(copy.Id);
             }
             RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(created); });
