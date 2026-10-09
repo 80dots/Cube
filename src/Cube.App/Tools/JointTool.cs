@@ -70,6 +70,13 @@ public sealed class JointTool : ToolBase
     /// </summary>
     private void PlaceJoint(NVec2 px)
     {
+        // Undo 등으로 이어 붙일 조인트가 문서에서 빠졌으면 선택된 조인트(없으면 새 체인)에서 이어간다
+        // (전에는 사라진 부모 ID로 AddNodeCommand를 만들어 KeyNotFoundException).
+        if (_current != null && Ctx.Doc.Find(_current.Id) != _current)
+        {
+            var active = Ctx.Doc.Find(Ctx.Sel.ActiveObject);
+            _current = active is { IsJoint: true } ? active : null;
+        }
         var proj = Ctx.Viewport.Picker.Projection();
         var ray = proj.Unproject(px);
         var anchor = _current?.WorldMatrix.Translation ?? NVec3.Zero;

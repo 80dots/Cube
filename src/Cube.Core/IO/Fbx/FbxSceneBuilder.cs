@@ -64,7 +64,10 @@ public sealed partial class FbxSceneBuilder
     public List<FbxNode> Build(IReadOnlyList<SceneNode> roots)
     {
         // 1단계: 내보낼 최상위 노드와 그 하위 전체 집합(inSet)을 만든다. 문서 루트 자체는 제외.
-        var tops = new List<SceneNode>(roots.Where(r => !r.IsRoot));
+        // 조상이 함께 넘어온 노드는 빼고 최상위만 남긴다(부모와 자식을 함께 선택해 내보내면 자식 모델이 두 번 나가던 문제).
+        var given = new HashSet<SceneNode>(roots);
+        bool AncestorGiven(SceneNode n) { for (var p = n.Parent; p != null && !p.IsRoot; p = p.Parent) if (given.Contains(p)) return true; return false; }
+        var tops = new List<SceneNode>(roots.Where(r => !r.IsRoot && !AncestorGiven(r)).Distinct());
         var inSet = new HashSet<SceneNode>();
         foreach (var r in tops) { inSet.Add(r); foreach (var d in r.Descendants()) inSet.Add(d); }
         // 스킨이 참조하는 조인트가 집합 밖이면, 집합에 없는 조인트 부모를 따라 올라가 체인 루트를 찾아 그 하위 트리를 추가한다
@@ -346,6 +349,10 @@ public sealed partial class FbxSceneBuilder
             p.Add("P", "RotationPivot", "Vector3D", "Vector", "", (double)(t.Pivot.X * S), (double)(t.Pivot.Y * S), (double)(t.Pivot.Z * S));
             p.Add("P", "ScalingPivot", "Vector3D", "Vector", "", (double)(t.Pivot.X * S), (double)(t.Pivot.Y * S), (double)(t.Pivot.Z * S));
         }
+        // 라이트: FBX(SDK·ufbx·Blender) 라이트는 노드 −Y를 비추고 Cube/Godot 라이트는 −Z를 비추므로 회전 앞에 X+90°를 끼워 넣는다.
+        // (전에는 그대로 써서 Godot/Blender로 가져오면 라이트가 90° 틀어졌다.) 자식은 아래에서 월드를 베이크해 이 보정을 물려받지 않게 한다.
+        bool lightCorr = IsCorrectedLight(n);
+        if (lightCorr) t.RotationDegrees = Transform3.QuaternionToEulerXYZDegrees(LightCorrected(t.Rotation));
         // 표준 모델 속성: 회전 활성, InheritType 1(RSrs; Maya 기본 상속), Lcl T(cm)/R(XYZ 오일러, 도)/S.
         p.Add("P", "RotationActive", "bool", "", "", 1);
         p.Add("P", "InheritType", "enum", "", "", 1);
@@ -413,8 +420,18 @@ public sealed partial class FbxSceneBuilder
         }
 
         // 자식 재귀. 자식은 항상 로컬 기준이며 이 노드가 베이크한 피벗(shift)을 넘긴다.
-        foreach (var c in n.Children) BuildNode(c, id, bakeWorld: false, parentShift: shift);
+        // 보정 회전이 들어간 라이트의 자식은 그 회전을 물려받지 않도록 루트에 월드를 베이크해 붙인다(계층은 잃지만 위치는 정확).
+        foreach (var c in n.Children)
+            if (lightCorr) BuildNode(c, 0, bakeWorld: true, parentShift: Vector3.Zero);
+            else BuildNode(c, id, bakeWorld: false, parentShift: shift);
     }
+
+    /// <summary>FBX 라이트 방향 보정(−Z → −Y)을 적용해 쓰는 라이트 노드인지.</summary>
+    private bool IsCorrectedLight(SceneNode n) => n.IsLight && !n.IsJoint && n.Mesh == null && _opt.EmbedLights;
+
+    /// <summary>회전 q 앞에 X+90°를 적용한 회전(행벡터 규약: 로컬 −Y가 원래 −Z 방향을 향함).</summary>
+    private static Quaternion LightCorrected(Quaternion q)
+        => Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(Matrix4x4.CreateRotationX(MathF.PI / 2f) * Matrix4x4.CreateFromQuaternion(q)));
 
     // ---------------------------------------------------------------- 지오메트리
 
@@ -651,7 +668,9 @@ public sealed partial class FbxSceneBuilder
 
     /// <summary>
     /// 스킨이 있는 메시에 Deformer Skin과 조인트별 Cluster, 그리고 BindPose를 만든다.
-    /// Cluster: Indexes/Weights = 그 조인트의 가중치가 0보다 큰 정점(FBX 정점 인덱스), Transform = 메시 월드, TransformLink = 조인트 월드.
+    /// Cluster: Indexes/Weights = 그 조인트의 가중치가 0보다 큰 정점(FBX 정점 인덱스), TransformLink = 조인트 월드,
+    /// Transform = 메시 공간 → 본 공간(행벡터 규약 메시 월드 · inv(조인트 월드); FBX SDK/Maya/Blender와 같은 의미, ufbx의 mesh_node_to_bone).
+    /// v0.0.56까지는 Transform에 메시 월드를 그대로 써서 Godot(ufbx)이 바인드 포즈를 단위 행렬로 읽어 원점에 없는 본의 스킨이 어긋났다.
     /// 바인드 포즈는 저장된 바인드 행렬이 아니라 내보내는 시점의 현재(rest) 월드 행렬이다(glTF 내보내기와 동일).
     /// 행렬 이동 성분은 cm로 스케일한다.
     /// </summary>
@@ -709,7 +728,8 @@ public sealed partial class FbxSceneBuilder
             cl.Add("Indexes", idx.ToArray());
             cl.Add("Weights", wts.ToArray());
             var jointWorld = Scaled(jn.WorldMatrix);
-            cl.Add("Transform", ToArray(meshWorld));
+            Matrix4x4.Invert(jointWorld, out var invJoint);
+            cl.Add("Transform", ToArray(meshWorld * invJoint));
             cl.Add("TransformLink", ToArray(jointWorld));
             _objects.Add(cl);
             _connections.Add((cid, sid, null));

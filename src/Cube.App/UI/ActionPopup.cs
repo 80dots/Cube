@@ -82,7 +82,8 @@ public partial class ActionPopup : PanelContainer
 
     /// <summary>
     /// 패널 UI(반투명 어두운 배경, 제목 버튼, 필드 그리드, 설명)를 만들고 액션 실행·Undo 변경 이벤트를 구독한다.
-    /// 처음에는 숨김 상태이며 다른 오버레이 위에 그리도록 ZIndex를 올린다.
+    /// 처음에는 숨김 상태이다. ZIndex는 올리지 않는다: 셸 트리 순서상 뷰포트 위, 나중에 추가·앞으로 옮겨지는 플로팅 패널(Animation Data, UV Editor 등) 아래에
+    /// 그려야 패널 버튼을 가리지 않는다(전에는 ZIndex 5라 떠 있는 패널 위에 겹쳐 Animation Data의 Delete Clip 버튼을 가렸다).
     /// </summary>
     public void Setup(Shell shell)
     {
@@ -90,7 +91,6 @@ public partial class ActionPopup : PanelContainer
         float s = CubeApp.Instance.UiScale;
         MouseFilter = MouseFilterEnum.Stop;
         Visible = false;
-        ZIndex = 5;
         AddThemeStyleboxOverride("panel", new StyleBoxFlat { BgColor = new Color(0.12f, 0.12f, 0.12f, 0.94f), BorderColor = MayaTheme.Separator, BorderWidthLeft = 1, BorderWidthTop = 1, BorderWidthRight = 1, BorderWidthBottom = 1, CornerRadiusTopLeft = (int)(4 * s), CornerRadiusTopRight = (int)(4 * s), CornerRadiusBottomLeft = (int)(4 * s), CornerRadiusBottomRight = (int)(4 * s), ContentMarginLeft = 6 * s, ContentMarginRight = 6 * s, ContentMarginTop = 4 * s, ContentMarginBottom = 6 * s });
         var box = new VBoxContainer();
         box.AddThemeConstantOverride("separation", (int)(4 * s));

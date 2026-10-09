@@ -147,18 +147,27 @@ public sealed class SetAnimationsCommand : ICommand
     public string Name { get; }
     /// <summary>이름, 추가할 클립, (선택) 제거할 클립을 받는다.</summary>
     public SetAnimationsCommand(string name, IEnumerable<AnimationClip> add, IEnumerable<AnimationClip>? remove = null) { Name = name; _add = add.ToList(); _remove = remove?.ToList() ?? new(); }
+    /// <summary>제거한 클립의 원래 위치(Undo 때 같은 자리로 되돌림). Do가 처음 실행될 때 기록한다.</summary>
+    private List<(AnimationClip clip, int index)>? _removedAt;
     /// <summary>제거 → 추가 후 AnimationsChanged를 통지한다.</summary>
     public void Do(Document doc)
     {
-        foreach (var c in _remove) doc.Animations.Remove(c);
+        _removedAt = new();
+        foreach (var c in _remove) { int i = doc.Animations.IndexOf(c); if (i >= 0) { _removedAt.Add((c, i)); doc.Animations.RemoveAt(i); } }
         foreach (var c in _add) if (!doc.Animations.Contains(c)) doc.Animations.Add(c);
         doc.Notify(new DocChange(ChangeKind.AnimationsChanged, NodeId.None));
     }
-    /// <summary>추가한 클립을 빼고 제거한 클립을 되돌린다.</summary>
+    /// <summary>추가한 클립을 빼고 제거한 클립을 원래 순서 자리로 되돌린다(전에는 끝에 붙여 클립 순서가 바뀌었다).</summary>
     public void Undo(Document doc)
     {
         foreach (var c in _add) doc.Animations.Remove(c);
-        foreach (var c in _remove) if (!doc.Animations.Contains(c)) doc.Animations.Add(c);
+        // 제거 순서의 역순으로 원래 인덱스에 다시 넣으면 처음 배열이 복원된다
+        if (_removedAt != null)
+            for (int k = _removedAt.Count - 1; k >= 0; k--)
+            {
+                var (c, i) = _removedAt[k];
+                if (!doc.Animations.Contains(c)) doc.Animations.Insert(Math.Min(i, doc.Animations.Count), c);
+            }
         doc.Notify(new DocChange(ChangeKind.AnimationsChanged, NodeId.None));
     }
 }

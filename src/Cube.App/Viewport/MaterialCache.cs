@@ -113,6 +113,9 @@ vec2 tuv(vec2 uv) {
 	return vec2(c * s.x - n * s.y, n * s.x + c * s.y) + uv_offset; // KHR_texture_transform: T·R·S
 }
 void fragment() {
+	// 음수 스케일(거울) 인스턴스: Godot의 FRONT_FACING·양면 노멀 뒤집기가 반대로 나오므로 되돌린다(surface.gdshader와 같음)
+	bool mirrored = determinant(mat3(MODEL_MATRIX)) < 0.0;
+	if (mirrored) NORMAL = -NORMAL;
 	vec2 uv = tuv(UV);
 	vec3 base = albedo.rgb;
 	float a = alpha;
@@ -121,7 +124,7 @@ void fragment() {
 	if (use_vertex_color) base = COLOR.rgb;
 ");
         // 단면 머티리얼은 뒷면 베이스 색을 검정으로
-        if (!doubleSided) sb.Append("\tif (!FRONT_FACING) { base = vec3(0.0); }\n");
+        if (!doubleSided) sb.Append("\tif (FRONT_FACING == mirrored) { base = vec3(0.0); }\n");
         // 타입별 출력: Unlit = 색 그대로, Matcap = 뷰 노멀 xy로 matcap 샘플, 나머지 = 조명 파라미터 설정
         switch (type)
         {
@@ -157,7 +160,7 @@ void fragment() {
 	float an = anisotropy; if (use_anisotropy_tex) an *= texture(anisotropy_tex, uv).r;
 	if (an > 0.0) { ANISOTROPY = an; ANISOTROPY_FLOW = vec2(cos(anisotropy_rotation), sin(anisotropy_rotation)); }
 ");
-                if (!doubleSided) sb.Append("\tif (!FRONT_FACING) { ROUGHNESS = 1.0; METALLIC = 0.0; EMISSION = vec3(0.0); }\n");
+                if (!doubleSided) sb.Append("\tif (FRONT_FACING == mirrored) { ROUGHNESS = 1.0; METALLIC = 0.0; EMISSION = vec3(0.0); }\n");
                 break;
         }
         // 알파 모드 출력: Mask = 컷오프 스시저, Blend = 알파 그대로(Opaque면 ALPHA를 쓰지 않아 불투명 패스 유지)

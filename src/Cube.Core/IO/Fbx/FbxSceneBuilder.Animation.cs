@@ -81,6 +81,7 @@ public sealed partial class FbxSceneBuilder
     {
         // 월드 베이크 노드면 부모(내보내지 않음)의 rest 월드를 키 행렬에 곱해야 한다.
         bool worldBake = _bakedWorldNodes.Contains(n);
+        bool lightCorr = IsCorrectedLight(n);
         // 피벗 보정 항: 이동 = xt + P·S·R − Q
         Vector3 P, Q;
         if (_opt.BakePivots) { P = _bakedPivot.GetValueOrDefault(n); Q = _parentShiftOf.GetValueOrDefault(n); }
@@ -124,6 +125,8 @@ public sealed partial class FbxSceneBuilder
             }
             var sr = Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(q);
             var t = p + (pivotTerm ? Vector3.Transform(P, sr) : Vector3.Zero) - Q;
+            // 라이트 방향 보정(BuildNode와 같게): 회전 키에도 X+90°를 앞에 곱한다
+            if (lightCorr) q = LightCorrected(q);
             return (s, q, t);
         }
 
@@ -137,14 +140,34 @@ public sealed partial class FbxSceneBuilder
         // R 채널: XYZ 오일러(도)로 바꾸고, 이전 키와 ±360° 범위에서 가장 가까운 값으로 언랩해 보간 튐을 막는다.
         if (needR)
         {
-            var times = worldBake ? Union(true, true, true) : Union(false, true, false);
-            var vals = new Vector3[times.Length];
-            for (int i = 0; i < times.Length; i++)
+            var keyTimes = worldBake ? Union(true, true, true) : Union(false, true, false);
+            // FBX 회전 커브는 오일러 각을 축마다 선형 보간하므로 두 키 사이 경로가 우리 slerp와 다를 수 있다(예: Y 45°→135°는
+            // 오일러 표현이 (0,45,0)→(180,45,180)로 바뀜). 중간 시각의 오일러 보간 결과가 slerp와 0.05° 넘게 다르면 그 사이에 키를 더한다.
+            var times = new List<float>(); var vals = new List<Vector3>();
+            void Add(float tm, Vector3 e) { times.Add(tm); vals.Add(vals.Count == 0 ? e : UnwrapEuler(e, vals[^1])); }
+            void Refine(float t0, Vector3 e0, float t1, Vector3 e1, int depth)
             {
-                var e = EulerXYZDegrees(Pose(times[i]).q);
-                vals[i] = i == 0 ? e : UnwrapEuler(e, vals[i - 1]);
+                if (depth >= 8 || t1 - t0 < 1f / 240f) return;
+                float tm = 0.5f * (t0 + t1);
+                var want = Pose(tm).q;
+                var lin = (e0 + e1) * 0.5f;
+                var linQ = new Transform3(Vector3.Zero, lin, Vector3.One).Rotation;
+                float dot = MathF.Min(1f, MathF.Abs(Quaternion.Dot(Quaternion.Normalize(want), Quaternion.Normalize(linQ))));
+                if (2f * MathF.Acos(dot) * 180f / MathF.PI <= 0.05f) return;
+                var em = UnwrapEuler(EulerXYZDegrees(want), e0);
+                Refine(t0, e0, tm, em, depth + 1);
+                times.Add(tm); vals.Add(UnwrapEuler(em, vals[^1]));
+                Refine(tm, vals[^1], t1, e1, depth + 1);
             }
-            yield return ("R", "Lcl Rotation", times.Select(tm => ToKTime(tm)).ToArray(), vals);
+            for (int i = 0; i < keyTimes.Length; i++)
+            {
+                var e = EulerXYZDegrees(Pose(keyTimes[i]).q);
+                if (i == 0) { Add(keyTimes[i], e); continue; }
+                var e1 = UnwrapEuler(e, vals[^1]);
+                Refine(times[^1], vals[^1], keyTimes[i], e1, 0);
+                Add(keyTimes[i], e);
+            }
+            yield return ("R", "Lcl Rotation", times.Select(tm => ToKTime(tm)).ToArray(), vals.ToArray());
         }
         // S 채널: 배율 그대로.
         if (needS)

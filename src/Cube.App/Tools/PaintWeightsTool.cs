@@ -110,10 +110,11 @@ public sealed class PaintWeightsTool : ToolBase
     private void ApplyDisplay()
     {
         var shell = UI.Shell.Instance;
-        if (Mesh?.Skin is { } skin)
+        if (Mesh?.Skin != null)
         {
-            int j = Joint; var s = skin;
-            shell.WeightDisplay = (Mesh.Id, v => s.GetWeight(v, j));
+            // 스킨 객체는 Undo/Reset Weights(SetSkinCommand)로 통째로 바뀔 수 있으므로 매번 노드에서 현재 스킨을 읽는다.
+            int j = Joint; var node = Mesh;
+            shell.WeightDisplay = (Mesh.Id, v => node.Skin?.GetWeight(v, j) ?? 0f);
         }
         else shell.WeightDisplay = null;
         shell.RefreshAllDisplays();
@@ -204,11 +205,14 @@ public sealed class PaintWeightsTool : ToolBase
         float scale = NVec3.TransformNormal(NVec3.UnitX, target.World).Length();
         float rLocal = Radius / MathF.Max(scale, 1e-6f);
         bool any = false;
+        // 레이는 화면에 보이는(스킨 변형된) 표면에 맞으므로 거리도 변형 위치로 잰다(조인트를 돌린 포즈에서 칠할 때 엉뚱한 정점이 칠해지던 문제).
+        var shown = Ctx.Viewport.Scene.GetMeshView(Mesh.Id)?.Deformed;
         // 반지름 안의 살아 있는 정점마다 거리 감쇠 세기로 칠하기
         for (int v = 0; v < m.VertexCount; v++)
         {
             if (!m.Verts[v].Alive) continue;
-            float d = NVec3.Distance(m.Verts[v].Position, hitLocal);
+            var pos = shown != null && v < shown.Length ? shown[v] : m.Verts[v].Position;
+            float d = NVec3.Distance(pos, hitLocal);
             if (d > rLocal) continue;
             float amount = 1f - d / rLocal;
             if (!_before.ContainsKey(v)) _before[v] = skin.CopyWeights(v);

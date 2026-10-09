@@ -23,6 +23,9 @@ public partial class SmokeExportRunner : Node
         foreach (var a in OS.GetCmdlineUserArgs()) if (a.StartsWith("--out=")) outPath = a["--out=".Length..];
         outPath ??= System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cube_smoke.glb");
         int code = Run(outPath);
+        // --full: 피벗·계층·비균등 스케일·스킨·애니메이션·라이트·텍스처·선택 내보내기까지 glb/gltf/fbx/obj 전체 왕복(SmokeRoundTrip)
+        if (code == 0 && OS.GetCmdlineUserArgs().Contains("--full"))
+            code = SmokeRoundTrip.Run(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(outPath) ?? System.IO.Path.GetTempPath(), "cube_smoke_full")) == 0 ? 0 : 2;
         GD.Print($"[Smoke] exit {code}");
         GetTree().Quit(code);
     }

@@ -197,6 +197,9 @@ public partial class ComponentEditorWindow : FloatingPanel
             // 전에는 여기서 None으로 덮어써 가져온 모델의 최상위 그룹을 골라도 "No mesh selected"였음)
             var withComps = sel.NodesWithComponents(sel.Mode).FirstOrDefault(n => _doc.Find(n)?.Mesh != null);
             if (_doc.Find(withComps)?.Mesh != null) id = withComps;
+            // 오브젝트 모드에서 활성이 조인트 등이고 다른 선택 오브젝트에 메시가 있으면 그 메시(메시 + 조인트를 함께 고른 리깅 상황).
+            // 전에는 활성 조인트 체인에서만 메시를 찾아 "No mesh selected"가 됐다.
+            if (_doc.Find(id)?.Mesh == null && sel.Objects.FirstOrDefault(n => _doc.Find(n)?.Mesh != null) is { IsNone: false } selMesh) id = selMesh;
         }
         // 그룹·스켈레톤 등 메시가 아닌 노드면 그 아래 첫 메시(가져온 모델의 최상위 노드를 골랐을 때)
         if (_doc.Find(id) is { Mesh: null } grp)
