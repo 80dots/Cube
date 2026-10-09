@@ -447,6 +447,8 @@ public static partial class MeshOps
         var affected = new HashSet<int>();
         var tmp = new List<int>();
         foreach (int v in map.Keys) { m.GetVertexFaces(v, tmp); affected.UnionWith(tmp); }
+        // 대표 정점 쪽 면도 함께 다시 만든다: 병합으로 기존 면과 같은 정점 집합이 되는 면(라미나 쌍)을 둘 다 찾아 버려야 하므로
+        foreach (int v in map.Values.Distinct()) { m.GetVertexFaces(v, tmp); affected.UnionWith(tmp); }
         var rebuilt = new List<(List<Corner> corners, int material, List<EdgeFlags> hard)>();
         foreach (int f in affected)
         {
@@ -458,6 +460,7 @@ public static partial class MeshOps
         var orphans = new HashSet<int>();
         foreach (int f in affected) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
         // 면을 모두 지운 뒤에 다시 만들어야 일시적인 같은 방향 엣지 충돌이 없다
+        var plans = new List<(List<Corner> mapped, List<EdgeFlags> flags, int material)>();
         foreach (var (corners, material, hard) in rebuilt)
         {
             var mapped = new List<Corner>(); var mappedHard = new List<EdgeFlags>();
@@ -469,6 +472,14 @@ public static partial class MeshOps
             }
             while (mapped.Count > 1 && mapped[0].Vertex == mapped[^1].Vertex) { mapped.RemoveAt(mapped.Count - 1); mappedHard.RemoveAt(mappedHard.Count - 1); }
             if (mapped.Count < 3) continue;
+            plans.Add((mapped, mappedHard, material));
+        }
+        // 병합 뒤 같은 정점 집합이 된 면 쌍(맞붙은 두 오브젝트의 접촉면 등 = 안쪽 라미나)은 둘 다 버린다.
+        // 남겨 두면 먼저 들어간 라미나가 엣지를 차지해 주변 면이 비매니폴드로 거부되어 구멍이 났다(v0.0.57: Mirror(병합 없음) 뒤 Merge).
+        var byKey = plans.GroupBy(pl => string.Join(",", pl.mapped.Select(c => c.Vertex).OrderBy(x => x))).Where(g => g.Count() >= 2).SelectMany(g => g).ToHashSet();
+        foreach (var (mapped, mappedHard, material) in plans)
+        {
+            if (byKey.Contains((mapped, mappedHard, material))) continue;
             int nf = AddFaceWithCorners(m, mapped, material);
             if (nf >= 0) for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, mappedHard[i]);
         }

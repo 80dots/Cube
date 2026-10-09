@@ -85,7 +85,8 @@ public sealed class MergeVerticesCommand : MeshEditCommand
     {
         MergedCount = MeshOps.MergeVertices(mesh, _verts, _threshold);
         if (MergedCount == 0) return false;
-        doc.Selection.ClearCurrentMode();
+        // 컴포넌트 선택(옛 ID)만 비운다 — 오브젝트 모드에서 부르면 오브젝트 선택까지 지워졌다(v0.0.57)
+        if (doc.Selection.IsComponentMode) doc.Selection.ClearCurrentMode();
         return true;
     }
 

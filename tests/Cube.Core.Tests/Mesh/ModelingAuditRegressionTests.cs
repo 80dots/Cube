@@ -259,4 +259,16 @@ public class ModelingAuditRegressionTests
         Assert.Equal(101 * 101, m.AliveVertexCount);
         AssertSound(m);
     }
+
+    /// <summary>맞붙은 두 큐브(병합 없는 Mirror)를 Merge Vertices로 합치면 접촉면 두 장이 사라진 닫힌 상자가 된다(전에는 면 5장이 사라져 구멍).</summary>
+    [Fact]
+    public void MergeVertices_TouchingBoxes_DropsInnerLaminaAndStaysClosed()
+    {
+        var m = MeshBuilder.Cube();
+        MeshOps.MirrorGeometry(m, 0, 0.5f, true, false, 0f);
+        Assert.Equal(12, m.AliveFaceCount);
+        MeshOps.MergeVertices(m, Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive), 0.001f);
+        Assert.Equal(10, m.AliveFaceCount);
+        AssertSound(m, closed: true, euler: 2);
+    }
 }
