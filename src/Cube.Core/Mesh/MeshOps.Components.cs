@@ -434,9 +434,9 @@ public static partial class MeshOps
         rb.Capture(f0); rb.Capture(f1);
         var loop = new List<Corner>();
         int cur = m.Hes[he0].Next;
-        while (cur != he0) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
+        while (cur != he0) { var h = m.Hes[cur]; loop.Add(Corner.Of(h)); cur = h.Next; }
         cur = m.Hes[he1].Next;
-        while (cur != he1) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
+        while (cur != he1) { var h = m.Hes[cur]; loop.Add(Corner.Of(h)); cur = h.Next; }
         int material = m.Faces[f0].Material;
         // 두 면이 엣지를 둘 이상 공유하거나 정점에서 맞닿으면 합친 루프에 같은 정점이 반복된다 → 합치지 않는다
         // (지운 뒤 새 면 추가가 실패하면 두 면이 사라져 구멍이 났다: 반복 라운드 Bevel의 D자 캡 병합)
@@ -446,7 +446,7 @@ public static partial class MeshOps
         {
             var list = new List<Corner>();
             int start = m.Faces[f].HalfEdge, c = start;
-            do { var h = m.Hes[c]; list.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); c = h.Next; } while (c != start);
+            do { var h = m.Hes[c]; list.Add(Corner.Of(h)); c = h.Next; } while (c != start);
             return list;
         }
         var old0 = Corners(f0); var old1 = Corners(f1); int mat1 = m.Faces[f1].Material;

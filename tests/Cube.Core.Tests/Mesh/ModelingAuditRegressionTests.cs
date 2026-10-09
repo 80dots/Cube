@@ -190,4 +190,46 @@ public class ModelingAuditRegressionTests
         Assert.Empty(r);
         Assert.Equal(6, m.AliveFaceCount);
     }
+
+    /// <summary>모든 엣지에 심·크리즈, 모든 코너에 UV 핀·노멀 고정을 건 큐브.</summary>
+    private static PolyMesh FlaggedCube()
+    {
+        var m = MeshBuilder.Cube(); MeshNormals.Recompute(m);
+        for (int e = 0; e < m.EdgeCount; e++) { var ed = m.Edges[e]; ed.Seam = true; ed.Crease = 2f; m.Edges[e] = ed; }
+        for (int h = 0; h < m.Hes.Count; h++) { var he = m.Hes[h]; he.PinUv = true; he.NormalLocked = true; m.Hes[h] = he; }
+        return m;
+    }
+
+    /// <summary>
+    /// 면을 다시 만드는 연산이 엣지의 심·크리즈와 코너의 UV 핀·노멀 고정을 잃지 않는다(전에는 하드 플래그만 옮겨
+    /// Reverse/Separate/Extract/Mirror/Combine/Merge/Insert Edge Loop 뒤 UV 심이 사라져 셸이 합쳐졌다).
+    /// </summary>
+    [Theory]
+    [InlineData("reverse")]
+    [InlineData("extract")]
+    [InlineData("mirror")]
+    [InlineData("append")]
+    [InlineData("insertLoop")]
+    [InlineData("merge")]
+    public void RebuildingOps_KeepSeamsCreasesPinsAndLockedNormals(string op)
+    {
+        var m = FlaggedCube();
+        int edgesBefore = m.AliveEdgeCount;
+        switch (op)
+        {
+            case "reverse": MeshOps.ReverseFaces(m, Faces(m)); break;
+            case "extract": m = MeshOps.ExtractFaces(m, Faces(m)); break;
+            case "mirror": MeshOps.MirrorGeometry(m, 0, 0.5f, true, false, 0.001f); break;
+            case "append": { var t = new PolyMesh(); MeshOps.Append(t, m, System.Numerics.Matrix4x4.CreateTranslation(2, 0, 0)); m = t; break; }
+            case "insertLoop": MeshOps.InsertEdgeLoop(m, 0, 0.5f); break;
+            case "merge": MeshOps.MergeVertices(m, new[] { 0, 1 }, 2f); break;
+        }
+        AssertSound(m);
+        // 원래 있던 종류의 엣지(새로 만든 분할/절단 엣지 제외)는 심·크리즈를 유지
+        int seams = Enumerable.Range(0, m.EdgeCount).Count(e => m.Edges[e].Alive && m.Edges[e].Seam && m.Edges[e].Crease == 2f);
+        int expected = op switch { "mirror" => 2 * edgesBefore - 4 - 4, "insertLoop" => edgesBefore + 4, "merge" => m.AliveEdgeCount, _ => edgesBefore };
+        Assert.True(seams >= expected, $"{op}: seam+crease edges {seams} < {expected}");
+        if (op is "reverse" or "extract" or "append")
+            Assert.All(Enumerable.Range(0, m.Hes.Count).Where(h => m.Hes[h].Alive), h => { Assert.True(m.Hes[h].PinUv, "pin"); Assert.True(m.Hes[h].NormalLocked, "locked"); });
+    }
 }

@@ -456,9 +456,9 @@ public static partial class MeshOps
         if (f0 == f1) return false;
         var loop = new List<Corner>();
         int cur = m.Hes[he0].Next;
-        while (cur != he0) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
+        while (cur != he0) { var h = m.Hes[cur]; loop.Add(Corner.Of(h)); cur = h.Next; }
         cur = m.Hes[he1].Next;
-        while (cur != he1) { var h = m.Hes[cur]; loop.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); cur = h.Next; }
+        while (cur != he1) { var h = m.Hes[cur]; loop.Add(Corner.Of(h)); cur = h.Next; }
         // 가시 제거: 순환 루프에서 앞뒤가 같은 정점이면 가운데(가시 끝)와 뒤 중복을 지운다
         for (bool again = true; again && loop.Count >= 3;)
         {

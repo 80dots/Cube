@@ -21,7 +21,15 @@ public static partial class MeshOps
     /// <param name="Vertex">코너가 가리키는 정점 ID(하프에지의 시작 정점).</param>
     /// <param name="Uv">코너 UV(Uv0, 하단 원점).</param>
     /// <param name="Normal">코너 노멀(재계산 전 값; 새 면에서는 Zero여도 호출자가 Recompute한다).</param>
-    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal);
+    /// <param name="Pin">UV 핀(<see cref="HalfEdge.PinUv"/>).</param>
+    /// <param name="Locked">코너 노멀 고정(<see cref="HalfEdge.NormalLocked"/>; Bevel Harden Normals 등). 면을 다시 만드는 연산이 이 두 표시를 잃지 않도록 함께 옮긴다(v0.0.57).</param>
+    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal, bool Pin = false, bool Locked = false)
+    {
+        /// <summary>하프에지의 코너 속성(정점·UV·노멀·핀·노멀 고정).</summary>
+        public static Corner Of(HalfEdge h) => new(h.Vertex, h.Uv0, h.Normal, h.PinUv, h.NormalLocked);
+        /// <summary>면을 뒤집어 다시 만들 때의 코너: 고정 노멀은 반대 방향으로(고정이 아니면 재계산되므로 그대로).</summary>
+        public Corner Flipped() => Locked ? this with { Normal = -Normal } : this;
+    }
 
     /// <summary>
     /// 면 f의 하프에지 루프를 처음부터 한 바퀴 돌며 코너(정점, UV, 노멀)를 순서대로 수집한다.
@@ -34,7 +42,7 @@ public static partial class MeshOps
     {
         var list = new List<Corner>();
         int start = m.Faces[f].HalfEdge, he = start;
-        do { var h = m.Hes[he]; list.Add(new Corner(h.Vertex, h.Uv0, h.Normal)); he = h.Next; } while (he != start);
+        do { var h = m.Hes[he]; list.Add(Corner.Of(h)); he = h.Next; } while (he != start);
         return list;
     }
 
@@ -55,7 +63,7 @@ public static partial class MeshOps
         if (f < 0) return -1;
         // AddFace가 만든 하프에지 루프는 corners와 같은 순서로 시작하므로 i2번째 코너 속성을 차례로 복사한다
         int start = m.Faces[f].HalfEdge, he = start, i2 = 0;
-        do { var h = m.Hes[he]; h.Uv0 = corners[i2].Uv; h.Normal = corners[i2].Normal; m.Hes[he] = h; he = h.Next; i2++; } while (he != start);
+        do { var h = m.Hes[he]; h.Uv0 = corners[i2].Uv; h.Normal = corners[i2].Normal; h.PinUv = corners[i2].Pin; h.NormalLocked = corners[i2].Locked; m.Hes[he] = h; he = h.Next; i2++; } while (he != start);
         return f;
     }
 
@@ -69,6 +77,9 @@ public static partial class MeshOps
         if (e < 0) return;
         var ed = m.Edges[e]; ed.Hard = hard; m.Edges[e] = ed;
     }
+
+    /// <summary>두 엣지 플래그 합치기(하드·심은 하나라도 켜져 있으면 켬, 크리즈는 큰 값). 엣지를 녹이거나 정점을 합쳐 두 엣지가 하나가 될 때 쓴다.</summary>
+    internal static EdgeFlags Or(EdgeFlags a, EdgeFlags b) => new(a.Hard || b.Hard, a.Seam || b.Seam, MathF.Max(a.Crease, b.Crease));
 
     /// <summary>정점 a-b 사이 엣지가 존재하고 Hard로 표시되어 있으면 true.</summary>
     internal static bool IsHard(PolyMesh m, int a, int b)
@@ -133,12 +144,12 @@ public static partial class MeshOps
             }
 
         // 원본 면 코너 캡처 + 내부 엣지 하드 플래그
-        var faceCorners = new Dictionary<int, (List<Corner> corners, List<int> hes, int material, List<bool> hard)>();
+        var faceCorners = new Dictionary<int, (List<Corner> corners, List<int> hes, int material, List<EdgeFlags> hard)>();
         foreach (int f in region)
         {
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             faceCorners[f] = (corners, faceHes[f], m.Faces[f].Material, hard);
         }
 
@@ -167,7 +178,7 @@ public static partial class MeshOps
             if (nf >= 0)
             {
                 result.Add(nf);
-                for (int i = 0; i < mapped.Count; i++) SetHard(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
+                for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, hard[i]);
             }
         }
 
@@ -281,15 +292,15 @@ public static partial class MeshOps
         {
             // v를 뺀 코너 목록과 새 엣지(c[i]-c[i+1])의 하드 여부: 원래 엣지 또는 v를 거치던 두 엣지 중 하나가 하드면 하드
             var corners = CaptureCorners(m, f).Where(c => c.Vertex != v).ToList();
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex) || IsHard(m, corners[i].Vertex, v) || IsHard(m, v, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(Or(Or(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex), GetFlags(m, corners[i].Vertex, v)), GetFlags(m, v, corners[(i + 1) % corners.Count].Vertex)));
             int material = m.Faces[f].Material;
             m.RemoveFace(f, removeIsolated: false);
             // 삼각형에서 정점을 빼면 면이 사라진다(선분) — 다시 만들지 않는다(남은 두 정점은 아래에서 고립 정리)
             if (corners.Count >= 3)
             {
                 int nf = AddFaceWithCorners(m, corners, material);
-                if (nf >= 0) for (int i = 0; i < corners.Count; i++) SetHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
+                if (nf >= 0) for (int i = 0; i < corners.Count; i++) SetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
             }
             orphans.AddRange(corners.Select(c => c.Vertex));
         }
@@ -332,7 +343,7 @@ public static partial class MeshOps
                 var h = m.Hes[cur];
                 visitedFaces.Add(h.Face);
                 int walk = h.Next;
-                while (m.Hes[walk].Next != cur) { var w = m.Hes[walk]; loop.Add(new Corner(w.Vertex, w.Uv0, w.Normal)); walk = w.Next; }
+                while (m.Hes[walk].Next != cur) { var w = m.Hes[walk]; loop.Add(Corner.Of(w)); walk = w.Next; }
                 // 마지막 정점(v 직전)은 다음 면의 첫 정점과 같으므로 건너뜀
                 cur = m.Hes[m.Hes[cur].Prev].Twin; // 다음 면에서 v에서 나가는 하프에지
                 if (cur < 0 || guard++ > 10000) break;
@@ -340,18 +351,18 @@ public static partial class MeshOps
             // 합친 루프에 같은 정점이 반복되면(부채꼴 면들이 v 말고도 정점·엣지를 공유: 큐브의 대각 두 모서리를 함께 지울 때 등) 한 면으로 만들 수 없다
             // → 이 정점은 지우지 않는다(전에는 면만 지워지고 새 면 추가가 실패해 메시가 통째로 사라졌다, v0.0.57)
             if (loop.Count < 3 || loop.Select(c => c.Vertex).Distinct().Count() != loop.Count) continue;
-            var hard = new List<bool>();
-            for (int i = 0; i < loop.Count; i++) hard.Add(IsHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < loop.Count; i++) hard.Add(GetFlags(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
             // 새 면의 머티리얼은 부채꼴 첫 면을 따른다
             int material = m.Faces[visitedFaces[0]].Material;
             // 실패 시 복구용 원래 부채꼴 면
             var fan = visitedFaces.Distinct().Select(f => (corners: CaptureCorners(m, f), mat: m.Faces[f].Material)).ToList();
-            var fanHard = fan.Select(fc => Enumerable.Range(0, fc.corners.Count).Select(i => IsHard(m, fc.corners[i].Vertex, fc.corners[(i + 1) % fc.corners.Count].Vertex)).ToList()).ToList();
+            var fanHard = fan.Select(fc => Enumerable.Range(0, fc.corners.Count).Select(i => GetFlags(m, fc.corners[i].Vertex, fc.corners[(i + 1) % fc.corners.Count].Vertex)).ToList()).ToList();
             foreach (int f in visitedFaces.Distinct()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
             int nf = AddFaceWithCorners(m, loop, material);
             if (nf >= 0)
             {
-                for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
+                for (int i = 0; i < loop.Count; i++) SetFlags(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
                 m.RemoveVertexIfIsolated(v);
             }
             else
@@ -360,7 +371,7 @@ public static partial class MeshOps
                 for (int k = 0; k < fan.Count; k++)
                 {
                     int rf = AddFaceWithCorners(m, fan[k].corners, fan[k].mat);
-                    if (rf >= 0) for (int i = 0; i < fan[k].corners.Count; i++) SetHard(m, fan[k].corners[i].Vertex, fan[k].corners[(i + 1) % fan[k].corners.Count].Vertex, fanHard[k][i]);
+                    if (rf >= 0) for (int i = 0; i < fan[k].corners.Count; i++) SetFlags(m, fan[k].corners[i].Vertex, fan[k].corners[(i + 1) % fan[k].corners.Count].Vertex, fanHard[k][i]);
                 }
             }
         }
@@ -418,12 +429,12 @@ public static partial class MeshOps
         var affected = new HashSet<int>();
         var tmp = new List<int>();
         foreach (int v in map.Keys) { m.GetVertexFaces(v, tmp); affected.UnionWith(tmp); }
-        var rebuilt = new List<(List<Corner> corners, int material, List<bool> hard)>();
+        var rebuilt = new List<(List<Corner> corners, int material, List<EdgeFlags> hard)>();
         foreach (int f in affected)
         {
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             rebuilt.Add((corners, m.Faces[f].Material, hard));
         }
         var orphans = new HashSet<int>();
@@ -431,17 +442,17 @@ public static partial class MeshOps
         // 면을 모두 지운 뒤에 다시 만들어야 일시적인 같은 방향 엣지 충돌이 없다
         foreach (var (corners, material, hard) in rebuilt)
         {
-            var mapped = new List<Corner>(); var mappedHard = new List<bool>();
+            var mapped = new List<Corner>(); var mappedHard = new List<EdgeFlags>();
             for (int i = 0; i < corners.Count; i++)
             {
                 var c = corners[i] with { Vertex = map.TryGetValue(corners[i].Vertex, out int r) ? r : corners[i].Vertex };
-                if (mapped.Count > 0 && mapped[^1].Vertex == c.Vertex) { mappedHard[^1] |= hard[i]; continue; }
+                if (mapped.Count > 0 && mapped[^1].Vertex == c.Vertex) { mappedHard[^1] = Or(mappedHard[^1], hard[i]); continue; }
                 mapped.Add(c); mappedHard.Add(hard[i]);
             }
             while (mapped.Count > 1 && mapped[0].Vertex == mapped[^1].Vertex) { mapped.RemoveAt(mapped.Count - 1); mappedHard.RemoveAt(mappedHard.Count - 1); }
             if (mapped.Count < 3) continue;
             int nf = AddFaceWithCorners(m, mapped, material);
-            if (nf >= 0) for (int i = 0; i < mapped.Count; i++) SetHard(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, mappedHard[i]);
+            if (nf >= 0) for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, mappedHard[i]);
         }
         foreach (int v in map.Keys) m.RemoveVertexIfIsolated(v);
         foreach (int v in map.Values.Distinct()) m.RemoveVertexIfIsolated(v);
@@ -462,25 +473,25 @@ public static partial class MeshOps
         var faces = new HashSet<int>();
         foreach (var comp in ConnectedComponents(m)) if (comp.Any(selected.Contains)) faces.UnionWith(comp);
         // 1) 모든 면을 캡처하고 제거한 뒤 2) 뒤집어 재생성 (동시에 해야 같은 방향 충돌이 없다)
-        var captured = new List<(List<Corner> corners, int material, List<bool> hard)>();
+        var captured = new List<(List<Corner> corners, int material, List<EdgeFlags> hard)>();
         foreach (int f in faces)
         {
             if (f < 0 || f >= m.Faces.Count || !m.Faces[f].Alive) continue;
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             captured.Add((corners, m.Faces[f].Material, hard));
         }
         foreach (int f in faces) if (f >= 0 && f < m.Faces.Count && m.Faces[f].Alive) m.RemoveFace(f, removeIsolated: false);
         foreach (var (corners, material, hard) in captured)
         {
             // 코너 순서를 뒤집으면 면 법선 방향이 반대가 된다
-            var rev = corners.AsEnumerable().Reverse().ToList();
+            var rev = corners.AsEnumerable().Reverse().Select(c => c.Flipped()).ToList();
             int nf = AddFaceWithCorners(m, rev, material);
             if (nf < 0) continue;
             int n = corners.Count;
             // 원래 엣지 i는 (c[i], c[i+1]); 뒤집힌 루프에서 (rev[j], rev[j+1]) = (c[n-1-j], c[n-2-j]) → 원래 엣지 n-2-j
-            for (int j = 0; j < n; j++) SetHard(m, rev[j].Vertex, rev[(j + 1) % n].Vertex, hard[((n - 2 - j) % n + n) % n]);
+            for (int j = 0; j < n; j++) SetFlags(m, rev[j].Vertex, rev[(j + 1) % n].Vertex, hard[((n - 2 - j) % n + n) % n]);
         }
         m.BumpTopology();
     }
@@ -521,7 +532,7 @@ public static partial class MeshOps
             int nf = AddFaceWithCorners(target, corners, source.Faces[f].Material);
             if (nf < 0) continue;
             for (int i = 0; i < srcCorners.Count; i++)
-                SetHard(target, vmap[srcCorners[i].Vertex], vmap[srcCorners[(i + 1) % srcCorners.Count].Vertex], IsHard(source, srcCorners[i].Vertex, srcCorners[(i + 1) % srcCorners.Count].Vertex));
+                SetFlags(target, vmap[srcCorners[i].Vertex], vmap[srcCorners[(i + 1) % srcCorners.Count].Vertex], GetFlags(source, srcCorners[i].Vertex, srcCorners[(i + 1) % srcCorners.Count].Vertex));
         }
         target.BumpTopology();
     }
@@ -579,7 +590,7 @@ public static partial class MeshOps
             int nf = AddFaceWithCorners(target, mapped, m.Faces[f].Material);
             if (nf < 0) continue;
             for (int i = 0; i < corners.Count; i++)
-                SetHard(target, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+                SetFlags(target, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
         }
         target.BumpTopology();
         return target;

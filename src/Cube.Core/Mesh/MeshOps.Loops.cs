@@ -202,7 +202,7 @@ public static partial class MeshOps
         for (int i = 0; i < entries.Count; i++) entryIndex[entries[i].edge] = i;
 
         // 영향을 받는 면: 링 면 + 열린 링 양끝의 바깥 면
-        var rebuild = new List<(int face, List<Corner> corners, int material, List<bool> hard)>();
+        var rebuild = new List<(int face, List<Corner> corners, int material, List<EdgeFlags> hard)>();
         var ringSet = new HashSet<int>(ringFaces);
         var endFaces = new List<int>();
         if (!closed)
@@ -220,8 +220,8 @@ public static partial class MeshOps
         foreach (int f in ringFaces.Concat(endFaces))
         {
             var corners = CaptureCorners(m, f);
-            var hard = new List<bool>();
-            for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            var hard = new List<EdgeFlags>();
+            for (int i = 0; i < corners.Count; i++) hard.Add(GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             rebuild.Add((f, corners, m.Faces[f].Material, hard));
         }
         foreach (var (f, _, _, _) in rebuild) m.RemoveFace(f, removeIsolated: false);
@@ -257,16 +257,16 @@ public static partial class MeshOps
                 var c0 = corners[k]; var c1 = corners[(k + 1) % 4]; var c2 = corners[(k + 2) % 4]; var c3 = corners[(k + 3) % 4];
                 int fa = AddFaceWithCorners(m, new[] { c0, pk, pk2, c3 }, material);
                 int fb = AddFaceWithCorners(m, new[] { pk, c1, c2, pk2 }, material);
-                bool h01 = hard[k], h23 = hard[(k + 2) % 4], h12 = hard[(k + 1) % 4], h30 = hard[(k + 3) % 4];
-                SetHard(m, c0.Vertex, pk.Vertex, h01); SetHard(m, pk.Vertex, c1.Vertex, h01);
-                SetHard(m, c2.Vertex, pk2.Vertex, h23); SetHard(m, pk2.Vertex, c3.Vertex, h23);
-                SetHard(m, c1.Vertex, c2.Vertex, h12); SetHard(m, c3.Vertex, c0.Vertex, h30);
+                EdgeFlags h01 = hard[k], h23 = hard[(k + 2) % 4], h12 = hard[(k + 1) % 4], h30 = hard[(k + 3) % 4];
+                SetFlags(m, c0.Vertex, pk.Vertex, h01); SetFlags(m, pk.Vertex, c1.Vertex, h01);
+                SetFlags(m, c2.Vertex, pk2.Vertex, h23); SetFlags(m, pk2.Vertex, c3.Vertex, h23);
+                SetFlags(m, c1.Vertex, c2.Vertex, h12); SetFlags(m, c3.Vertex, c0.Vertex, h30);
                 if (fa >= 0 || fb >= 0) newEdgePairs.Add((pk.Vertex, pk2.Vertex));
             }
             else
             {
                 // 끝 면: 링 엣지에 해당하는 코너 쌍 사이에 분할 정점을 끼운다
-                var loop = new List<Corner>(); var loopHard = new List<bool>();
+                var loop = new List<Corner>(); var loopHard = new List<EdgeFlags>();
                 for (int i = 0; i < n; i++)
                 {
                     loop.Add(corners[i]);
@@ -275,7 +275,7 @@ public static partial class MeshOps
                     else loopHard.Add(hard[i]);
                 }
                 int nf = AddFaceWithCorners(m, loop, material);
-                if (nf >= 0) for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, loopHard[i]);
+                if (nf >= 0) for (int i = 0; i < loop.Count; i++) SetFlags(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, loopHard[i]);
             }
         }
         // 새 루프 엣지(분할 정점 쌍) ID 수집
