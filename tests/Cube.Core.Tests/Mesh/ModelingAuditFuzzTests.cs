@@ -164,6 +164,8 @@ public class ModelingAuditFuzzTests
             MeshOps.SoftenHardenByAngle(m, Edges(m), 30f); MeshOps.LockNormals(m, Pick(r, Verts(m))); MeshOps.SetNormalsToFace(m, Pick(r, Verts(m)));
             MeshOps.AverageNormals(m, Pick(r, Verts(m))); MeshOps.SetVertexNormal(m, Pick(r, Verts(m)), Vector3.UnitY); MeshOps.ConformNormals(m); MeshOps.UnlockNormals(m, Verts(m));
         }),
+        ("BridgeFaces", false, (m, r) => MeshOps.BridgeFaces(m, Pick(r, Faces(m), 0.2))),
+        ("MergeAll", false, (m, r) => MeshOps.MergeVertices(m, Verts(m), (float)r.NextDouble() * 0.3f)),
         ("ExtractFaces", false, (m, r) =>
         {
             var fs = Pick(r, Faces(m)); var ex = MeshOps.ExtractFaces(m, fs);
