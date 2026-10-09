@@ -394,15 +394,33 @@ public static partial class MeshOps
         var rep = new Dictionary<int, int>();
         float t2 = threshold * threshold;
         int merged = 0;
-        // 대표가 정해지지 않은 정점 i를 기준으로 가까운 뒤쪽 정점들을 묶는다
+        // 균일 격자(칸 = 임계값)로 이웃 칸만 본다 — 전에는 모든 쌍을 비교(O(n²))해 오브젝트 전체 병합이 큰 메시에서 멈췄다(v0.0.57).
+        // 결과는 이전과 같다: 목록 순서대로 대표가 정해지지 않은 정점 i가 뒤쪽(j > i)의 미배정 정점 중 거리 이하인 것을 모두 묶는다.
+        float cell = MathF.Max(threshold, 1e-6f);
+        (long, long, long) Cell(Vector3 p) => ((long)MathF.Floor(p.X / cell), (long)MathF.Floor(p.Y / cell), (long)MathF.Floor(p.Z / cell));
+        var grid = new Dictionary<(long, long, long), List<int>>();
+        for (int i = 0; i < verts.Count; i++)
+        {
+            var key = Cell(m.Verts[verts[i]].Position);
+            if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<int>();
+            list.Add(i);
+        }
         for (int i = 0; i < verts.Count; i++)
         {
             if (rep.ContainsKey(verts[i])) continue;
-            for (int j = i + 1; j < verts.Count; j++)
-            {
-                if (rep.ContainsKey(verts[j])) continue;
-                if (Vector3.DistanceSquared(m.Verts[verts[i]].Position, m.Verts[verts[j]].Position) <= t2) { rep[verts[j]] = verts[i]; merged++; }
-            }
+            var pi = m.Verts[verts[i]].Position;
+            var (cx, cy, cz) = Cell(pi);
+            for (long dx = -1; dx <= 1; dx++)
+                for (long dy = -1; dy <= 1; dy++)
+                    for (long dz = -1; dz <= 1; dz++)
+                    {
+                        if (!grid.TryGetValue((cx + dx, cy + dy, cz + dz), out var list)) continue;
+                        foreach (int j in list)
+                        {
+                            if (j <= i || rep.ContainsKey(verts[j])) continue;
+                            if (Vector3.DistanceSquared(pi, m.Verts[verts[j]].Position) <= t2) { rep[verts[j]] = verts[i]; merged++; }
+                        }
+                    }
         }
         if (merged == 0) return 0;
         // 대표 정점 위치 = 클러스터 평균
@@ -454,9 +472,9 @@ public static partial class MeshOps
             int nf = AddFaceWithCorners(m, mapped, material);
             if (nf >= 0) for (int i = 0; i < mapped.Count; i++) SetFlags(m, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, mappedHard[i]);
         }
-        foreach (int v in map.Keys) m.RemoveVertexIfIsolated(v);
-        foreach (int v in map.Values.Distinct()) m.RemoveVertexIfIsolated(v);
-        // 퇴화(2각 이하)로 버린 면이나 비매니폴드로 다시 못 만든 면의 나머지 정점도 고립될 수 있다
+        // 사라진 정점(맵 키), 대표 정점, 그리고 퇴화(2각 이하)로 버린 면이나 비매니폴드로 다시 못 만든 면의 나머지 정점 중
+        // 고립된 것을 한 번에 지운다(정점마다 전체 하프에지를 훑지 않도록)
+        orphans.UnionWith(map.Keys); orphans.UnionWith(map.Values);
         RemoveIsolatedVertices(m, orphans);
     }
 

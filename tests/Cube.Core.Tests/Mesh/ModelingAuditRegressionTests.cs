@@ -245,4 +245,18 @@ public class ModelingAuditRegressionTests
         doc.Undo.Push(cmd);
         Assert.Equal(7, cmd.Result!.MaterialId);
     }
+
+    /// <summary>Merge Vertices가 격자로 이웃만 비교한다: 모든 면을 떼어 낸 100×100 평면(4만 정점)을 다시 병합(전에는 O(n²)).</summary>
+    [Fact]
+    public void MergeVertices_LargeMesh_IsFastAndRestoresGrid()
+    {
+        var m = MeshBuilder.Plane(1, 1, 100, 100);
+        MeshOps.DetachVertices(m, Enumerable.Range(0, m.VertexCount).ToArray());
+        Assert.Equal(40000, m.AliveVertexCount);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        MeshOps.MergeVertices(m, Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive), 0.001f);
+        Assert.True(sw.ElapsedMilliseconds < 10000, $"took {sw.ElapsedMilliseconds} ms");
+        Assert.Equal(101 * 101, m.AliveVertexCount);
+        AssertSound(m);
+    }
 }

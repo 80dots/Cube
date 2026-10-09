@@ -199,7 +199,7 @@ public static partial class MeshOps
             int nf = rb.AddFace(corners.Select(c => dup.TryGetValue(c.Vertex, out int d) ? c with { Vertex = d } : c).ToList(), material);
             if (nf >= 0) result.Add(nf);
         }
-        foreach (int v in boundaryVerts) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, boundaryVerts);
         m.BumpTopology();
         return result;
     }
@@ -302,7 +302,7 @@ public static partial class MeshOps
                 if (cf >= 0) result.Add(cf);
             }
         }
-        foreach (int v in verts) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, verts);
         m.BumpTopology();
         return result;
     }

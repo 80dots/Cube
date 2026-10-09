@@ -321,7 +321,7 @@ public static partial class MeshOps
             keys[key] = f;
         }
         // 면 삭제 후 남은 고립 정점 정리
-        for (int v = 0; v < m.VertexCount; v++) if (m.Verts[v].Alive) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, Enumerable.Range(0, m.VertexCount));
         m.BumpTopology();
         return removed;
     }

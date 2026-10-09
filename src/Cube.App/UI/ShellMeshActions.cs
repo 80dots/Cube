@@ -159,7 +159,7 @@ public partial class Shell
         RegisterOptionPair("mesh.smooth", "Smooth", new OptionSpec("Smooth Options", v => v.Set("levels", 1), new[] { OptionField.I("levels", "Division levels", 1, 4) }, "Smooth"), SmoothSelection,
             () => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.Mesh != null));
         RegisterOptionPair("mesh.merge", "Merge Vertices", new OptionSpec("Merge Vertices Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Threshold", 0, 1000, 0.0001) }, "Merge"), MergeSelectedVertices,
-            () => sel.IsComponentMode && sel.NodesWithComponents(sel.Mode).Any());
+            () => sel.IsComponentMode ? sel.NodesWithComponents(sel.Mode).Any() : HasMeshSelection());
         RegisterBevelActions(); // Blender식 Bevel 옵션 전체 + 대화형 툴(ShellBevel.cs)
         RegisterOptionPair("mesh.quadrangulate", "Quadrangulate", new OptionSpec("Quadrangulate Options", v => v.Set("angle", 30f), new[] { OptionField.F("angle", "Angle threshold (deg)", 0, 180, 1) }), () =>
         {
@@ -299,7 +299,7 @@ public partial class Shell
     }
 
     /// <summary>
-    /// Merge Vertices: 현재 모드 선택을 정점으로 변환해 임계값(threshold) 안의 정점을 병합한다(노드별 MergeVerticesCommand).
+    /// Merge Vertices: 현재 모드 선택을 정점으로 변환해(오브젝트 모드 = 선택 메시의 모든 정점) 임계값(threshold) 안의 정점을 병합한다(노드별 MergeVerticesCommand).
     /// 실행 후 마지막 Undo 명령(그룹이면 그 안의 Merge 명령들)의 MergedCount를 합해 병합 쌍 수를 알린다.
     /// </summary>
     private void MergeSelectedVertices()
@@ -307,6 +307,17 @@ public partial class Shell
         float threshold = Options("mesh.merge").Float("threshold");
         var sel = Document.Selection; var mode = sel.Mode;
         int total = 0;
+        if (mode == SelectMode.Object)
+        {
+            // 오브젝트 모드(Maya와 같음): 선택 메시 오브젝트의 모든 정점을 임계값으로 병합(Combine/Mirror 뒤 이음매 정리 등, v0.0.57)
+            using (Document.Undo.BeginGroup("Merge Vertices"))
+                foreach (var id in sel.Objects.ToArray())
+                {
+                    var mesh = Document.Find(id)?.Mesh; if (mesh == null) continue;
+                    Document.Undo.Push(new MergeVerticesCommand(id, Enumerable.Range(0, mesh.VertexCount).Where(v => mesh.Verts[v].Alive).ToHashSet(), threshold));
+                }
+        }
+        else
         ForEachComponentNode("Merge Vertices", mode, (id, comps) =>
         {
             var mesh = Document.Find(id)?.Mesh; if (mesh == null) return null;

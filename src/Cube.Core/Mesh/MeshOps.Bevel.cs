@@ -784,7 +784,7 @@ public static partial class MeshOps
         }
 
         // 원래 베벨 정점은 이제 어느 면에도 쓰이지 않으므로 제거
-        foreach (int v in V) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, V);
         m.BumpTopology();
         return result;
     }
@@ -1004,7 +1004,7 @@ public static partial class MeshOps
                 if (cf >= 0) result.Add(cf);
             }
         }
-        foreach (int v in V) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, V);
         m.BumpTopology();
         return result;
     }
