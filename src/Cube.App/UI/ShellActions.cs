@@ -136,7 +136,7 @@ public partial class Shell
         Actions.Register("mesh.soften", "Soften Edge", () => SetEdgesHard(false), canExecute: () => HasEdgeTargets(), repeatable: true);
         Actions.Register("mesh.harden", "Harden Edge", () => SetEdgesHard(true), canExecute: () => HasEdgeTargets(), repeatable: true);
         Actions.Register("mesh.reverse", "Reverse", ReverseSelection, canExecute: () => sel.Mode == SelectMode.Object ? sel.Objects.Count > 0 : sel.Mode == SelectMode.Face && sel.NodesWithComponents(SelectMode.Face).Any(), repeatable: true);
-        Actions.Register("mesh.bridge", "Bridge", BridgeSelection, canExecute: () => sel.Mode == SelectMode.Edge && sel.NodesWithComponents(SelectMode.Edge).Any(), repeatable: true);
+        Actions.Register("mesh.bridge", "Bridge", BridgeSelection, canExecute: () => sel.Mode is SelectMode.Edge or SelectMode.Face && sel.NodesWithComponents(sel.Mode).Any(), repeatable: true);
         Actions.Register("mesh.insertLoop", "Insert Edge Loop Tool", () => Tools.SetTool("insertLoop"), isChecked: () => Tools.Current?.Id == "insertLoop");
         Actions.Register("mesh.creaseTool", "Crease Tool", () => Tools.SetTool("creaseTool"), isChecked: () => Tools.Current?.Id == "creaseTool");
 
@@ -476,12 +476,14 @@ public partial class Shell
     private void BridgeSelection()
     {
         int made = 0;
-        ForEachComponentNode("Bridge", SelectMode.Edge, (id, comps) =>
+        // 면 모드(Maya Bridge와 같음): 선택한 두 면 영역을 지우고 그 경계 루프를 잇는다(v0.0.57; 전에는 Edit 파이의 면 항목이 늘 비활성)
+        bool faceMode = Document.Selection.Mode == SelectMode.Face;
+        ForEachComponentNode("Bridge", faceMode ? SelectMode.Face : SelectMode.Edge, (id, comps) =>
         {
-            var edges = comps.Edges.ToArray();
-            return new MeshOpCommand("Bridge", id, m => { var faces = MeshOps.BridgeEdges(m, edges); made += faces.Count; return (faces.Count > 0, SelectMode.Face, faces); });
+            var ids = (faceMode ? comps.Faces : comps.Edges).ToArray();
+            return new MeshOpCommand("Bridge", id, m => { var faces = faceMode ? MeshOps.BridgeFaces(m, ids) : MeshOps.BridgeEdges(m, ids); made += faces.Count; return (faces.Count > 0, SelectMode.Face, faces); });
         });
-        HelpLine.Text = made > 0 ? $"Bridge: {made} faces created." : "Bridge: select two border edge chains with the same number of edges.";
+        HelpLine.Text = made > 0 ? $"Bridge: {made} faces created." : faceMode ? "Bridge: select two separate face regions with the same number of border edges." : "Bridge: select two border edge chains with the same number of edges.";
     }
 
     /// <summary>Combine: 선택한 메시 오브젝트 2개 이상을 하나의 메시로 합친다(CombineCommand).</summary>

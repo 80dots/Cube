@@ -89,4 +89,35 @@ public static partial class MeshOps
         if (result.Count > 0) m.BumpTopology();
         return result;
     }
+
+    /// <summary>
+    /// Bridge(면 선택, Maya와 같음): 선택 면들을 지우고 그 영역들의 경계 루프를 <see cref="BridgeEdges"/>로 잇는다(예: 큐브 윗면·아랫면 → 관통 구멍).
+    /// 영역이 정확히 둘이 아니거나 경계 엣지 수가 다르면 메시를 바꾸지 않고 빈 목록을 돌려준다.
+    /// </summary>
+    public static List<int> BridgeFaces(PolyMesh m, IEnumerable<int> faceIds)
+    {
+        var faces = AliveFaces(m, faceIds).ToList();
+        if (faces.Count < 2) return new List<int>();
+        // 선택 영역 경계(한쪽만 선택 면인 엣지)를 정점 쌍으로 기억한다(면을 지우면 엣지 ID가 바뀔 수 있음)
+        var set = new HashSet<int>(faces);
+        var pairs = new List<(int a, int b)>();
+        var hes = new List<int>();
+        foreach (int f in faces)
+        {
+            m.GetFaceHalfEdges(f, hes);
+            foreach (int he in hes)
+            {
+                int tw = m.Hes[he].Twin;
+                if (tw >= 0 && set.Contains(m.Hes[tw].Face)) continue;
+                pairs.Add((m.Hes[he].Vertex, m.Hes[m.Hes[he].Next].Vertex));
+            }
+        }
+        var work = m.Clone();
+        DeleteFaces(work, faces);
+        var edges = pairs.Select(p => work.FindEdge(p.a, p.b)).Where(e => e >= 0).Distinct().ToList();
+        var made = BridgeEdges(work, edges);
+        if (made.Count == 0) return made;
+        m.CopyFrom(work);
+        return made;
+    }
 }

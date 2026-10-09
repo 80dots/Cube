@@ -137,4 +137,29 @@ public class ModelingAuditRegressionTests
         AssertSound(m, closed: true);
         Assert.True(m.AliveFaceCount >= 4, $"faces {m.AliveFaceCount}");
     }
+
+    /// <summary>면 Bridge: 떨어진 두 큐브(Combine)의 마주 보는 면을 이으면 하나의 닫힌 메시(오일러 2)가 된다.</summary>
+    [Fact]
+    public void BridgeFaces_TwoCombinedCubes_JoinsIntoOneClosedMesh()
+    {
+        var m = MeshBuilder.Cube();
+        MeshOps.Append(m, MeshBuilder.Cube(), System.Numerics.Matrix4x4.CreateTranslation(3, 0, 0));
+        MeshNormals.Recompute(m);
+        var facing = Faces(m).Where(f => { var c = m.FaceCentroid(f); return MathF.Abs(c.X - 0.5f) < 1e-4f || MathF.Abs(c.X - 2.5f) < 1e-4f; }).ToArray();
+        Assert.Equal(2, facing.Length);
+        var made = MeshOps.BridgeFaces(m, facing);
+        Assert.Equal(4, made.Count);
+        AssertSound(m, closed: true, euler: 2);
+        Assert.Single(MeshOps.ConnectedComponents(m));
+    }
+
+    /// <summary>면 Bridge: 영역이 하나뿐이면 메시를 바꾸지 않는다.</summary>
+    [Fact]
+    public void BridgeFaces_SingleRegion_NoChange()
+    {
+        var m = MeshBuilder.Cube();
+        var made = MeshOps.BridgeFaces(m, Faces(m).Take(2));
+        Assert.Empty(made);
+        Assert.Equal(6, m.AliveFaceCount);
+    }
 }
