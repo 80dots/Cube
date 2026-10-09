@@ -161,6 +161,7 @@ public partial class Shell
         Actions.Register("uv.contourStretch", "Contour Stretch Mapping", () => Project("Contour Stretch", (m, f) => UvOps.ContourStretch(m, f)), canExecute: HasTargets, repeatable: true);
 
         // ---------------------------------------------------------------- Cut / Sew
+        Actions.Register("uv.createShellGrid", "Create UV Shell (Grid)", () => Project("Create UV Shell (Grid)", (m, f) => UvOps.CreateShellGrid(m, f)), canExecute: HasTargets, repeatable: true);
         Actions.Register("uv.createShell", "Create UV Shell", () => Project("Create UV Shell", (m, f) => UvOps.CreateUvShell(m, f)), canExecute: () => sel.IsComponentMode && HasTargets(), repeatable: true);
         Actions.Register("uv.split", "Split UVs", () => ForEachUvPoints("Split UVs", (m, t, p) => UvOps.SplitUvs(m, t, p)), canExecute: () => sel.IsComponentMode && HasUvPoints(), repeatable: true);
         RegisterOptionPair("uv.merge", "Merge UVs", new OptionSpec("Merge UVs Options", v => v.Set("threshold", 0.001f), new[] { OptionField.F("threshold", "Distance threshold", 0, 1, 0.0001) }, "Merge"),
@@ -273,6 +274,28 @@ public partial class Shell
         Actions.Register("uv.unpinAll", "Unpin All", () => ForEachUvPoints("Unpin All", (m, _, _) => UvOps.UnpinAll(m), requirePoints: false), canExecute: () => UvNodes().Any(), repeatable: true);
 
         // ---------------------------------------------------------------- Select
+        // Select All(UV 편집기): 컴포넌트 모드면 대상 노드의 현재 종류 컴포넌트를 모두 선택(Maya UV Editor Select > All).
+        // 셸의 select.all은 항상 오브젝트 모드로 바꿔 UV 편집기에서 UV 모드가 풀렸다. 오브젝트 모드면 select.all과 같다.
+        Actions.Register("uv.selectAll", "Select All", () =>
+        {
+            if (!sel.IsComponentMode) { Actions.Invoke("select.all"); return; }
+            RecordSelection(s =>
+            {
+                bool first = true;
+                foreach (var n in UvNodes().ToList())
+                {
+                    var m = n.Mesh!;
+                    IEnumerable<int> all = s.Mode switch
+                    {
+                        SelectMode.Uv => Enumerable.Range(0, UvTopology.Build(m).Points.Count),
+                        SelectMode.Edge => Enumerable.Range(0, m.EdgeCount).Where(e => m.Edges[e].Alive),
+                        SelectMode.Face => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive),
+                        _ => Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive),
+                    };
+                    s.SelectComponents(n.Id, s.Mode, all.ToList(), replace: first); first = false;
+                }
+            });
+        }, canExecute: () => UvNodes().Any() || !sel.IsComponentMode);
         // 현재 모드의 컴포넌트 선택을 노드별로 반전(살아 있는 요소 중 선택되지 않은 것만 남김)
         Actions.Register("uv.selectInverse", "Select Inverse", () => RecordSelection(s =>
         {

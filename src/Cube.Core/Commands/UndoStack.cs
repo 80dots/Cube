@@ -31,6 +31,9 @@ public sealed class UndoStack
     /// <summary>문서에 연결된 빈 스택을 만든다.</summary>
     public UndoStack(Document doc) { _doc = doc; }
 
+    /// <summary>Changed 구독자를 모두 뗀다(셸을 다시 만들 때 해제된 UI가 통지를 받지 않도록; <see cref="Document.DetachViewListeners"/>).</summary>
+    internal void ClearListeners() => Changed = null;
+
     /// <summary>Undo할 명령이 있는지.</summary>
     public bool CanUndo => _undo.Count > 0;
     /// <summary>Redo할 명령이 있는지.</summary>

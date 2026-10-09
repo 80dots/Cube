@@ -102,7 +102,23 @@ public sealed class Document
         Root = new SceneNode { Name = "root", IsRoot = true, Id = NodeId.None };
         Selection = new SelectionState(this);
         Undo = new UndoStack(this);
-        Selection.Changed += () => Notify(new DocChange(ChangeKind.Selection, NodeId.None));
+        Selection.Changed += RelaySelection;
+    }
+
+    /// <summary>선택 변경을 문서 통지(ChangeKind.Selection)로 중계한다.</summary>
+    private void RelaySelection() => Notify(new DocChange(ChangeKind.Selection, NodeId.None));
+
+    /// <summary>
+    /// 문서·선택·Undo 이벤트의 바깥(뷰/UI) 구독자를 모두 뗀다. 문서는 셸보다 오래 살므로, 셸을 다시 만들기 전(CubeApp.ReloadShell)에
+    /// 부르지 않으면 해제된 옛 셸의 컨트롤들이 남아 통지를 받아 "Cannot access a disposed object" 예외가 났다(모드 전환·선택·Undo마다).
+    /// 문서 자신의 선택 중계는 다시 붙인다.
+    /// </summary>
+    public void DetachViewListeners()
+    {
+        Changed = null;
+        Undo.ClearListeners();
+        Selection.ClearListeners();
+        Selection.Changed += RelaySelection;
     }
 
     /// <summary>새 노드 ID를 배정한다.</summary>

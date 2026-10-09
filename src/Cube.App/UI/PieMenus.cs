@@ -125,7 +125,7 @@ public static class PieMenus
             Mode("Island", "mode.uvIsland", sel.Mode == SelectMode.Uv && island),
             Mode("Object Mode", "mode.object", sel.Mode == SelectMode.Object),
             Item(shell, "select.none", "Deselect All"),
-            Item(shell, "select.all", "Select All"),
+            Item(shell, "uv.selectAll", "Select All"),
             Item(shell, "uv.frameSelected", "Frame Selected"),
         };
     }
@@ -148,6 +148,7 @@ public static class PieMenus
         Item(shell, "uv.selectBackFacing", "Back-Facing"),
         Item(shell, "uv.selectFrontFacing", "Front-Facing"),
         Item(shell, "uv.selectOverlapping", "Overlapping"),
+        Item(shell, "uv.selectNonOverlapping", "Non-Overlapping"),
         Item(shell, "uv.selectTextureBorders", "Texture Borders"),
         Item(shell, "uv.selectUnmapped", "Unmapped"),
         Item(shell, "uv.shortestPath", "Shortest Edge Path"),
@@ -177,13 +178,13 @@ public static class PieMenus
             Item(shell, "uv.frameSelected", "Frame Selected"),
             // 오버플로: 그룹별 서브 파이(열 때 생성기를 호출하므로 최신 상태가 반영됨).
             Sub("Create", () => Group(("uv.automaticApply", "Automatic"), ("uv.automatic", "Automatic..."), ("uv.cameraBased", "Camera-Based"), ("uv.planarX", "Planar X"), ("uv.planarY", "Planar Y"), ("uv.planarZ", "Planar Z"), ("uv.spherical", "Spherical"), ("uv.bestPlane", "Best Plane"), ("uv.contourStretch", "Contour Stretch"), ("display.uvGrid", "Checker Shader"))),
-            Sub("Cut / Sew", () => Group(("uv.autoSeams", "Auto Seam Select"), ("uv.autoWrap", "Auto Wrap"), ("uv.createShell", "Create UV Shell"), ("uv.split", "Split UVs"), ("uv.mergeApply", "Merge UVs"), ("uv.moveAndSew", "Move and Sew"), ("uv.deleteUvs", "Delete UVs"), ("uv.cutSewTool", "3D Cut/Sew Tool"))),
+            Sub("Cut / Sew", () => Group(("uv.autoSeams", "Auto Seam Select"), ("uv.autoWrap", "Auto Wrap"), ("uv.createShell", "Create UV Shell"), ("uv.createShellGrid", "Create Shell Grid"), ("uv.split", "Split UVs"), ("uv.mergeApply", "Merge UVs"), ("uv.moveAndSew", "Move and Sew"), ("uv.deleteUvs", "Delete UVs"), ("uv.cutSewTool", "3D Cut/Sew Tool"))),
             Sub("Align / Snap", () => Group(("uv.alignMinU", "Align Min U"), ("uv.alignMaxU", "Align Max U"), ("uv.alignMinV", "Align Min V"), ("uv.alignMaxV", "Align Max V"), ("uv.alignCenterU", "Center U"), ("uv.alignCenterV", "Center V"), ("uv.linearAlign", "Linear Align"), ("uv.distributeU", "Distribute U"), ("uv.distributeV", "Distribute V"), ("uv.matchGridApply", "Match Grid"), ("uv.matchUvs", "Match UVs"), ("uv.snapTogether", "Snap Together"), ("uv.pixelSnap", "Pixel Snap"))),
-            Sub("Modify", () => Group(("uv.normalizeApply", "Normalize"), ("uv.unitize", "Unitize"), ("uv.cycle", "Cycle"), ("uv.flipU", "Flip U"), ("uv.flipV", "Flip V"), ("uv.rotateCw", "Rotate 90 CW"), ("uv.rotateCcw", "Rotate 90 CCW"), ("uv.symmetrizeApply", "Symmetrize"), ("uv.straightenApply", "Straighten UVs"), ("uv.straightenBorder", "Straighten Border"), ("uv.straightenShell", "Straighten Shell"), ("uv.mapBorderSquare", "Map Border Square"), ("uv.mapBorderCircle", "Map Border Circle"), ("uv.optimize", "Optimize"))),
+            Sub("Modify", () => Group(("uv.normalizeApply", "Normalize"), ("uv.unitize", "Unitize"), ("uv.cycle", "Cycle"), ("uv.flipU", "Flip U"), ("uv.flipV", "Flip V"), ("uv.rotateCw", "Rotate 90 CW"), ("uv.rotateCcw", "Rotate 90 CCW"), ("uv.rotateApply", "Rotate"), ("uv.symmetrizeApply", "Symmetrize"), ("uv.straightenApply", "Straighten UVs"), ("uv.straightenBorder", "Straighten Border"), ("uv.straightenShell", "Straighten Shell"), ("uv.mapBorderSquare", "Map Border Square"), ("uv.mapBorderCircle", "Map Border Circle"), ("uv.optimize", "Optimize"))),
             Sub("Shells", () => Group(("uv.layout", "Layout..."), ("uv.orientShells", "Orient Shells"), ("uv.orientToEdge", "Orient to Edges"), ("uv.randomizeShellsApply", "Randomize"), ("uv.stackShells", "Stack"), ("uv.stackSimilar", "Stack Similar"), ("uv.unstackShells", "Unstack"), ("uv.snapAndStack", "Snap and Stack"), ("uv.distributeShellsU", "Distribute U"), ("uv.distributeShellsV", "Distribute V"), ("uv.gatherShells", "Gather"), ("uv.flipReversed", "Flip Reversed"))),
             Sub("Pin / Edit", () => Group(("uv.pin", "Pin"), ("uv.unpin", "Unpin"), ("uv.invertPins", "Invert Pins"), ("uv.unpinAll", "Unpin All"), ("uv.copy", "Copy UVs"), ("uv.paste", "Paste UVs"))),
             Sub("Tools", () => Group(("uv.toolNone", "Select/Transform"), ("uv.toolTweak", "Tweak"), ("uv.toolMoveShell", "Move Shell"), ("uv.toolGrab", "Grab"), ("uv.toolSmooth", "Smooth"), ("uv.toolPinch", "Pinch"), ("uv.toolSmear", "Smear"), ("uv.toolPinBrush", "Pin Brush"), ("uv.toolCutSew", "Cut/Sew"), ("uv.brushOptions", "Brush Options..."))),
-            Sub("Display", () => Group(("uv.cycleBackground", "Background"), ("uv.checkerMap", "Checker Map"), ("uv.viewShaded", "Shaded"), ("uv.viewDistortion", "Distortion"), ("uv.viewTextureBorders", "Texture Borders"), ("uv.viewIsolate", "Isolate Select"), ("uv.viewStats", "Statistics"), ("uv.viewGrid", "Grid"), ("uv.viewTiles", "UV Tiles"), ("uv.imageDim", "Dim Image"), ("uv.imageUnfiltered", "Unfiltered"), ("uv.snapshot", "UV Snapshot..."))),
+            Sub("Display", () => Group(("uv.cycleBackground", "Background"), ("uv.checkerMap", "Checker Map"), ("uv.checkerSizeUp", "Checker +"), ("uv.checkerSizeDown", "Checker -"), ("uv.viewShaded", "Shaded"), ("uv.viewDistortion", "Distortion"), ("uv.viewTextureBorders", "Texture Borders"), ("uv.viewIsolate", "Isolate Select"), ("uv.viewStats", "Statistics"), ("uv.viewGrid", "Grid"), ("uv.viewTiles", "UV Tiles"), ("uv.imageDim", "Dim Image"), ("uv.imageUnfiltered", "Unfiltered"), ("uv.snapshot", "UV Snapshot..."))),
             Sub("UV Sets", () => Group(("uv.setEditor", "UV Set Editor"), ("uv.setCreate", "Create Empty Set..."), ("uv.setCopy", "Copy to New Set"), ("uv.setDelete", "Delete Current"), ("uv.setNext", "Next Set"))),
         };
     }

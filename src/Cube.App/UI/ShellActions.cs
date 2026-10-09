@@ -700,9 +700,10 @@ public partial class Shell
             .Item("normals.lock").Item("normals.unlock");
 
         Menus.Build(Add("UV"))
-            .Item("windows.uvEditor").Separator()
-            .Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
-            .Item("uv.unfold").Op("uv.layout").Separator().Item("uv.cut").Item("uv.sew").Separator().Item("uv.flipU").Item("uv.flipV");
+            .Item("windows.uvEditor").Item("uv.setEditor").Separator()
+            .Op("uv.automatic").Item("uv.bestPlane").Item("uv.cameraBased").Item("uv.contourStretch").Item("uv.planarBest").Item("uv.planarX").Item("uv.planarY").Item("uv.planarZ").Item("uv.cylindrical").Item("uv.spherical").Separator()
+            .Item("uv.autoSeams").Item("uv.autoWrap").Item("uv.createShell").Item("uv.createShellGrid").Separator()
+            .Item("uv.unfold").Item("uv.optimize").Op("uv.layout").Op("uv.normalize").Op("uv.straighten").Separator().Item("uv.cut").Item("uv.sew").Item("uv.moveAndSew").Item("uv.cutSewTool").Separator().Item("uv.flipU").Item("uv.flipV");
         Menus.Build(Add("Skeleton")).Item("skeleton.jointTool").Item("skeleton.insertJointTool").Separator().Item("skeleton.mirror").Item("skeleton.orient").Item("skeleton.orientApply");
         Menus.Build(Add("Skin")).Item("skin.bind").Item("skin.detach").Separator().Item("skin.paintTool").Item("skin.normalize").Item("skin.rebind");
 

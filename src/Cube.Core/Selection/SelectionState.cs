@@ -114,6 +114,9 @@ public sealed class SelectionState
     /// <summary>문서에 연결된 빈 선택(오브젝트 모드).</summary>
     public SelectionState(Document doc) { _doc = doc; }
 
+    /// <summary>Changed/ModeChanged 구독자를 모두 뗀다(<see cref="Document.DetachViewListeners"/>가 문서 중계를 다시 붙인다).</summary>
+    internal void ClearListeners() { Changed = null; ModeChanged = null; }
+
     /// <summary>선택 모드. 오브젝트 → 컴포넌트로 바뀌는 순간 활성 오브젝트가 편집 대상이 된다(EnterComponentMode).</summary>
     public SelectMode Mode
     {

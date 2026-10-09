@@ -61,6 +61,7 @@ public partial class CubeApp : Node
     public void ReloadShell()
     {
         UI.Shell.Instance?.Dock?.SaveLayout(); // 도킹 레이아웃(폭·탭) 유지
+        Document.DetachViewListeners();       // 옛 셸의 뷰·패널이 해제된 뒤에도 문서 통지를 받지 않게(새 셸이 다시 구독)
         ApplyUiScale();
         GetTree().ReloadCurrentScene();
     }
