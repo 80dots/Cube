@@ -563,7 +563,7 @@ public static partial class MeshOps
 
     /// <summary>
     /// Circularize: 선택 정점(또는 면 영역의 둘레 정점)을 평균 평면 위의 원에 배치한다. radialOffset은 반지름 배율 보정(0 = 평균 거리), evenly면 각도를 균등 분배.
-    /// 면 영역이면 안쪽 정점은 둘레의 평균 이동만큼 따라간다.
+    /// 주어진 정점만 옮긴다(면 영역의 안쪽 정점 이완은 호출자가 AverageVertices로 한다).
     /// </summary>
     public static void Circularize(PolyMesh m, IEnumerable<int> vertIds, float radialOffset, bool evenly)
     /// <param name="radialOffset">반지름 보정 비율(radius = 평균 거리 × (1 + radialOffset)).</param>

@@ -362,15 +362,21 @@ public partial class Shell
         ForEachMeshTarget("Circularize", SelectMode.Vertex, (id, ids) =>
         {
             var mesh = Document.Find(id)!.Mesh!;
+            int[] inner = Array.Empty<int>();
             if (sel.Mode == SelectMode.Face)
             {
                 var border = SelectionOps.BoundaryEdgesOfFaces(mesh, sel.GetComponents(id).Faces);
                 var bv = new HashSet<int>(); foreach (int e in border) { var (a, b) = mesh.EdgeVertices(e); bv.Add(a); bv.Add(b); }
-                if (bv.Count >= 3) ids = bv;
+                if (bv.Count >= 3)
+                {
+                    // 영역 안쪽 정점: 둘레를 원으로 옮긴 뒤 이완해 따라오게 한다(전에는 제자리라 안쪽 면이 찌그러졌다, v0.0.57)
+                    inner = ids.Where(v => !bv.Contains(v)).ToArray();
+                    ids = bv;
+                }
             }
             var verts = ids.ToArray();
             return ParamOp("Circularize", id, HistoryParam.F("Radial Offset", o.Float("radial"), -0.9f, 10f, 0.01f),
-                (m, p) => { MeshOps.Circularize(m, verts, p.Float("Radial Offset"), evenly); return (true, null, null); });
+                (m, p) => { MeshOps.Circularize(m, verts, p.Float("Radial Offset"), evenly); if (inner.Length > 0) MeshOps.AverageVertices(m, inner, 20, 1f); return (true, null, null); });
         });
     }
 
