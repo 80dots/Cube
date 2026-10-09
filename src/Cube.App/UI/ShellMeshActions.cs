@@ -438,7 +438,7 @@ public partial class Shell
     /// <summary>Mirror 옵션 필드: 축, 남길 쪽(+/-), 평면 위치(바운딩 박스 중심/오브젝트 원점/월드 원점), 병합 여부·임계값, 자르기(Symmetrize).</summary>
     private static readonly OptionField[] MirrorFields =
     {
-        OptionField.E("axis", "Mirror axis", "X", "Y", "Z"), OptionField.E("direction", "Direction", "+ (keep positive side)", "- (keep negative side)"),
+        OptionField.E("axis", "Mirror axis", "X", "Y", "Z"), OptionField.E("direction", "Direction", "+ (mirror to / keep the positive side)", "- (mirror to / keep the negative side)"),
         OptionField.E("position", "Mirror axis position", "Bounding Box", "Object", "World"), OptionField.B("merge", "Merge vertices"), OptionField.F("threshold", "Merge threshold", 0, 10, 0.0001), OptionField.B("cut", "Cut geometry (symmetrize)"),
     };
     /// <summary>Mirror 옵션 기본값: X축, + 쪽 유지, 바운딩 박스, 병합 켬(0.001), 자르기 끔.</summary>
@@ -446,7 +446,7 @@ public partial class Shell
 
     /// <summary>
     /// Mirror / Symmetrize(cut = true): 선택 메시마다 오브젝트 공간의 반사 평면 좌표를 정하고 MeshOps.MirrorGeometry를 적용한다.
-    /// 평면 위치: 0 = 메시 AABB 중심, 1 = 오브젝트 원점(0), 2 = 월드 원점을 오브젝트 공간으로 옮긴 좌표.
+    /// 평면 위치: 0 = 메시 AABB(Symmetrize = 중심, Mirror = 방향 쪽 면), 1 = 오브젝트 원점(0), 2 = 월드 원점을 오브젝트 공간으로 옮긴 좌표.
     /// Plane/Merge Threshold는 이력 파라미터라 나중에 조정할 수 있다.
     /// </summary>
     private void MirrorSelection(bool cut)
@@ -465,7 +465,9 @@ public partial class Shell
                 {
                     float mn = float.MaxValue, mx = float.MinValue;
                     foreach (var v in mesh.Verts) if (v.Alive) { float c = axis == 0 ? v.Position.X : axis == 1 ? v.Position.Y : v.Position.Z; mn = MathF.Min(mn, c); mx = MathF.Max(mx, c); }
-                    plane = (mn + mx) * 0.5f;
+                    // Symmetrize(자르기)는 바운딩 박스 중심, Mirror는 방향 쪽 바운딩 박스 면(Maya: +면 최대, −면 최소)
+                    // (v0.0.57; 전에는 Mirror도 중심이라 대칭인 메시의 반사본이 원본과 그대로 겹쳤다)
+                    plane = cut ? (mn + mx) * 0.5f : keepPositive ? mx : mn;
                 }
                 else if (position == 2)
                 {

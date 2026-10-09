@@ -1,0 +1,110 @@
+using System.Numerics;
+using Cube.Core.Mesh;
+
+namespace Cube.Core.Tests.Mesh;
+
+/// <summary>모델링 감사(v0.0.57)에서 찾은 버그의 재현 회귀 테스트.</summary>
+public class ModelingAuditRegressionTests
+{
+    /// <summary>오일러 특성 V − E + F.</summary>
+    private static int Euler(PolyMesh m) => m.AliveVertexCount - m.AliveEdgeCount + m.AliveFaceCount;
+    /// <summary>경계 엣지 수.</summary>
+    private static int Boundary(PolyMesh m) => Enumerable.Range(0, m.EdgeCount).Count(e => m.Edges[e].Alive && m.IsBoundaryEdge(e));
+    /// <summary>살아 있는 면 ID.</summary>
+    private static int[] Faces(PolyMesh m) => Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive).ToArray();
+
+    /// <summary>건전성(검증기·고립 정점 없음) + 선택적으로 닫힘/오일러.</summary>
+    private static void AssertSound(PolyMesh m, bool closed = false, int? euler = null)
+    {
+        var p = ModelingAuditFuzzTests.Problems(m);
+        Assert.True(p.Count == 0, string.Join("; ", p));
+        if (closed) Assert.Equal(0, Boundary(m));
+        if (euler != null) Assert.Equal(euler, Euler(m));
+    }
+
+    /// <summary>Symmetrize(자르기) 중심 평면: 큐브는 닫힌 큐브(자른 루프가 추가된 10면)로 남는다(전에는 걸친 면이 겹쳐 구멍).</summary>
+    [Fact]
+    public void Symmetrize_CubeAtCenter_StaysClosedBox()
+    {
+        var m = MeshBuilder.Cube();
+        MeshOps.MirrorGeometry(m, 0, 0f, true, true, 0.001f);
+        AssertSound(m, closed: true, euler: 2);
+        var (mn, mx) = MeshOps.Bounds(m);
+        Assert.Equal(-0.5f, mn.X, 4); Assert.Equal(0.5f, mx.X, 4);
+    }
+
+    /// <summary>Symmetrize 비중심 평면: 남길 쪽(x ≥ 0.2)을 반사한 닫힌 상자(-0.1..0.5).</summary>
+    [Fact]
+    public void Symmetrize_OffCenterPlane_SlicesAndMirrors()
+    {
+        var m = MeshBuilder.Cube();
+        MeshOps.MirrorGeometry(m, 0, 0.2f, true, true, 0.001f);
+        AssertSound(m, closed: true, euler: 2);
+        var (mn, mx) = MeshOps.Bounds(m);
+        Assert.Equal(-0.1f, mn.X, 4); Assert.Equal(0.5f, mx.X, 4);
+    }
+
+    /// <summary>Symmetrize: 평면이 기존 정점을 지나는 구(경선)도 닫힌 채로 대칭이 된다.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Symmetrize_SphereThroughVertices_Closed(int axis)
+    {
+        var m = MeshBuilder.Sphere(0.5f, 8, 6);
+        MeshOps.MirrorGeometry(m, axis, 0f, false, true, 0.001f);
+        AssertSound(m, closed: true, euler: 2);
+    }
+
+    /// <summary>Symmetrize 평면이 메시 바깥(남길 쪽에 아무것도 없음)이면 메시를 바꾸지 않는다.</summary>
+    [Fact]
+    public void Symmetrize_PlaneOutside_NoChange()
+    {
+        var m = MeshBuilder.Cube();
+        var r = MeshOps.MirrorGeometry(m, 0, 0.5f, true, true, 0.001f);
+        Assert.Empty(r);
+        Assert.Equal(6, m.AliveFaceCount); AssertSound(m, closed: true, euler: 2);
+    }
+
+    /// <summary>Mirror(자르기 없음)를 닫힌 큐브의 면 평면에서 하면 붙은 안쪽 면이 사라지고 2×1×1 닫힌 상자가 된다.</summary>
+    [Fact]
+    public void Mirror_AtFacePlane_MergesIntoClosedBox()
+    {
+        var m = MeshBuilder.Cube();
+        MeshOps.MirrorGeometry(m, 0, 0.5f, true, false, 0.001f);
+        AssertSound(m, closed: true, euler: 2);
+        Assert.Equal(10, m.AliveFaceCount);
+    }
+
+    /// <summary>Add Divisions(Linear, U≠V)를 큐브 전체에 적용: 이웃 면의 U/V가 엇갈려도 이음매가 닫혀 있다(전에는 열렸다).</summary>
+    [Theory]
+    [InlineData(2, 3)]
+    [InlineData(3, 1)]
+    [InlineData(4, 2)]
+    public void AddDivisionsLinear_WholeCube_Closed(int u, int v)
+    {
+        var m = MeshBuilder.Cube();
+        MeshOps.AddDivisionsLinear(m, Faces(m), u, v);
+        AssertSound(m, closed: true, euler: 2);
+    }
+
+    /// <summary>열린 평면의 경계 정점 삭제: 주변 면이 사라질 때 고립 정점이 남지 않는다.</summary>
+    [Fact]
+    public void DeleteVertices_BoundaryVertex_NoIsolatedVertices()
+    {
+        var m = MeshBuilder.Plane(1, 1, 3, 3);
+        // 가장자리 중간 정점(차수 3) 하나
+        int v = Enumerable.Range(0, m.VertexCount).First(i => { var outs = m.VertexOutgoing(i); return outs.Length == 2; });
+        MeshOps.DeleteVertices(m, new[] { v });
+        AssertSound(m);
+    }
+
+    /// <summary>n각형 하나의 경계 엣지 삭제: 면이 지워지면 정점도 모두 지워진다.</summary>
+    [Fact]
+    public void DeleteEdges_BorderOfSingleNgon_RemovesAllVertices()
+    {
+        var m = MeshBuilder.Polygon(Enumerable.Range(0, 6).Select(i => new Vector3(MathF.Cos(i), 0, MathF.Sin(i))).ToArray(), Vector3.UnitY);
+        MeshOps.DeleteEdges(m, new[] { 0 });
+        Assert.Equal(0, m.AliveVertexCount);
+    }
+}
