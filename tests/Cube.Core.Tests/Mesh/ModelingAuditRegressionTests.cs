@@ -271,4 +271,34 @@ public class ModelingAuditRegressionTests
         Assert.Equal(10, m.AliveFaceCount);
         AssertSound(m, closed: true, euler: 2);
     }
+
+    /// <summary>두 번째 UV 세트(모든 코너 UV = (0.25, 0.75))를 가진 큐브.</summary>
+    private static PolyMesh TwoSetCube()
+    {
+        var m = MeshBuilder.Cube();
+        int k = m.AddUvSet("uv2", false);
+        var arr = m.UvSets[k].Uvs; for (int i = 0; i < arr.Length; i++) arr[i] = new System.Numerics.Vector2(0.25f, 0.75f);
+        return m;
+    }
+
+    /// <summary>Extract/Separate·Mirror·Combine이 현재 세트가 아닌 UV 세트 값을 옮긴다(전에는 사라지거나 0이 됐다).</summary>
+    [Theory]
+    [InlineData("extract")]
+    [InlineData("mirror")]
+    [InlineData("append")]
+    public void FaceCopyingOps_KeepOtherUvSets(string op)
+    {
+        var m = TwoSetCube();
+        switch (op)
+        {
+            case "extract": m = MeshOps.ExtractFaces(m, Faces(m)); break;
+            case "mirror": MeshOps.MirrorGeometry(m, 0, 0.5f, true, false, 0f); break;
+            case "append": { var t = new PolyMesh(); MeshOps.Append(t, m, System.Numerics.Matrix4x4.CreateTranslation(3, 0, 0)); m = t; break; }
+        }
+        Assert.Equal(2, m.UvSets.Count);
+        int k = m.UvSets.FindIndex(u => u.Name == "uv2");
+        Assert.True(k >= 0);
+        m.SwitchUvSet(k);
+        Assert.All(Enumerable.Range(0, m.Hes.Count).Where(h => m.Hes[h].Alive), h => Assert.Equal(new System.Numerics.Vector2(0.25f, 0.75f), m.Hes[h].Uv0));
+    }
 }

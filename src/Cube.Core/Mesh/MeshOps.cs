@@ -551,6 +551,7 @@ public static partial class MeshOps
         for (int v = 0; v < source.Verts.Count; v++)
             vmap[v] = source.Verts[v].Alive ? target.AddVertex(Vector3.Transform(source.Verts[v].Position, transform)) : -1;
         bool flip = Matrix4x4.Invert(transform, out _) && Det3(transform) < 0;
+        var sets = new UvSetCopier(source, target);
         for (int f = 0; f < source.Faces.Count; f++)
         {
             if (!source.Faces[f].Alive) continue;
@@ -562,8 +563,65 @@ public static partial class MeshOps
             if (nf < 0) continue;
             for (int i = 0; i < srcCorners.Count; i++)
                 SetFlags(target, vmap[srcCorners[i].Vertex], vmap[srcCorners[(i + 1) % srcCorners.Count].Vertex], GetFlags(source, srcCorners[i].Vertex, srcCorners[(i + 1) % srcCorners.Count].Vertex));
+            sets.CopyFace(f, nf, flip);
         }
+        // 정점 단위 고정 노멀도 옮긴다(방향은 변환)
+        foreach (var (v, n) in source.LockedNormals.ToArray())
+            if (v < vmap.Length && vmap[v] >= 0) { var tn = Vector3.TransformNormal(n, transform); if (tn.LengthSquared() > 1e-20f) target.LockedNormals[vmap[v]] = Vector3.Normalize(tn); }
         target.BumpTopology();
+    }
+
+    /// <summary>
+    /// 면을 다른 메시로 옮길 때 현재 세트 밖의 UV 세트 값도 함께 옮기는 도우미(Separate/Extract/Combine/Mirror; 전에는 현재 세트만 옮겨
+    /// 다른 세트의 UV가 0이 되거나 사라졌다, v0.0.57). 세트는 이름으로 짝짓고 대상에 없으면 만든다. 원본에 세트가 하나뿐이면 아무것도 하지 않는다.
+    /// </summary>
+    private sealed class UvSetCopier
+    {
+        /// <summary>원본/대상 메시.</summary>
+        private readonly PolyMesh _src, _dst;
+        /// <summary>원본 세트 번호 → 대상 세트 번호(null = 복사할 세트 없음).</summary>
+        private readonly int[]? _map;
+
+        /// <summary>원본의 현재 UV를 세트에 저장하고 대상에 같은 이름의 세트를 준비한다.</summary>
+        public UvSetCopier(PolyMesh src, PolyMesh dst)
+        {
+            _src = src; _dst = dst;
+            if (src.UvSets.Count <= 1) return;
+            src.StoreCurrentUvs();
+            if (dst.UvSets.Count == 0) { dst.EnsureUvSets(); dst.UvSets[0].Name = src.UvSets[Math.Clamp(src.CurrentUvSet, 0, src.UvSets.Count - 1)].Name; }
+            else dst.StoreCurrentUvs();
+            _map = new int[src.UvSets.Count];
+            for (int k = 0; k < src.UvSets.Count; k++)
+            {
+                int i = dst.UvSets.FindIndex(t => t.Name == src.UvSets[k].Name);
+                if (i < 0) { dst.UvSets.Add(new UvSet { Name = src.UvSets[k].Name, Uvs = new Vector2[dst.Hes.Count] }); i = dst.UvSets.Count - 1; }
+                _map[k] = i;
+            }
+        }
+
+        /// <summary>원본 면 sf의 코너 UV(모든 세트)를 대상 면 df로 옮긴다. reversed면 대상 코너 i = 원본 코너 n−1−i.</summary>
+        public void CopyFace(int sf, int df, bool reversed)
+        {
+            if (_map == null) return;
+            var sh = new List<int>(); _src.GetFaceHalfEdges(sf, sh);
+            var dh = new List<int>(); _dst.GetFaceHalfEdges(df, dh);
+            int n = Math.Min(sh.Count, dh.Count);
+            int cur = Math.Clamp(_dst.CurrentUvSet, 0, _dst.UvSets.Count - 1);
+            for (int k = 0; k < _map.Length; k++)
+            {
+                var srcArr = _src.UvSets[k].Uvs;
+                var set = _dst.UvSets[_map[k]];
+                if (set.Uvs.Length < _dst.Hes.Count) { var a = set.Uvs; Array.Resize(ref a, _dst.Hes.Count); set.Uvs = a; }
+                for (int i = 0; i < n; i++)
+                {
+                    int s = sh[reversed ? n - 1 - i : i];
+                    var uv = s < srcArr.Length ? srcArr[s] : Vector2.Zero;
+                    set.Uvs[dh[i]] = uv;
+                    // 대상의 현재 세트는 하프에지 Uv0에 올라와 있으므로 그 값도 맞춘다
+                    if (_map[k] == cur) { var h = _dst.Hes[dh[i]]; h.Uv0 = uv; _dst.Hes[dh[i]] = h; }
+                }
+            }
+        }
     }
 
     /// <summary>행렬 좌상단 3×3(회전/스케일 부분)의 행렬식. 음수면 반사 변환이다.</summary>
@@ -608,6 +666,7 @@ public static partial class MeshOps
         var target = new PolyMesh();
         // vmap: 원본 정점 ID -> 새 메시 정점 ID(처음 등장할 때 생성)
         var vmap = new Dictionary<int, int>();
+        var sets = new UvSetCopier(m, target);
         foreach (int f in faceIds)
         {
             var corners = CaptureCorners(m, f);
@@ -620,7 +679,10 @@ public static partial class MeshOps
             if (nf < 0) continue;
             for (int i = 0; i < corners.Count; i++)
                 SetFlags(target, mapped[i].Vertex, mapped[(i + 1) % mapped.Count].Vertex, GetFlags(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
+            sets.CopyFace(f, nf, false);
         }
+        foreach (var (v, n) in m.LockedNormals) if (vmap.TryGetValue(v, out int nv)) target.LockedNormals[nv] = n;
+        if (m.UvSets.Count > 1) target.CurrentUvSet = target.UvSets.FindIndex(t => t.Name == m.UvSets[Math.Clamp(m.CurrentUvSet, 0, m.UvSets.Count - 1)].Name) is var ci && ci >= 0 ? ci : 0;
         target.BumpTopology();
         return target;
     }
