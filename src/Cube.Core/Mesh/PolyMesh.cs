@@ -171,11 +171,29 @@ public sealed class PolyMesh
         GeometryVersion++;
     }
 
-    /// <summary>새 UV 세트를 만든다(copyCurrent면 현재 UV 복사, 아니면 0). 반환값은 인덱스.</summary>
+    /// <summary>
+    /// 다른 세트와 겹치지 않는 세트 이름: 이미 쓰는 이름이면 끝의 숫자를 늘리거나(uvSet1 → uvSet2) 숫자를 붙인다(map1_copy → map1_copy1).
+    /// </summary>
+    /// <param name="name">원하는 이름.</param>
+    /// <param name="exceptIndex">비교에서 뺄 세트(이름 바꾸기 대상 자신), 없으면 −1.</param>
+    public string UniqueUvSetName(string name, int exceptIndex = -1)
+    {
+        bool Taken(string n) { for (int i = 0; i < UvSets.Count; i++) if (i != exceptIndex && UvSets[i].Name == n) return true; return false; }
+        if (!Taken(name)) return name;
+        // 끝의 숫자 부분과 앞부분으로 나눠 숫자를 올린다
+        int k = name.Length; while (k > 0 && char.IsDigit(name[k - 1])) k--;
+        string stem = name[..k]; int n = k < name.Length ? int.Parse(name[k..]) : 0;
+        string cand;
+        do cand = stem + (++n); while (Taken(cand));
+        return cand;
+    }
+
+    /// <summary>새 UV 세트를 만든다(copyCurrent면 현재 UV 복사, 아니면 0). 이름이 이미 있으면 숫자를 붙여 겹치지 않게 한다. 반환값은 인덱스.</summary>
     public int AddUvSet(string name, bool copyCurrent)
     {
         EnsureUvSets();
         StoreCurrentUvs();
+        name = UniqueUvSetName(name);
         // 복사 세트는 심·핀도 그대로, 빈 세트는 심·핀 없음
         UvSets.Add(new UvSet { Name = name, Uvs = copyCurrent ? SnapshotUvs() : new Vector2[Hes.Count], Seams = copyCurrent ? SnapshotSeams() : new bool[Edges.Count], Pins = copyCurrent ? SnapshotPins() : new bool[Hes.Count] });
         return UvSets.Count - 1;

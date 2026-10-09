@@ -353,4 +353,14 @@ public class UvAuditStressTests
         Assert.InRange(d[d.Length / 10], 0.67f, 1.5f);
         Assert.InRange(d[d.Length * 9 / 10], 0.67f, 1.5f);
     }
+    /// <summary>같은 이름으로 세트를 만들거나 복사하면 숫자를 붙여 이름이 겹치지 않는다(uvSet1 → uvSet2, map1_copy → map1_copy1).</summary>
+    [Fact]
+    public void UvSets_NamesStayUnique()
+    {
+        var m = MeshBuilder.Cube();
+        m.AddUvSet("uvSet1", false); m.AddUvSet("uvSet1", false);
+        m.AddUvSet("map1_copy", true); m.AddUvSet("map1_copy", true);
+        Assert.Equal(new[] { "map1", "uvSet1", "uvSet2", "map1_copy", "map1_copy1" }, m.UvSets.Select(s => s.Name));
+        Assert.Equal("uvSet1", m.UniqueUvSetName("uvSet1", exceptIndex: 1));
+    }
 }
