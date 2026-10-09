@@ -301,4 +301,21 @@ public class ModelingAuditRegressionTests
         m.SwitchUvSet(k);
         Assert.All(Enumerable.Range(0, m.Hes.Count).Where(h => m.Hes[h].Alive), h => Assert.Equal(new System.Numerics.Vector2(0.25f, 0.75f), m.Hes[h].Uv0));
     }
+
+    /// <summary>면을 같은 메시 안에서 다시 만드는 연산(Reverse/Extrude 캡/Merge)이 다른 UV 세트 값을 유지한다.</summary>
+    [Fact]
+    public void RebuildingOps_KeepOtherUvSetValues()
+    {
+        var uv = new System.Numerics.Vector2(0.25f, 0.75f);
+        var m = TwoSetCube();
+        MeshOps.ReverseFaces(m, Faces(m));
+        m.SwitchUvSet(1);
+        Assert.All(Enumerable.Range(0, m.Hes.Count).Where(h => m.Hes[h].Alive), h => Assert.Equal(uv, m.Hes[h].Uv0));
+        m.SwitchUvSet(0);
+        int top = Faces(m).First();
+        var caps = MeshOps.ExtrudeFaces(m, new[] { top });
+        m.SwitchUvSet(1);
+        var hes = new List<int>(); m.GetFaceHalfEdges(caps[0], hes);
+        Assert.All(hes, h => Assert.Equal(uv, m.Hes[h].Uv0));
+    }
 }

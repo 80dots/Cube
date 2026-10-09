@@ -23,10 +23,11 @@ public static partial class MeshOps
     /// <param name="Normal">코너 노멀(재계산 전 값; 새 면에서는 Zero여도 호출자가 Recompute한다).</param>
     /// <param name="Pin">UV 핀(<see cref="HalfEdge.PinUv"/>).</param>
     /// <param name="Locked">코너 노멀 고정(<see cref="HalfEdge.NormalLocked"/>; Bevel Harden Normals 등). 면을 다시 만드는 연산이 이 두 표시를 잃지 않도록 함께 옮긴다(v0.0.57).</param>
-    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal, bool Pin = false, bool Locked = false)
+    /// <param name="SrcHe">이 코너를 캡처한 같은 메시의 하프에지 ID(-1 = 새 코너). 다시 만들 때 현재 세트 밖 UV 세트 값을 이 슬롯에서 옮긴다.</param>
+    internal readonly record struct Corner(int Vertex, Vector2 Uv, Vector3 Normal, bool Pin = false, bool Locked = false, int SrcHe = -1)
     {
-        /// <summary>하프에지의 코너 속성(정점·UV·노멀·핀·노멀 고정).</summary>
-        public static Corner Of(HalfEdge h) => new(h.Vertex, h.Uv0, h.Normal, h.PinUv, h.NormalLocked);
+        /// <summary>하프에지의 코너 속성(정점·UV·노멀·핀·노멀 고정, 원본 하프에지 ID).</summary>
+        public static Corner Of(HalfEdge h, int index = -1) => new(h.Vertex, h.Uv0, h.Normal, h.PinUv, h.NormalLocked, index);
         /// <summary>면을 뒤집어 다시 만들 때의 코너: 고정 노멀은 반대 방향으로(고정이 아니면 재계산되므로 그대로).</summary>
         public Corner Flipped() => Locked ? this with { Normal = -Normal } : this;
     }
@@ -42,7 +43,7 @@ public static partial class MeshOps
     {
         var list = new List<Corner>();
         int start = m.Faces[f].HalfEdge, he = start;
-        do { var h = m.Hes[he]; list.Add(Corner.Of(h)); he = h.Next; } while (he != start);
+        do { var h = m.Hes[he]; list.Add(Corner.Of(h, he)); he = h.Next; } while (he != start);
         return list;
     }
 
@@ -64,6 +65,21 @@ public static partial class MeshOps
         // AddFace가 만든 하프에지 루프는 corners와 같은 순서로 시작하므로 i2번째 코너 속성을 차례로 복사한다
         int start = m.Faces[f].HalfEdge, he = start, i2 = 0;
         do { var h = m.Hes[he]; h.Uv0 = corners[i2].Uv; h.Normal = corners[i2].Normal; h.PinUv = corners[i2].Pin; h.NormalLocked = corners[i2].Locked; m.Hes[he] = h; he = h.Next; i2++; } while (he != start);
+        // 현재 세트 밖 UV 세트: 같은 메시에서 캡처한 코너면 원래 슬롯 값을 새 하프에지로 옮긴다(전에는 면을 다시 만드는 모든 연산 뒤 0이 됐다, v0.0.57).
+        // 새로 생긴 코너(분할 정점 등)는 0으로 남는다.
+        if (m.UvSets.Count > 1)
+        {
+            int cur = Math.Clamp(m.CurrentUvSet, 0, m.UvSets.Count - 1);
+            for (int k = 0; k < m.UvSets.Count; k++)
+            {
+                if (k == cur) continue;
+                var set = m.UvSets[k];
+                var arr = set.Uvs;
+                if (arr.Length < m.Hes.Count) { Array.Resize(ref arr, m.Hes.Count); set.Uvs = arr; }
+                he = start; i2 = 0;
+                do { int src = corners[i2].SrcHe; arr[he] = src >= 0 && src < arr.Length ? arr[src] : Vector2.Zero; he = m.Hes[he].Next; i2++; } while (he != start);
+            }
+        }
         return f;
     }
 
@@ -343,7 +359,7 @@ public static partial class MeshOps
                 var h = m.Hes[cur];
                 visitedFaces.Add(h.Face);
                 int walk = h.Next;
-                while (m.Hes[walk].Next != cur) { var w = m.Hes[walk]; loop.Add(Corner.Of(w)); walk = w.Next; }
+                while (m.Hes[walk].Next != cur) { var w = m.Hes[walk]; loop.Add(Corner.Of(w, walk)); walk = w.Next; }
                 // 마지막 정점(v 직전)은 다음 면의 첫 정점과 같으므로 건너뜀
                 cur = m.Hes[m.Hes[cur].Prev].Twin; // 다음 면에서 v에서 나가는 하프에지
                 if (cur < 0 || guard++ > 10000) break;
@@ -555,7 +571,7 @@ public static partial class MeshOps
         for (int f = 0; f < source.Faces.Count; f++)
         {
             if (!source.Faces[f].Alive) continue;
-            var corners = CaptureCorners(source, f).Select(c => c with { Vertex = vmap[c.Vertex], Normal = Vector3.Normalize(Vector3.TransformNormal(c.Normal, transform)) }).ToList();
+            var corners = CaptureCorners(source, f).Select(c => c with { Vertex = vmap[c.Vertex], Normal = Vector3.Normalize(Vector3.TransformNormal(c.Normal, transform)), SrcHe = -1 }).ToList();
             if (flip) corners.Reverse();
             // 하드 플래그 조회용 원본 코너(뒤집기 전 순서) — 엣지는 무향이라 순서와 무관하게 짝을 찾는다
             var srcCorners = CaptureCorners(source, f);
@@ -673,7 +689,7 @@ public static partial class MeshOps
             var mapped = corners.Select(c =>
             {
                 if (!vmap.TryGetValue(c.Vertex, out int nv)) { nv = target.AddVertex(m.Verts[c.Vertex].Position); vmap[c.Vertex] = nv; }
-                return c with { Vertex = nv };
+                return c with { Vertex = nv, SrcHe = -1 };
             }).ToList();
             int nf = AddFaceWithCorners(target, mapped, m.Faces[f].Material);
             if (nf < 0) continue;
