@@ -33,7 +33,7 @@ public static class JointOps
     /// <summary>
     /// 조인트들의 로컬 회전을 "주축이 첫 자식(자식 평균)을 향하고 보조축이 월드 방향에 가깝게" 정한다.
     /// 자식 조인트가 없는 끝 조인트는 부모의 방향을 따른다(Maya와 동일). 자식들의 월드 트랜스폼은 유지된다.
-    /// 반환값은 (노드, 이전 로컬, 새 로컬) 목록.
+    /// 반환값은 (노드, 이전 로컬, 새 로컬) 목록(같은 노드가 여러 번 나올 수 있으며 노드별 첫 이전 값 = 원래 로컬).
     /// </summary>
     /// <param name="joints">선택된 노드들(조인트가 아닌 노드는 무시).</param>
     /// <param name="opt">주축/보조축 옵션.</param>
@@ -79,8 +79,9 @@ public static class JointOps
             Matrix4x4.Invert(j.WorldMatrix, out var inv);
             foreach (var (c, w) in childWorlds)
             {
+                // 곧 다시 정렬될 자식 조인트도 기록한다: 호출자는 노드별 첫 before를 Undo 값으로 쓰므로,
+                // 여기서 빠지면 나중 항목의 before가 이미 보정된 로컬이 되어 Undo가 자식을 엉뚱한 곳에 둔다.
                 var cb = c.Local; var ca = Transform3.FromMatrix(w * inv, c.Local.Pivot);
-                if (set.Contains(c)) { c.Local = ca; continue; } // 곧 다시 정렬됨(위치만 반영)
                 c.Local = ca; result.Add((c, cb, ca));
             }
         }

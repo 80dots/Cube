@@ -90,4 +90,23 @@ public class JointOpsTests
         for (int i = 0; i < 4; i++) for (int k = 0; k < 4; k++) Assert.True(MathF.Abs(bWorld[i, k] - bw[i, k]) < 1e-4f);
         Assert.Equal(cLocal, c.Local);
     }
+
+    /// <summary>
+    /// 반환 목록의 노드별 첫 before로 되돌리면(Undo) 모든 조인트가 원래 로컬로 돌아와야 한다.
+    /// (자식까지 정렬할 때 자식의 보정 전 로컬이 기록되지 않아 Undo가 자식을 엉뚱한 곳에 두던 회귀)
+    /// </summary>
+    [Fact]
+    public void Orient_FirstBeforePerNode_RestoresOriginal()
+    {
+        var (_, _, a, b, c) = Chain(true);
+        var orig = new[] { a, b, c }.ToDictionary(j => j, j => j.Local);
+        var worldBefore = new[] { a, b, c }.Select(j => j.WorldMatrix.Translation).ToArray();
+        var changes = JointOps.Orient(new[] { a }, new OrientOptions());
+        var first = new Dictionary<SceneNode, Transform3>();
+        foreach (var (n, before, _) in changes) first.TryAdd(n, before);
+        foreach (var (n, t) in first) n.Local = t;
+        foreach (var j in new[] { a, b, c }) Assert.Equal(orig[j], j.Local);
+        var worldAfter = new[] { a, b, c }.Select(j => j.WorldMatrix.Translation).ToArray();
+        for (int i = 0; i < 3; i++) Near(worldBefore[i], worldAfter[i]);
+    }
 }

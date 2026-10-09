@@ -54,7 +54,8 @@ public sealed class WeightPaintCommand : ICommand
         _mesh = mesh; _verts = verts; _before = before; _after = after;
     }
 
-    /// <summary>모든 정점의 가중치 목록(순서·값)이 같으면 true.</summary>
+    /// <summary>모든 정점의 가중치 목록(순서·조인트가 같고 값 차이 1e-6 이하)이 같으면 true.</summary>
+    /// <remarks>이미 정규화된 가중치를 다시 나누면 마지막 비트만 달라지므로 허용 오차로 비교한다(Normalize가 빈 Undo 단계를 만들지 않도록).</remarks>
     public bool IsNoop
     {
         get
@@ -62,7 +63,8 @@ public sealed class WeightPaintCommand : ICommand
             for (int i = 0; i < _verts.Length; i++)
             {
                 if (_before[i].Count != _after[i].Count) return false;
-                for (int k = 0; k < _before[i].Count; k++) if (_before[i][k] != _after[i][k]) return false;
+                for (int k = 0; k < _before[i].Count; k++)
+                    if (_before[i][k].joint != _after[i][k].joint || MathF.Abs(_before[i][k].weight - _after[i][k].weight) > 1e-6f) return false;
             }
             return true;
         }

@@ -32,8 +32,8 @@ public partial class Shell
         bool JointSelected() => sel.Mode == SelectMode.Object && sel.Objects.Any(id => doc.Find(id)?.IsJoint == true);
         Actions.Register("skeleton.insertJointTool", "Insert Joint Tool", () => Tools.SetTool("insertJoint"), isChecked: () => Tools.Current?.Id == "insertJoint");
         Actions.Register("skeleton.mirror", "Mirror Joint...", ShowMirrorDialog, canExecute: JointSelected);
-        Actions.Register("skeleton.orient", "Orient Joint...", ShowOrientDialog, canExecute: JointSelected);
-        Actions.Register("skeleton.orientApply", "Orient Joint", OrientSelected, canExecute: JointSelected, repeatable: true);
+        // Orient Joint는 옵션 쌍 규약(skeleton.orient = 옵션 창, skeleton.orientApply = 실행)이라 Action Popup에서 옵션을 다시 조정할 수 있다.
+        RegisterOptionPair("skeleton.orient", "Orient Joint", new OptionSpec("Orient Joint Options", OrientDefaults, OrientFields, "Orient"), OrientSelected, JointSelected);
         Actions.Register("skeleton.mirrorApply", "Mirror Joint (last options)", MirrorSelected, canExecute: JointSelected, repeatable: true);
         Actions.Register("display.jointAxes", "Joint Local Rotation Axes", () =>
         {
@@ -215,43 +215,31 @@ public partial class Shell
 
     // ---------------------------------------------------------------- Orient Joint
 
-    /// <summary>Orient Joint 옵션 대화상자(처음 열 때 생성).</summary>
-    private ConfirmationDialog? _orientDialog;
-    /// <summary>대화상자 위젯: 주축(자식을 향할 축), 보조축, 보조축이 향할 월드 축.</summary>
-    private OptionButton _orientPrimary = null!, _orientSecondary = null!, _orientWorld = null!;
-    /// <summary>대화상자 위젯: 보조축 월드 방향 음수 여부, 선택 조인트의 자식까지 정렬할지 여부.</summary>
-    private CheckBox _orientNegative = null!, _orientChildren = null!;
-    /// <summary>마지막 Orient Joint 옵션. skeleton.orientApply(Orient Now)는 대화상자 없이 이 값으로 실행한다.</summary>
-    private readonly OrientOptions _orientOptions = new();
-
-    /// <summary>Orient Joint 옵션 창을 띄운다(기본 주축 X, 보조축 Y → 월드 +Y, 자식 포함). OK면 옵션 저장 후 OrientSelected.</summary>
-    private void ShowOrientDialog()
+    /// <summary>Orient Joint 기본 옵션: 주축 X, 보조축 Y → 월드 +Y, 자식 포함(Maya 기본값).</summary>
+    private static void OrientDefaults(OptionValues v)
     {
-        if (_orientDialog == null)
+        v.Set("primary", 0); v.Set("secondary", 1); v.Set("world", 1); v.Set("negative", 0); v.Set("children", 1);
+    }
+
+    /// <summary>Orient Joint 옵션 필드(옵션 창과 Action Popup이 같은 목록을 쓴다).</summary>
+    private static readonly OptionField[] OrientFields =
+    {
+        OptionField.E("primary", "Primary axis", "X", "Y", "Z"),
+        OptionField.E("secondary", "Secondary axis", "X", "Y", "Z"),
+        OptionField.E("world", "Secondary axis world", "X", "Y", "Z"),
+        OptionField.B("negative", "Negative world direction"),
+        OptionField.B("children", "Orient children of selected joints"),
+    };
+
+    /// <summary>저장된 옵션 값(skeleton.orient)을 코어 <see cref="OrientOptions"/>로 바꾼다.</summary>
+    private OrientOptions CurrentOrientOptions()
+    {
+        var v = Options("skeleton.orient");
+        return new OrientOptions
         {
-            _orientDialog = new ConfirmationDialog { Title = "Orient Joint Options", OkButtonText = "Orient" };
-            var box = new VBoxContainer();
-            _orientPrimary = new OptionButton(); _orientSecondary = new OptionButton(); _orientWorld = new OptionButton();
-            foreach (var a in new[] { "X", "Y", "Z" }) { _orientPrimary.AddItem(a); _orientSecondary.AddItem(a); _orientWorld.AddItem(a); }
-            _orientPrimary.Selected = 0; _orientSecondary.Selected = 1; _orientWorld.Selected = 1;
-            box.AddChild(Labeled("Primary axis", _orientPrimary));
-            box.AddChild(Labeled("Secondary axis", _orientSecondary));
-            box.AddChild(Labeled("Secondary axis world", _orientWorld));
-            _orientNegative = new CheckBox { Text = "Negative world direction" };
-            box.AddChild(_orientNegative);
-            _orientChildren = new CheckBox { Text = "Orient children of selected joints", ButtonPressed = true };
-            box.AddChild(_orientChildren);
-            _orientDialog.AddChild(box);
-            _orientDialog.Confirmed += () =>
-            {
-                _orientOptions.Primary = (Axis)_orientPrimary.Selected; _orientOptions.Secondary = (Axis)_orientSecondary.Selected;
-                _orientOptions.SecondaryWorld = (Axis)_orientWorld.Selected; _orientOptions.SecondaryWorldNegative = _orientNegative.ButtonPressed;
-                _orientOptions.OrientChildren = _orientChildren.ButtonPressed;
-                OrientSelected();
-            };
-            AddChild(_orientDialog);
-        }
-        _orientDialog.PopupCentered();
+            Primary = (Axis)Math.Clamp(v.Int("primary"), 0, 2), Secondary = (Axis)Math.Clamp(v.Int("secondary", 1), 0, 2),
+            SecondaryWorld = (Axis)Math.Clamp(v.Int("world", 1), 0, 2), SecondaryWorldNegative = v.Bool("negative"), OrientChildren = v.Bool("children", true),
+        };
     }
 
     /// <summary>
@@ -262,7 +250,8 @@ public partial class Shell
     {
         var joints = Document.Selection.Objects.Select(id => Document.Find(id)).Where(n => n != null && n.IsJoint).Cast<SceneNode>().ToList();
         if (joints.Count == 0) return;
-        var changes = JointOps.Orient(joints, _orientOptions);
+        var opt = CurrentOrientOptions();
+        var changes = JointOps.Orient(joints, opt);
         if (changes.Count == 0) return;
         // 같은 노드가 여러 번 바뀌면 처음 before, 마지막 after
         var first = new Dictionary<NodeId, Transform3>(); var last = new Dictionary<NodeId, Transform3>(); var order = new List<NodeId>();
@@ -270,6 +259,6 @@ public partial class Shell
         foreach (var id in order) Document.Notify(new DocChange(ChangeKind.TransformChanged, id));
         var cmd = new TransformNodesCommand("Orient Joint", order.ToArray(), order.Select(i => first[i]).ToArray(), order.Select(i => last[i]).ToArray());
         if (!cmd.IsNoop) Document.Undo.Push(cmd, alreadyApplied: true);
-        HelpLine.Text = $"Orient Joint: {order.Count} joint(s) oriented (primary {_orientOptions.Primary}, secondary {_orientOptions.Secondary} → world {(_orientOptions.SecondaryWorldNegative ? "-" : "+")}{_orientOptions.SecondaryWorld}).";
+        HelpLine.Text = $"Orient Joint: {order.Count} joint(s) oriented (primary {opt.Primary}, secondary {opt.Secondary} → world {(opt.SecondaryWorldNegative ? "-" : "+")}{opt.SecondaryWorld}).";
     }
 }
