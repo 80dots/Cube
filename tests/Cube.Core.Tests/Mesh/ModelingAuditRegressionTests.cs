@@ -318,4 +318,19 @@ public class ModelingAuditRegressionTests
         var hes = new List<int>(); m.GetFaceHalfEdges(caps[0], hes);
         Assert.All(hes, h => Assert.Equal(uv, m.Hes[h].Uv0));
     }
+
+    /// <summary>Separate 조각은 원본 머티리얼을 이어받는다.</summary>
+    [Fact]
+    public void Separate_KeepsMaterial()
+    {
+        var doc = new Cube.Core.Scene.Document();
+        var a = Cube.Core.Commands.CreatePrimitiveCommand.Cube(doc); doc.Undo.Push(a);
+        MeshOps.Append(a.Node.Mesh!, MeshBuilder.Cube(), System.Numerics.Matrix4x4.CreateTranslation(3, 0, 0));
+        a.Node.MaterialId = 4;
+        var cmd = new Cube.Core.Commands.SeparateCommand(a.Node.Id);
+        Assert.True(cmd.Prepare(doc));
+        doc.Undo.Push(cmd);
+        Assert.Equal(2, cmd.Parts.Count);
+        Assert.All(cmd.Parts, p => Assert.Equal(4, p.MaterialId));
+    }
 }

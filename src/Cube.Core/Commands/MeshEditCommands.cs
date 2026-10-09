@@ -228,7 +228,8 @@ public sealed class SeparateCommand : ICommand
             // 요소의 면만 뽑아 독립 메시로 만들고 원본 로컬 트랜스폼을 그대로 복사한다.
             var mesh = MeshOps.ExtractFaces(n.Mesh, comps[i]);
             MeshNormals.Recompute(mesh);
-            _parts.Add(new SceneNode { Name = doc.UniqueName("polySurface1"), Local = n.Local, Shape = new MeshShape(mesh) });
+            // 머티리얼·표시 여부도 이어받는다(전에는 조각이 lambert1로 바뀌었다, v0.0.57)
+            _parts.Add(new SceneNode { Name = doc.UniqueName("polySurface1"), Local = n.Local, Shape = new MeshShape(mesh), MaterialId = n.MaterialId, Visible = n.Visible });
             // UniqueName은 문서에 추가되기 전이라 중복될 수 있어 번호를 덧붙인다
             _parts[^1].Name = $"polySurface{NextIndex(doc) + i}";
         }
