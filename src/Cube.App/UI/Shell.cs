@@ -157,6 +157,9 @@ public partial class Shell : Control
 
         // 메뉴바와 상태 라인(어두운 배경으로 감쌈)
         MenuBar = new MenuBar { Name = "MenuBar", Flat = true };
+        // 메뉴 항목의 단축키 표시(accelerator)는 표시 전용이다. 키는 ShellInput만 처리한다(텍스트 칸 포커스 무시, viewport 컨텍스트).
+        // 예전에는 MenuBar가 처리되지 않은 키를 accelerator로 실행해, 숫자 칸에 입력 중 F9/F/4 등이 그대로 실행되고 viewport 전용 키(F/A/1~8)가 뷰포트 밖에서도 동작했다.
+        MenuBar.SetDisableShortcuts(true);
         root.AddChild(MenuBar);
 
         StatusLine = new HBoxContainer { Name = "StatusLine", CustomMinimumSize = new Vector2(0, 28 * s) };

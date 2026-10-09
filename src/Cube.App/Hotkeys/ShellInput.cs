@@ -91,7 +91,10 @@ public partial class ShellInput : Node
         }
         // 키 반복은 무시. 새로 눌린 키는 홀드 집합에 추가
         if (k.Echo) return;
-        if (HeldKeys.Add(k.Keycode)) HeldKeysChanged?.Invoke();
+        // 논리·물리 키코드를 모두 넣는다(한글 IME 등에서 Keycode가 라틴 키가 아니어도 X/V/J 홀드 스냅이 동작하도록; 뗄 때도 둘 다 뺀다)
+        bool addedKey = HeldKeys.Add(k.Keycode);
+        if (k.PhysicalKeycode != Key.None && k.PhysicalKeycode != k.Keycode) addedKey |= HeldKeys.Add(k.PhysicalKeycode);
+        if (addedKey) HeldKeysChanged?.Invoke();
         // 텍스트 입력 중에는 단축키를 보내지 않는다. Esc만 포커스를 풀고 전역 Escape 액션을 실행
         if (textFocused)
         {

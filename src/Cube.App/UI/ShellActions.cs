@@ -180,6 +180,10 @@ public partial class Shell
         Actions.Register("display.wireOnShaded", "Wireframe on Shaded", () => { bool on = !Viewport.Display.WireOnShaded; Settings.WireOnShaded = on; foreach (var p in Layout.Panels) { p.Display.WireOnShaded = on; p.Display.RefreshAll(); } }, isChecked: () => Viewport.Display.WireOnShaded);
         Actions.Register("display.grid", "Grid", () => { bool on = !Viewport.Display.ShowGrid; Settings.ShowGrid = on; foreach (var p in Layout.Panels) p.Display.ShowGrid = on; }, isChecked: () => Viewport.Display.ShowGrid);
         Actions.Register("display.background", "Background Color", () => { Viewport.CycleBackground(); });
+        // Hide/Show(Maya Ctrl+H / Shift+H / Show All): 숨긴 노드는 자손과 함께 보이지 않고 피킹·프레임에서 빠진다(Undo 가능)
+        Actions.Register("display.hideSelection", "Hide Selection", () => SetVisibility(sel.Objects, false), canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Visible == true), repeatable: true);
+        Actions.Register("display.showSelection", "Show Selection", () => SetVisibility(sel.Objects, true), canExecute: () => sel.Objects.Any(id => doc.Find(id)?.Visible == false));
+        Actions.Register("display.showAll", "Show All", () => SetVisibility(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id), true), canExecute: () => doc.Nodes.Values.Any(n => !n.IsRoot && !n.Visible));
         Actions.Register("display.polyCount", "Poly Count (HUD)", () => { Settings.ShowPolyCount = !Settings.ShowPolyCount; Settings.Save(); }, isChecked: () => Settings.ShowPolyCount);
 
         // Outliner/Properties 패널 열기/닫기 토글, About(버전 정보를 헬프 라인에)
@@ -378,6 +382,15 @@ public partial class Shell
             return;
         }
         RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(doc.Nodes.Values.Where(n => !n.IsRoot).Select(n => n.Id)); });
+    }
+
+    /// <summary>노드들의 가시성을 바꾸는 SetVisibilityCommand를 넣는다(바뀌는 노드가 없으면 아무것도 안 함).</summary>
+    private void SetVisibility(IEnumerable<NodeId> ids, bool visible)
+    {
+        var cmd = new SetVisibilityCommand(Document, ids.ToArray(), visible);
+        if (cmd.IsEmpty) return;
+        Document.Undo.Push(cmd);
+        HelpLine.Text = visible ? "Show: objects shown." : "Hide: objects hidden (Shift+H or Display > Show All to show again).";
     }
 
     /// <summary>Select Hierarchy: 선택 오브젝트의 모든 자손을 선택에 더한다.</summary>
@@ -710,7 +723,7 @@ public partial class Shell
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
             .Item("select.lights").Separator()
-            .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces"));
+            .Submenu("Convert Selection", m => m.Item("select.toVertices").Item("select.toEdges").Item("select.toFaces").Item("select.toBoundaryEdges").Separator().Item("select.toUv").Item("select.toUvIsland"));
 
         Menus.Build(Add("Mesh"))
             .Item("mesh.combine").Item("mesh.separate").Submenu("Booleans", m => m.Op("mesh.booleanUnion").Op("mesh.booleanDifference").Op("mesh.booleanIntersection")).Separator()
@@ -745,6 +758,7 @@ public partial class Shell
             .Item("display.wireframe").Item("display.shaded").Item("display.textured").Item("display.lit").Item("display.uvGrid").Item("display.wireOnShaded").Separator()
             .Item("display.smoothPreviewOff").Item("display.smoothPreviewBoth").Item("display.smoothPreviewOn").Separator()
             .Item("display.joints").Item("display.jointSize").Item("display.jointAxes").Item("display.timeSlider").Separator()
+            .Item("display.hideSelection").Item("display.showSelection").Item("display.showAll").Separator()
             .Item("display.grid").Item("display.polyCount").Item("display.background").Separator()
             .Submenu("View", m => m.Item("view.persp").Item("view.front").Item("view.side").Item("view.top").Item("view.back").Item("view.left").Item("view.bottom").Separator().Item("view.toggleProjection").Item("view.toggleLayout").Separator().Item("view.home").Item("view.frameSelected").Item("view.frameAll").Item("view.maximize"));
 

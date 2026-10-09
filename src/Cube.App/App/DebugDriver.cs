@@ -697,6 +697,14 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] piesweep {doc.Selection.Mode}: {string.Join(" ", report)}");
                     break;
                 }
+            // cam: 활성 패널 카메라 상태(피벗·거리·yaw/pitch·직교 크기)
+            case "cam":
+                {
+                    var c = UI.Shell.Instance.Viewport.CameraController;
+                    var st = c.State;
+                    GD.Print($"[Drive] cam {c.Label} pivot=<{st.Pivot.X:F2},{st.Pivot.Y:F2},{st.Pivot.Z:F2}> dist={st.Distance:F2} yaw={st.Yaw * 180 / MathF.PI:F1} pitch={st.Pitch * 180 / MathF.PI:F1} ortho={st.IsOrtho} size={st.OrthoSize:F2}");
+                    break;
+                }
             // quad 0|1: 단일/4분할 레이아웃을 명시적으로 맞춘다(시작 상태가 공유 settings.json에 따라 달라지므로 토글 대신)
             case "quad":
                 {
@@ -712,6 +720,14 @@ public partial class DebugDriver : Node
                     foreach (var fp in UI.Shell.Instance.FindChildren("*", "", true, false).OfType<UI.FloatingPanel>())
                         if (fp.Visible && !fp.Docked) { fp.Visible = false; n++; }
                     GD.Print($"[Drive] hidefloat {n}");
+                    break;
+                }
+            // focusedit: Properties 패널의 첫 숫자 칸(LineEdit)에 키보드 포커스를 준다(텍스트 입력 중 단축키 무시 확인용)
+            case "focusedit":
+                {
+                    var le = UI.Shell.Instance.PropertiesWindow.FindChildren("*", "", true, false).OfType<LineEdit>().FirstOrDefault(l => l.IsVisibleInTree());
+                    le?.GrabFocus();
+                    GD.Print($"[Drive] focusedit {(le == null ? "(none)" : le.GetPath().ToString())} focus={GetViewport().GuiGetFocusOwner()?.GetType().Name}");
                     break;
                 }
             // hover: 현재 마우스 아래 GUI 컨트롤 경로(입력을 가로채는 위젯 확인용)
