@@ -107,4 +107,21 @@ public class ModelingAuditRegressionTests
         MeshOps.DeleteEdges(m, new[] { 0 });
         Assert.Equal(0, m.AliveVertexCount);
     }
+
+    /// <summary>Triangulate → Quadrangulate는 원래 쿼드로 돌아온다(전에는 합친 쿼드가 다시 합쳐져 토러스 480삼각형이 35개 n각형이 됐다).</summary>
+    [Theory]
+    [InlineData("torus")]
+    [InlineData("cube")]
+    [InlineData("plane")]
+    public void TriangulateThenQuadrangulate_RestoresQuads(string kind)
+    {
+        var m = kind switch { "torus" => MeshBuilder.Torus(), "cube" => MeshBuilder.Cube(), _ => MeshBuilder.Plane(1, 1, 4, 4) };
+        int faces = m.AliveFaceCount;
+        MeshOps.Triangulate(m, Faces(m));
+        Assert.Equal(faces * 2, m.AliveFaceCount);
+        MeshOps.Quadrangulate(m, Faces(m), 30f);
+        Assert.Equal(faces, m.AliveFaceCount);
+        Assert.All(Faces(m), f => Assert.Equal(4, m.FaceDegree(f)));
+        AssertSound(m);
+    }
 }

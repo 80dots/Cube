@@ -175,7 +175,9 @@ public static partial class MeshOps
         {
             if (e >= m.EdgeCount || !m.Edges[e].Alive) continue;
             var (f0, f1) = m.EdgeFaces(e);
-            if (f1 < 0 || used.Contains(f0) || used.Contains(f1)) continue;
+            // 양쪽 모두 원래 선택 삼각형이어야 한다: 방금 합친 쿼드(새 ID라 used에 없음)가 다시 이웃 삼각형과 합쳐져
+            // 오각형·큰 n각형으로 불어나던 문제(v0.0.57: 토러스 480 삼각형 → 35면)
+            if (f1 < 0 || used.Contains(f0) || used.Contains(f1) || !set.Contains(f0) || !set.Contains(f1)) continue;
             var (ok, nf) = MergeFacesAcrossEdgeReturning(m, e);
             if (!ok) continue;
             used.Add(f0); used.Add(f1); result.Add(nf);
