@@ -352,4 +352,22 @@ public class ModelingAuditRegressionTests
             AssertSound(m, closed: closed, euler: euler);
         }
     }
+
+    /// <summary>회전·이동된 오브젝트를 월드 X=0 평면으로 Mirror: 결과의 월드 정점이 원본 월드 정점의 X 반사와 정확히 같다.</summary>
+    [Fact]
+    public void MirrorAcrossPlane_WorldPlaneOnRotatedObject()
+    {
+        var m = MeshBuilder.Cube();
+        var w = System.Numerics.Matrix4x4.CreateRotationY(0.6f) * System.Numerics.Matrix4x4.CreateTranslation(2, 0.3f, 0);
+        var worldBefore = Enumerable.Range(0, m.VertexCount).Select(v => System.Numerics.Vector3.Transform(m.Verts[v].Position, w)).ToList();
+        var nw = System.Numerics.Vector3.UnitX;
+        var no = System.Numerics.Vector3.TransformNormal(nw, System.Numerics.Matrix4x4.Transpose(w));
+        float len = no.Length();
+        MeshOps.MirrorAcrossPlane(m, no / len, -System.Numerics.Vector3.Dot(nw, w.Translation) / len, false, false, 0f);
+        AssertSound(m);
+        var worldAfter = Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive).Select(v => System.Numerics.Vector3.Transform(m.Verts[v].Position, w)).ToList();
+        Assert.Equal(16, worldAfter.Count);
+        foreach (var p in worldBefore)
+            Assert.Contains(worldAfter, q => System.Numerics.Vector3.Distance(q, new System.Numerics.Vector3(-p.X, p.Y, p.Z)) < 1e-4f);
+    }
 }

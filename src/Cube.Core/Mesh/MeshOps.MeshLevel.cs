@@ -199,16 +199,29 @@ public static partial class MeshOps
     /// <param name="mergeThreshold">0보다 크면 평면에서 이 거리 안의 정점을 2배 임계로 병합해 이음매를 닫는다.</param>
     public static List<int> MirrorGeometry(PolyMesh m, int axis, float planeOffset, bool keepPositive, bool cut, float mergeThreshold)
     {
+        var n = Vector3.Zero; SetAxis(ref n, axis, 1f);
+        return MirrorAcrossPlane(m, n, planeOffset, keepPositive, cut, mergeThreshold);
+    }
+
+    /// <summary>
+    /// <see cref="MirrorGeometry"/>의 일반 평면판: 평면 {p | n·p = d}(오브젝트 공간, n은 정규화해서 쓴다)에 대해 반사해 덧붙인다.
+    /// 회전된 오브젝트를 월드 축 평면으로 미러할 때 쓴다(그 평면은 오브젝트 공간에서 축에 정렬되지 않는다, v0.0.57).
+    /// keepPositive = n 쪽(n·p &gt; d)을 남김/그쪽으로 복사.
+    /// </summary>
+    public static List<int> MirrorAcrossPlane(PolyMesh m, Vector3 normal, float d, bool keepPositive, bool cut, float mergeThreshold)
+    {
+        if (normal.LengthSquared() < 1e-20f) return new List<int>();
+        float len = normal.Length(); var nrm = normal / len; float dd = d / len;
         // 평면 판정 허용 오차: 메시 크기에 비례(최소 1e-6)
         var (bmin, bmax) = Bounds(m);
         float eps = MathF.Max(1e-5f * (bmax - bmin).Length(), 1e-6f);
-        float D(Vector3 p) => GetAxis(p, axis) - planeOffset;
+        float D(Vector3 p) => Vector3.Dot(nrm, p) - dd;
         if (cut)
         {
             // Maya Symmetrize: 평면을 가로지르는 면을 평면에서 잘라(v0.0.57; 전에는 면 중심으로만 골라 걸친 면이 통째로 남아 반사본과 겹쳤다)
             // 버릴 쪽 면을 지운다. 남는 면이 없으면(평면이 메시 바깥) 아무것도 바꾸지 않는다.
             var work = m.Clone();
-            SplitAlongAxisPlane(work, axis, planeOffset, eps);
+            SplitAlongPlane(work, nrm, dd, eps);
             var remove = new List<int>();
             for (int f = 0; f < work.FaceCount; f++)
             {
@@ -242,11 +255,13 @@ public static partial class MeshOps
             }
             if (onPlane.Count > 0 && onPlane.Count < m.AliveFaceCount) foreach (int f in onPlane) m.RemoveFace(f);
         }
-        // 현재 메시를 복제해 반사 행렬 T(−o)·S(축 −1)·T(o)로 덧붙인다(Append가 음의 행렬식이면 면 방향을 뒤집어 준다)
+        // 현재 메시를 복제해 반사 행렬(I − 2nnᵀ, 이동 2dn)로 덧붙인다(Append가 음의 행렬식이면 면 방향을 뒤집어 준다)
         var src = m.Clone();
-        var scale = Vector3.One; SetAxis(ref scale, axis, -1f);
-        var offset = Vector3.Zero; SetAxis(ref offset, axis, planeOffset);
-        var reflect = Matrix4x4.CreateTranslation(-offset) * Matrix4x4.CreateScale(scale) * Matrix4x4.CreateTranslation(offset);
+        var reflect = new Matrix4x4(
+            1 - 2 * nrm.X * nrm.X, -2 * nrm.X * nrm.Y, -2 * nrm.X * nrm.Z, 0,
+            -2 * nrm.Y * nrm.X, 1 - 2 * nrm.Y * nrm.Y, -2 * nrm.Y * nrm.Z, 0,
+            -2 * nrm.Z * nrm.X, -2 * nrm.Z * nrm.Y, 1 - 2 * nrm.Z * nrm.Z, 0,
+            2 * dd * nrm.X, 2 * dd * nrm.Y, 2 * dd * nrm.Z, 1);
         // 덧붙인 면은 기존 면 수 이후 슬롯에 생긴다(ID 재사용 없음)
         int before = m.FaceCount;
         Append(m, src, reflect);
@@ -259,7 +274,7 @@ public static partial class MeshOps
             for (int v = 0; v < m.VertexCount; v++) if (m.Verts[v].Alive && MathF.Abs(D(m.Verts[v].Position)) <= mergeDist) near.Add(v);
             MergeVertices(m, near, mergeDist * 2f);
             // 병합된 이음매 정점은 정확히 평면 위로
-            foreach (int v in near) if (m.Verts[v].Alive) { var vt = m.Verts[v]; SetAxis(ref vt.Position, axis, planeOffset); m.Verts[v] = vt; }
+            foreach (int v in near) if (m.Verts[v].Alive) { var vt = m.Verts[v]; vt.Position -= nrm * D(vt.Position); m.Verts[v] = vt; }
             result = result.Where(f => f < m.FaceCount && m.Faces[f].Alive).ToList();
         }
         m.BumpTopology();
@@ -267,15 +282,16 @@ public static partial class MeshOps
     }
 
     /// <summary>
-    /// 축 평면(axis 좌표 = offset)에서 메시를 자른다(Symmetrize 전처리). 평면에서 eps 안의 정점은 평면 위로 붙이고,
+    /// 평면(n·p = d, n 단위)에서 메시를 자른다(Symmetrize 전처리). 평면에서 eps 안의 정점은 평면 위로 붙이고,
     /// 평면을 가로지르는 엣지는 교점에서 나누며, 양쪽에 정점이 있는 면은 평면 위 정점 쌍(루프 순서로 둘씩)을 이어 나눈다.
     /// 기존 정점을 지나는 평면(구의 경선 등)도 면이 갈라진다는 점이 <see cref="SliceWithPlane"/>과 다르다.
     /// </summary>
-    private static void SplitAlongAxisPlane(PolyMesh m, int axis, float offset, float eps)
+    private static void SplitAlongPlane(PolyMesh m, Vector3 n, float d, float eps)
     {
-        float D(int v) => GetAxis(m.Verts[v].Position, axis) - offset;
+        float D(int v) => Vector3.Dot(n, m.Verts[v].Position) - d;
+        void Snap(int v) { var vt = m.Verts[v]; vt.Position -= n * (Vector3.Dot(n, vt.Position) - d); m.Verts[v] = vt; }
         for (int v = 0; v < m.VertexCount; v++)
-            if (m.Verts[v].Alive && MathF.Abs(D(v)) <= eps) { var vt = m.Verts[v]; SetAxis(ref vt.Position, axis, offset); m.Verts[v] = vt; }
+            if (m.Verts[v].Alive && MathF.Abs(D(v)) <= eps) Snap(v);
         int edgeCount = m.EdgeCount;
         for (int e = 0; e < edgeCount; e++)
         {
@@ -284,7 +300,7 @@ public static partial class MeshOps
             float da = D(a), db = D(b);
             if (!(da > eps && db < -eps || da < -eps && db > eps)) continue;
             int nv = SplitEdge(m, e, da / (da - db));
-            if (nv >= 0) { var vt = m.Verts[nv]; SetAxis(ref vt.Position, axis, offset); m.Verts[nv] = vt; }
+            if (nv >= 0) Snap(nv);
         }
         int faceCount = m.FaceCount;
         var loop = new List<int>();
@@ -293,7 +309,7 @@ public static partial class MeshOps
             if (!m.Faces[f].Alive) continue;
             m.GetFaceVertices(f, loop);
             bool pos = false, neg = false;
-            foreach (int v in loop) { float d = D(v); if (d > eps) pos = true; else if (d < -eps) neg = true; }
+            foreach (int v in loop) { float dv = D(v); if (dv > eps) pos = true; else if (dv < -eps) neg = true; }
             if (!pos || !neg) continue;
             var on = loop.Where(v => MathF.Abs(D(v)) <= eps).ToList();
             for (int i = 0; i + 1 < on.Count; i += 2) SplitFaceBetween(m, on[i], on[i + 1]);

@@ -472,7 +472,7 @@ public partial class Shell
 
     /// <summary>
     /// Mirror / Symmetrize(cut = true): 선택 메시마다 오브젝트 공간의 반사 평면 좌표를 정하고 MeshOps.MirrorGeometry를 적용한다.
-    /// 평면 위치: 0 = 메시 AABB(Symmetrize = 중심, Mirror = 방향 쪽 면), 1 = 오브젝트 원점(0), 2 = 월드 원점을 오브젝트 공간으로 옮긴 좌표.
+    /// 평면 위치: 0 = 메시 AABB(Symmetrize = 중심, Mirror = 방향 쪽 면), 1 = 오브젝트 원점(0), 2 = 월드 축 평면(월드 원점을 지남; 회전된 오브젝트면 오브젝트 공간에서 기울어진 평면).
     /// Plane/Merge Threshold는 이력 파라미터라 나중에 조정할 수 있다.
     /// </summary>
     private void MirrorSelection(bool cut)
@@ -487,6 +487,8 @@ public partial class Shell
             {
                 var node = doc.Find(id); var mesh = node?.Mesh; if (node == null || mesh == null) continue;
                 float plane = 0f;
+                // 반사 평면 법선(오브젝트 공간): 바운딩 박스/오브젝트 = 오브젝트 축, 월드 = 월드 축을 오브젝트 공간으로 옮긴 방향
+                var normal = new NVec3(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0);
                 if (position == 0)
                 {
                     float mn = float.MaxValue, mx = float.MinValue;
@@ -497,12 +499,17 @@ public partial class Shell
                 }
                 else if (position == 2)
                 {
-                    System.Numerics.Matrix4x4.Invert(node.WorldMatrix, out var inv);
-                    var origin = NVec3.Transform(NVec3.Zero, inv);
-                    plane = axis == 0 ? origin.X : axis == 1 ? origin.Y : origin.Z;
+                    // 월드 축 평면 N·p_w = 0을 오브젝트 공간 평면 n·p = d로: n = W₃·N, d = −N·t (회전된 오브젝트도 월드 축으로 미러, v0.0.57;
+                    // 전에는 오브젝트 축 평면을 월드 원점으로 옮기기만 해서 회전된 오브젝트가 엉뚱한 평면으로 미러됐다)
+                    var w = node.WorldMatrix;
+                    var nw = normal;
+                    var no = NVec3.TransformNormal(nw, System.Numerics.Matrix4x4.Transpose(w));
+                    float len = no.Length();
+                    if (len > 1e-12f) { normal = no / len; plane = -NVec3.Dot(nw, w.Translation) / len; }
                 }
+                var n0 = normal;
                 doc.Undo.Push(new MeshOpCommand(cut ? "Symmetrize" : "Mirror", id, new HistoryParams(HistoryParam.F("Plane", plane), HistoryParam.F("Merge Threshold", threshold, 0f, 10f, 0.0001f)),
-                    (m, p) => { var nf = MeshOps.MirrorGeometry(m, axis, p.Float("Plane"), keepPositive, cut, p.Float("Merge Threshold")); return (nf.Count > 0, null, null); }));
+                    (m, p) => { var nf = MeshOps.MirrorAcrossPlane(m, n0, p.Float("Plane"), keepPositive, cut, p.Float("Merge Threshold")); return (nf.Count > 0, null, null); }));
             }
     }
 
