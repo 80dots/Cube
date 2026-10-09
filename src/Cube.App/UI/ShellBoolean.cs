@@ -56,7 +56,7 @@ public partial class Shell
                     {
                         var o = (BooleanOperation)Math.Clamp(p.Items[0].Int, 0, 2);
                         var r = MeshOps.Boolean(m, bMesh, bToA, o, out var rep);
-                        if (!rep.ClosedA || !rep.ClosedB) warnings.Add($"{(rep.ClosedA ? bName : a.Name)} is not closed");
+                        if (!rep.ClosedA || !rep.ClosedB) warnings.Add($"{(rep.ClosedA ? bName : a.Name)} is not closed (results of open meshes may be wrong)");
                         if (rep.FilledHoles > 0) warnings.Add($"{rep.FilledHoles} tiny gap(s) closed");
                         faces = rep.Faces;
                         m.CopyFrom(r);
@@ -66,7 +66,9 @@ public partial class Shell
             if (delete) doc.Undo.Push(new DeleteNodesCommand(doc, ids.Skip(1)));
             RecordSelection(s => { s.Mode = SelectMode.Object; s.SelectObjects(new[] { a.Id }); });
         }
-        HelpLine.Text = $"Boolean {BooleanOps[(int)op]}: {a.Name} ← {ids.Count - 1} object(s), {faces} faces." + (warnings.Count > 0 ? " Warning: " + string.Join("; ", warnings.Distinct()) + " (results of open meshes may be wrong)." : "");
+        // 결과가 비면(겹치지 않는 Intersection, 같은 메시 Difference 등) 빈 메시 오브젝트가 남으므로 알린다
+        if (faces == 0) warnings.Add("the result is empty (the objects do not overlap the way this operation needs)");
+        HelpLine.Text = $"Boolean {BooleanOps[(int)op]}: {a.Name} ← {ids.Count - 1} object(s), {faces} faces." + (warnings.Count > 0 ? " Warning: " + string.Join("; ", warnings.Distinct()) + "." : "");
     }
 
     /// <summary>mesh.booleanUnion/Difference/Intersection 옵션 쌍(각 *Apply = 실행)을 등록한다.</summary>

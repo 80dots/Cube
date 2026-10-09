@@ -1,5 +1,7 @@
 using System.Numerics;
+using Cube.Core.IO;
 using Cube.Core.Mesh;
+using Cube.Core.Scene;
 using Xunit.Abstractions;
 
 namespace Cube.Core.Tests.Mesh;
@@ -253,5 +255,46 @@ public class ModelingAuditFuzzTests
             }
         foreach (var f in fails) _out.WriteLine(f);
         Assert.True(fails.Count == 0, $"{fails.Count} chain failure(s)\n" + string.Join("\n", fails.Take(15)));
+    }
+
+    /// <summary>
+    /// .cube 왕복: 각 연산 결과(시드 2개, 기본 메시 전부)를 문서에 넣어 저장 → 열기 한 뒤 위상 수·정점 위치 집합·엣지 플래그(하드/심/크리즈)·
+    /// 코너 UV 집합·잠긴 코너 노멀 수가 같은지 본다(.cube는 Compact된 메시를 쓰므로 ID가 아니라 집합으로 비교).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(OpNames))]
+    public void CubeFileRoundTripAfterOp(string opName)
+    {
+        var op = Ops.First(o => o.name == opName);
+        var fails = new List<string>();
+        foreach (var (bname, make) in Bases)
+            for (int seed = 0; seed < 2; seed++)
+            {
+                var m = make(); MeshNormals.Recompute(m);
+                try { op.op(m, new Random(seed * 7919 + bname.Length)); MeshNormals.Recompute(m); }
+                catch { continue; }
+                if (m.AliveFaceCount == 0) continue;
+                var doc = new Document();
+                var node = new SceneNode { Name = "n", Shape = new MeshShape(m) };
+                doc.AddNode(node);
+                var doc2 = new Document();
+                CubeFileFormat.Deserialize(doc2, CubeFileFormat.Serialize(doc));
+                var m2 = doc2.Root.Children[0].Mesh!;
+                string Sig(PolyMesh x)
+                {
+                    var pos = Enumerable.Range(0, x.VertexCount).Where(v => x.Verts[v].Alive).Select(v => x.Verts[v].Position).Select(p => $"{p.X:F4},{p.Y:F4},{p.Z:F4}").OrderBy(t => t, StringComparer.Ordinal);
+                    var flags = Enumerable.Range(0, x.EdgeCount).Where(e => x.Edges[e].Alive).Select(e => { var (a, b) = x.EdgeVertices(e); var pa = x.Verts[a].Position; var pb = x.Verts[b].Position; var k = string.CompareOrdinal($"{pa}", $"{pb}") < 0 ? $"{pa}{pb}" : $"{pb}{pa}"; return $"{k}:{(x.Edges[e].Hard ? 1 : 0)}{(x.Edges[e].Seam ? 1 : 0)}{x.Edges[e].Crease:F2}"; }).OrderBy(t => t, StringComparer.Ordinal);
+                    var uvs = Enumerable.Range(0, x.Hes.Count).Where(h => x.Hes[h].Alive && x.Faces[x.Hes[h].Face].Alive).Select(h => $"{x.Verts[x.Hes[h].Vertex].Position}:{x.Hes[h].Uv0.X:F4},{x.Hes[h].Uv0.Y:F4}:{(x.Hes[h].NormalLocked ? 1 : 0)}").OrderBy(t => t, StringComparer.Ordinal);
+                    return $"V{x.AliveVertexCount} E{x.AliveEdgeCount} F{x.AliveFaceCount}|{string.Join(";", pos)}|{string.Join(";", flags)}|{string.Join(";", uvs)}|L{x.LockedNormals.Count}";
+                }
+                string s1 = Sig(m), s2 = Sig(m2);
+                if (s1 != s2)
+                {
+                    int i = 0; while (i < Math.Min(s1.Length, s2.Length) && s1[i] == s2[i]) i++;
+                    fails.Add($"{bname}#{seed}: differs at {i}: '{s1.Substring(Math.Max(0, i - 40), Math.Min(80, s1.Length - Math.Max(0, i - 40)))}' vs '{s2.Substring(Math.Max(0, i - 40), Math.Min(80, s2.Length - Math.Max(0, i - 40)))}'");
+                }
+                var pr = Problems(m2); if (pr.Count > 0) fails.Add($"{bname}#{seed} loaded: {string.Join("; ", pr)}");
+            }
+        Assert.True(fails.Count == 0, $"{opName}: {fails.Count} " + string.Join(" || ", fails.Take(6)));
     }
 }
