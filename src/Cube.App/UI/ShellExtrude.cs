@@ -130,7 +130,7 @@ public partial class Shell
                         var vs = new HashSet<int>(comps.Verts); var tmp = new List<int>();
                         var faces = Enumerable.Range(0, mesh.FaceCount).Where(f => { if (!mesh.Faces[f].Alive) return false; mesh.GetFaceVertices(f, tmp); return tmp.All(vs.Contains); }).ToArray();
                         if (faces.Length > 0) { faceTargets.Add((id, faces)); break; }
-                        var edges = Enumerable.Range(0, mesh.EdgeCount).Where(e => mesh.Edges[e].Alive && vs.Contains(mesh.EdgeVertices(e).Item1) && vs.Contains(mesh.EdgeVertices(e).Item2)).ToArray();
+                        var edges = Enumerable.Range(0, mesh.EdgeCount).Where(e => mesh.Edges[e].Alive && mesh.Edges[e].He1 < 0 && vs.Contains(mesh.EdgeVertices(e).Item1) && vs.Contains(mesh.EdgeVertices(e).Item2)).ToArray(); // 엣지 Extrude는 경계 엣지만 가능
                         if (edges.Length > 0) edgeTargets.Add((id, edges));
                         break;
                     }
@@ -138,7 +138,9 @@ public partial class Shell
         }
         if (faceTargets.Count == 0 && edgeTargets.Count == 0)
         {
-            HelpLine.Text = "Extrude: select faces, border edges, or vertices that form faces/edges (loose vertices cannot be extruded: Cube meshes have no wire edges).";
+            // 정점 선택이 면도 경계 엣지도 이루지 않으면(정점 하나 등) Maya처럼 정점 Extrude(스파이크)로 처리한다(v0.0.59)
+            if (sel.Mode == SelectMode.Vertex && sel.NodesWithComponents(SelectMode.Vertex).Any()) { ExtrudeVertexSelection(); return; }
+            HelpLine.Text = "Extrude: select faces, border edges, or vertices.";
             return;
         }
         // used = 마지막으로 사용한 옵션(헬프 라인 요약용; 대상이 하나 이상 있으므로 아래에서 null이 아님)
@@ -171,6 +173,64 @@ public partial class Shell
             : $"Extrude Edges: offset {u.Offset:0.###} × {u.Steps}." + (manip ? " Drag the manipulator to pull the new edges." : "") + " Border edges only.";
     }
 
-    /// <summary>mesh.extrude(옵션 창)/mesh.extrudeApply(실행; 셸프·파이·Ctrl+E) 옵션 쌍을 등록한다.</summary>
-    private void RegisterExtrudeActions() => RegisterOptionPair("mesh.extrude", "Extrude", ExtrudeSpec(), ExtrudeSelection, CanExtrude);
+    /// <summary>mesh.extrude(옵션 창)/mesh.extrudeApply(실행; 셸프·파이·Ctrl+E)와 mesh.extrudeVertex 옵션 쌍을 등록한다.</summary>
+    private void RegisterExtrudeActions()
+    {
+        RegisterOptionPair("mesh.extrude", "Extrude", ExtrudeSpec(), ExtrudeSelection, CanExtrude);
+        RegisterOptionPair("mesh.extrudeVertex", "Extrude Vertex", ExtrudeVertexSpec(), ExtrudeVertexSelection, () => HasComponents(SelectMode.Vertex));
+    }
+
+    // ---------------------------------------------------------------- Extrude Vertex(스파이크, v0.0.59)
+
+    /// <summary>
+    /// Extrude Vertex 옵션 창: Width(이웃 엣지 길이 대비 밑면 크기), Length(정점 노멀 방향 높이), Divisions(옆면 단수), 조작기 전환.
+    /// 하프에지 메시는 와이어 엣지를 가질 수 없어 Blender식 '정점에서 선 뽑기' 대신 Maya polyExtrudeVertex처럼 정점 주변을 깎아 피라미드를 세운다.
+    /// </summary>
+    private static OptionSpec ExtrudeVertexSpec() => new("Extrude Vertex Options", v =>
+    {
+        v.Set("width", 0.25f); v.Set("length", 0.2f); v.Set("divisions", 1); v.Set("manip", 1);
+    }, new[]
+    {
+        OptionField.F("width", "Width", 0.01, 0.95, 0.01, "Base size: fraction of each neighbouring edge length cut off around the vertex"),
+        OptionField.F("length", "Length", -100000, 100000, 0.01, "Height of the spike along the vertex normal (negative = dent)"),
+        OptionField.I("divisions", "Divisions", 1, 100, "Number of segments along the spike height"),
+        OptionField.B("manip", "Manipulator After Extrude", "Select the spike tips and switch to the Move manipulator (normal axis)"),
+    }, "Extrude");
+
+    /// <summary>
+    /// mesh.extrudeVertexApply 본체(Extrude가 정점만 선택된 경우에도 여기로 온다): 노드마다 MeshOpCommand('Extrude Vertex' 이력: Width/Length/Divisions)로
+    /// <see cref="MeshOps.ExtrudeVertices"/>를 실행하고 꼭짓점(원래 정점 ID)을 정점 모드로 선택한다. 조작기 옵션이면 Normal 축 Move 툴로 바꿔 끝을 바로 당길 수 있다.
+    /// </summary>
+    private void ExtrudeVertexSelection()
+    {
+        var doc = Document; var sel = doc.Selection;
+        var ov = Options("mesh.extrudeVertex");
+        var targets = sel.NodesWithComponents(SelectMode.Vertex).Where(id => doc.Find(id)?.Mesh != null)
+            .Select(id => (id, verts: sel.GetComponents(id).Verts.ToArray())).Where(t => t.verts.Length > 0).ToList();
+        if (sel.Mode != SelectMode.Vertex || targets.Count == 0) { HelpLine.Text = "Extrude Vertex: select one or more vertices."; return; }
+        var p = new HistoryParams(
+            HistoryParam.F("Width", Math.Clamp(ov.Float("width", 0.25f), 0.01f, 0.95f), 0.01f, 0.95f, 0.01f),
+            HistoryParam.F("Length", ov.Float("length", 0.2f), -100000f, 100000f, 0.01f),
+            HistoryParam.I("Divisions", Math.Clamp(ov.Int("divisions", 1), 1, 100), 1, 100));
+        int spikes = 0;
+        using (doc.Undo.BeginGroup("Extrude Vertex"))
+            foreach (var (id, verts) in targets)
+            {
+                var vs = verts;
+                var cmd = new MeshOpCommand("Extrude Vertex", id, p.Clone(), (m, hp) =>
+                {
+                    var apex = MeshOps.ExtrudeVertices(m, vs, new ExtrudeVertexOptions { Width = hp.Float("Width"), Length = hp.Float("Length"), Divisions = hp.Int("Divisions") });
+                    return (apex.Count > 0, SelectMode.Vertex, apex);
+                });
+                doc.Undo.Push(cmd);
+                spikes += vs.Length;
+            }
+        if (ov.Bool("manip", true))
+        {
+            ToolContext.AxisOrientation = AxisOrientation.Normal;
+            Tools.SetTool("move");
+        }
+        HelpLine.Text = $"Extrude Vertex: {spikes} spike(s), width {p.Float("Width"):0.##}, length {p.Float("Length"):0.###}, {p.Int("Divisions")} division(s)."
+            + (ov.Bool("manip", true) ? " Drag the blue (normal) arrow to pull the tips." : "") + " Adjust in the Action Popup.";
+    }
 }

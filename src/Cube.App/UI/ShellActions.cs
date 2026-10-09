@@ -739,7 +739,7 @@ public partial class Shell
 
         Menus.Build(Add("Edit Mesh"))
             .Op("mesh.addDivisions").Op("mesh.bevel").Item("mesh.bevelTool").Item("mesh.bevelVerticesTool").Item("mesh.bridge").Op("mesh.circularize").Item("mesh.collapse").Item("mesh.connect").Item("mesh.detach")
-            .Op("mesh.extrude").Op("mesh.merge").Item("mesh.mergeToCenter").Op("mesh.flipComponents").Op("mesh.symmetrizeComponents").Separator()
+            .Op("mesh.extrude").Op("mesh.extrudeVertex").Op("mesh.merge").Item("mesh.mergeToCenter").Op("mesh.flipComponents").Op("mesh.symmetrizeComponents").Separator()
             .Op("mesh.averageVertices").Op("mesh.chamferVertices").Separator()
             .Item("mesh.deleteComponents").Item("mesh.flipTriangleEdge").Item("mesh.spinEdgeBackward").Item("mesh.spinEdgeForward").Separator()
             .Item("mesh.duplicateFaces").Item("mesh.extractFaces").Op("mesh.poke").Op("mesh.wedge");
