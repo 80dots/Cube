@@ -152,7 +152,7 @@ public partial class Shell
         Actions.Register("file.import", "Import...", () => Files.ShowImportDialog());
         Actions.Register("file.exportSelection", "Export Selection...", () => Files.ShowExportDialog(true), canExecute: () => sel.Objects.Count > 0);
         Actions.Register("file.exportAll", "Export All...", () => Files.ShowExportDialog(false), canExecute: () => doc.Root.Children.Count > 0);
-        Actions.Register("file.exit", "Exit", () => GetTree().Quit());
+        Actions.Register("file.exit", "Exit", RequestQuit);
 
         // 활성 뷰포트 카메라: 프레임, Home, 정사영/원근 뷰 전환, 투영 토글, 1/4분할, 최대화
         // --- 뷰

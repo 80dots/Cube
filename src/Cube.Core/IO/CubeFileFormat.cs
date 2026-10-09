@@ -261,7 +261,7 @@ public static class CubeFileFormat
 
     /// <summary>
     /// JSON을 읽어 문서를 다시 채운다(기존 내용은 <c>doc.Clear()</c>로 지움).
-    /// 순서: 형식/버전 검사 → 머티리얼(ID 유지) → 노드 생성 → 부모-자식 연결 → 루트 노드를 문서에 추가(ID 배정) →
+    /// 순서: 형식/버전 검사 → 머티리얼(ID 유지) → 노드 생성 → 부모-자식 연결 → (여기까지 성공하면) 문서 비우기 → 루트 노드를 문서에 추가(ID 배정) →
     /// 스킨(노드 ID가 필요) → 애니메이션 → Undo 이력 비움.
     /// </summary>
     /// <exception cref="InvalidDataException">형식이 다르거나 버전이 더 새로울 때.</exception>
@@ -270,7 +270,9 @@ public static class CubeFileFormat
         var dto = JsonSerializer.Deserialize<FileDto>(json) ?? throw new InvalidDataException("empty document");
         if (dto.Format != "cube") throw new InvalidDataException("not a .cube document");
         if (dto.Version > Version) throw new InvalidDataException($"document version {dto.Version} is newer than supported {Version}");
-        doc.Clear();
+        // 먼저 머티리얼·노드를 모두 만든 뒤에 문서를 비운다: 손상된 파일에서 예외가 나도 열려 있던 문서는 그대로 남는다
+        // (전에는 Clear 뒤에 메시를 만들다 실패하면 문서가 비거나 반쯤 채워진 채 "Open failed"가 됐다).
+        var materials = new List<MaterialDef>();
         foreach (var md in dto.Materials)
         {
             var mdef = new MaterialDef { Id = md.Id, Name = md.Name, Type = Enum.TryParse<MaterialType>(md.Type, true, out var mt) ? mt : MaterialType.Lambert, Color = V3(md.Color, new Vector3(0.5f)), Specular = V3(md.Specular, new Vector3(0.5f)), Shininess = md.Shininess, Metallic = md.Metallic, Roughness = md.Roughness, MatcapPath = md.Matcap, TexturePath = md.Texture };
@@ -279,7 +281,7 @@ public static class CubeFileFormat
             // v0.0.36 이후 파일: 값/텍스처 사전을 그대로 복원한다.
             if (md.Values != null) foreach (var (k, v) in md.Values) mdef.Values[k] = V3(v, Vector3.Zero);
             if (md.Textures != null) foreach (var (k, v) in md.Textures) mdef.SetTex(k, v);
-            doc.AddMaterialWithId(mdef);
+            materials.Add(mdef);
         }
         // 노드를 배열 순서대로 만든다(아직 ID 없음). 셰이프는 mesh → joint → light 순으로 판별.
         var nodes = new List<SceneNode>(dto.Nodes.Count);
@@ -302,6 +304,9 @@ public static class CubeFileFormat
             int p = dto.Nodes[i].Parent;
             if (p >= 0 && p < nodes.Count && p != i) nodes[p].AttachChild(nodes[i]);
         }
+        // 여기까지 예외 없이 만들어졌으면 문서를 비우고 채운다.
+        doc.Clear();
+        foreach (var mdef in materials) doc.AddMaterialWithId(mdef);
         // 부모가 없는(또는 잘못된) 노드를 문서 루트에 붙인다. AddNode가 하위 노드까지 ID를 배정한다.
         for (int i = 0; i < nodes.Count; i++)
             if (dto.Nodes[i].Parent < 0 || dto.Nodes[i].Parent >= nodes.Count) doc.AddNode(nodes[i]);
@@ -517,12 +522,18 @@ public static class CubeFileFormat
     {
         var m = new PolyMesh();
         for (int i = 0; i + 2 < dto.Vertices.Length; i += 3) m.AddVertex(new Vector3(dto.Vertices[i], dto.Vertices[i + 1], dto.Vertices[i + 2]));
+        // 파일 면 번호 → 만든 면 ID(-1 = 버림). 코너 노멀·핀·UV 세트가 파일 면 번호로 저장되므로 버린 면이 있어도 어긋나지 않게 이 표로 찾는다.
+        var faceMap = new int[dto.Faces.Length];
         for (int f = 0; f < dto.Faces.Length; f++)
         {
-            // 비매니폴드 등으로 면 추가가 실패하면 그 면은 버린다(이후 면 인덱스가 어긋날 수 있으나 정상 파일에서는 생기지 않음).
-            int nf = m.AddFace(dto.Faces[f], f < dto.Materials.Length ? dto.Materials[f] : 0);
+            // 비매니폴드·범위 밖 정점 등으로 면 추가가 실패하면 그 면은 버린다.
+            var fv = dto.Faces[f];
+            faceMap[f] = -1;
+            if (fv == null || fv.Length < 3 || fv.Any(v => v < 0 || v >= m.VertexCount)) continue;
+            int nf = m.AddFace(fv, f < dto.Materials.Length ? dto.Materials[f] : 0);
+            faceMap[f] = nf;
             if (nf < 0) continue;
-            if (f < dto.Uvs.Length)
+            if (f < dto.Uvs.Length && dto.Uvs[f] != null)
             {
                 var uv = dto.Uvs[f];
                 // AddFace는 첫 코너를 Faces[nf].HalfEdge로 두므로 루프를 따라 저장된 순서대로 UV를 넣는다.
@@ -557,9 +568,9 @@ public static class CubeFileFormat
             foreach (var c in dto.CornerNormals)
             {
                 if (c.Length < 5) continue;
-                int f = (int)c[0], ci = (int)c[1];
-                if (f < 0 || f >= m.FaceCount) continue;
-                m.GetFaceHalfEdges(f, cl);
+                int ff = (int)c[0], ci = (int)c[1];
+                if (ff < 0 || ff >= faceMap.Length || faceMap[ff] < 0) continue;
+                m.GetFaceHalfEdges(faceMap[ff], cl);
                 if (ci < 0 || ci >= cl.Count) continue;
                 var h = m.Hes[cl[ci]]; h.Normal = new Vector3(c[2], c[3], c[4]); h.NormalLocked = true; m.Hes[cl[ci]] = h;
             }
@@ -567,9 +578,10 @@ public static class CubeFileFormat
         if (dto.PinnedUvs != null)
         {
             var loop = new List<int>();
-            for (int f = 0; f < m.FaceCount && f < dto.PinnedUvs.Length; f++)
+            for (int f = 0; f < faceMap.Length && f < dto.PinnedUvs.Length; f++)
             {
-                m.GetFaceHalfEdges(f, loop);
+                if (faceMap[f] < 0 || dto.PinnedUvs[f] == null) continue;
+                m.GetFaceHalfEdges(faceMap[f], loop);
                 foreach (int ci in dto.PinnedUvs[f]) if (ci >= 0 && ci < loop.Count) { var h = m.Hes[loop[ci]]; h.PinUv = true; m.Hes[loop[ci]] = h; }
             }
         }
@@ -580,9 +592,10 @@ public static class CubeFileFormat
             {
                 // 세트마다 하프에지 ID 크기의 UV 배열을 만들고 (면, 코너) 순서로 채운다.
                 var arr = new Vector2[m.HalfEdgeCount];
-                for (int f = 0; f < m.FaceCount && f < sd.Uvs.Length; f++)
+                for (int f = 0; f < faceMap.Length && f < sd.Uvs.Length; f++)
                 {
-                    m.GetFaceHalfEdges(f, loop);
+                    if (faceMap[f] < 0 || sd.Uvs[f] == null) continue;
+                    m.GetFaceHalfEdges(faceMap[f], loop);
                     var uv = sd.Uvs[f];
                     for (int i = 0; i < loop.Count && i * 2 + 1 < uv.Length; i++) arr[loop[i]] = new Vector2(uv[i * 2], uv[i * 2 + 1]);
                 }

@@ -155,4 +155,26 @@ public class CubeFileFullRoundTripTests
         m2.EnsureUvSets();
         Assert.Equal("atlas", m2.UvSets[0].Name);
     }
+
+    /// <summary>
+    /// 메시 데이터가 손상된 파일(범위 밖 정점 인덱스)을 열 때 예외가 나든 아니든, 예외가 나면 열려 있던 문서는 그대로 남아야 한다.
+    /// </summary>
+    [Fact]
+    public void Deserialize_CorruptMesh_KeepsExistingDocumentOnFailure()
+    {
+        var doc = new Document();
+        doc.Undo.Push(CreatePrimitiveCommand.Cube(doc));
+        string bad = "{\"format\":\"cube\",\"version\":1,\"materials\":[],\"nodes\":[{\"name\":\"x\",\"parent\":-1,\"mesh\":{\"vertices\":[0,0,0,1,0,0,0,1,0],\"faces\":[[0,1,99]],\"uvs\":[[0,0,1,0]],\"materials\":[0],\"hardEdges\":[[0,99]],\"seams\":[],\"cornerNormals\":[[5,0,1,0,0]],\"pinnedUvs\":[[7]]}}]}";
+        try
+        {
+            CubeFileFormat.Deserialize(doc, bad);
+            // 예외 없이 읽혔다면 잘못된 면은 버려지고 유효한 문서여야 한다
+            foreach (var n in doc.MeshNodes()) Assert.Empty(MeshValidator.Check(n.Mesh!));
+        }
+        catch (Exception)
+        {
+            Assert.Single(doc.Nodes);
+            Assert.Equal("pCube1", doc.Nodes.Values.First().Name);
+        }
+    }
 }

@@ -568,9 +568,14 @@ public partial class Shell : Control
     /// </summary>
     public override void _Notification(int what)
     {
-        if (what == NotificationWMCloseRequest)
-            SceneFiles.ConfirmDiscard(() => { Dock.SaveLayout(); Settings.Save(); GetTree().Quit(); });
+        if (what == NotificationWMCloseRequest) RequestQuit();
     }
+
+    /// <summary>
+    /// 종료 요청(창 닫기·File → Exit 공통): 저장하지 않은 변경이 있으면 확인 후, 도킹 레이아웃과 설정을 저장하고 종료한다.
+    /// (전에는 File → Exit이 확인 없이 바로 종료해 변경을 잃고 레이아웃도 저장하지 않았다.)
+    /// </summary>
+    public void RequestQuit() => SceneFiles.ConfirmDiscard(() => { Dock.SaveLayout(); Settings.Save(); GetTree().Quit(); });
 
     /// <summary>레이아웃 복원용: 패널 ID → 패널(없으면 만든다). 복원하지 않는 패널은 null.</summary>
     private FloatingPanel? EnsurePanel(string id) => id switch
