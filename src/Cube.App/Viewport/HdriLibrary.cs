@@ -34,6 +34,8 @@ public static class HdriLibrary
 
     /// <summary>캐시 키 → 텍스처(null = 로드 실패).</summary>
     private static readonly Dictionary<string, Texture2D?> Cache = new();
+    /// <summary>이미 경고한 없는 파일 경로(패널 4개 × 설정 변경마다 같은 경고가 반복되지 않도록).</summary>
+    private static readonly HashSet<string> Warned = new();
 
     /// <summary>렌더 설정에 맞는 HDRI를 읽는다: Custom이면 경로 파일(비어 있으면 null), 아니면 내장 ID.</summary>
     public static Texture2D? Load(RenderSettings r) => r.Hdri == Custom ? (string.IsNullOrEmpty(r.HdriPath) ? null : LoadFile(r.HdriPath)) : LoadBuiltIn(r.Hdri);
@@ -71,7 +73,8 @@ public static class HdriLibrary
         Texture2D? tex = null;
         try
         {
-            if (System.IO.File.Exists(path))
+            // 없는 파일은 경고만 하고 캐시하지 않는다(나중에 파일이 생기면 다시 읽도록; IBL은 꺼진 것처럼 앰비언트 색으로 표시됨)
+            if (!System.IO.File.Exists(path)) { if (Warned.Add(path)) GD.PushWarning($"[HDRI] file not found: {path}"); return null; }
             {
                 string ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
                 if (ext is ".hdr" or ".hdrbin" or ".rgbe") tex = FromRgbe(RgbeImage.Decode(System.IO.File.ReadAllBytes(path)));

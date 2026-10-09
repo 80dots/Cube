@@ -99,6 +99,22 @@ public partial class DebugDriver
                     GD.Print($"[Drive] mat {m.Id} {m.Name} {m.Type} undo={CubeApp.Instance.Document.Undo.UndoCount} " + string.Join(" ", m.Values.Select(kv => $"{kv.Key}={kv.Value.X:0.###},{kv.Value.Y:0.###},{kv.Value.Z:0.###}")) + " tex=" + string.Join(",", m.Textures.Select(kv => kv.Key + ":" + System.IO.Path.GetFileName(kv.Value))));
                     return true;
                 }
+            case "imgdiff":   // imgdiff A B: 두 PNG의 활성 뷰포트 영역 평균 RGB 차이(0~255)와 다른 픽셀 비율
+                {
+                    var a = Image.LoadFromFile(p[1]); var b = Image.LoadFromFile(p[2]);
+                    var r = shell.Viewport.GetGlobalRect();
+                    int x0 = (int)r.Position.X, y0 = (int)r.Position.Y, x1 = Math.Min((int)r.End.X, Math.Min(a.GetWidth(), b.GetWidth())), y1 = Math.Min((int)r.End.Y, Math.Min(a.GetHeight(), b.GetHeight()));
+                    double sum = 0; long n = 0, diff = 0;
+                    for (int y = y0; y < y1; y += 2)
+                        for (int x = x0; x < x1; x += 2)
+                        {
+                            var ca = a.GetPixel(x, y); var cb = b.GetPixel(x, y);
+                            double d = (Math.Abs(ca.R - cb.R) + Math.Abs(ca.G - cb.G) + Math.Abs(ca.B - cb.B)) / 3.0 * 255;
+                            sum += d; n++; if (d > 4) diff++;
+                        }
+                    GD.Print($"[Drive] imgdiff {System.IO.Path.GetFileName(p[1])} {System.IO.Path.GetFileName(p[2])}: mean={sum / Math.Max(1, n):0.00} changed={100.0 * diff / Math.Max(1, n):0.0}%");
+                    return true;
+                }
             case "type":   // type TEXT: 글자마다 유니코드 키 이벤트(포커스된 텍스트 칸 입력용; '_'는 공백)
                 {
                     foreach (char ch in string.Join(" ", p.Skip(1)).Replace('_', ' '))

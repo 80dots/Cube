@@ -81,8 +81,12 @@ public sealed class Document
     public string UniqueMaterialName(string baseName)
     {
         var used = new HashSet<string>(Materials.Select(m => m.Name));
+        // 내장 기본 머티리얼 이름(lambert1)은 예약: 새 Lambert는 Maya처럼 lambert2부터(같은 이름이 둘이면 할당 목록에서 구분이 안 됨)
+        used.Add(DefaultMaterialName);
         for (int i = 1; ; i++) { string cand = baseName + i; if (!used.Contains(cand)) return cand; }
     }
+    /// <summary>내장 기본 머티리얼(ID 0)의 표시 이름.</summary>
+    public const string DefaultMaterialName = "lambert1";
     /// <summary>ID로 머티리얼을 찾는다(0 이하 = 기본 머티리얼 → null).</summary>
     public MaterialDef? FindMaterial(int id) => id <= 0 ? null : Materials.FirstOrDefault(m => m.Id == id);
     /// <summary>파일 로드 등 ID가 이미 있는 머티리얼을 넣을 때.</summary>

@@ -393,7 +393,7 @@ public sealed partial class FbxSceneBuilder
             attr.Add("GeometryVersion", 124);
             var ap = attr.Add("Properties70");
             ap.Add("P", "LightType", "enum", "", "", l.Type switch { LightType.Directional => 1, LightType.Spot => 2, _ => 0 });
-            ap.Add("P", "Color", "Color", "", "A", (double)l.Color.X, (double)l.Color.Y, (double)l.Color.Z);
+            ap.Add("P", "Color", "Color", "", "A", Lin(l.Color.X), Lin(l.Color.Y), Lin(l.Color.Z));
             ap.Add("P", "Intensity", "Number", "", "A", (double)(l.Intensity * 100f));
             ap.Add("P", "CastShadows", "bool", "", "", 0);
             if (l.Type != LightType.Directional)
@@ -581,6 +581,8 @@ public sealed partial class FbxSceneBuilder
     /// <returns>FBX Material 객체 ID.</returns>
     private long MaterialId(int docMaterialId)
     {
+        // 색은 선형으로 쓴다: 문서 색은 sRGB(UI 값)인데 FBX 색 속성은 Maya(장면 선형)·Blender·Unity(Linear 프로젝트에서 .gamma로 되돌림)·ufbx 모두 선형으로 읽는다.
+        // 전에는 sRGB 값을 그대로 써서 가져온 앱에서 색이 밝게(0.9 → 0.955) 보였다.
         if (_materialIds.TryGetValue(docMaterialId, out long id)) return id;
         var def = _doc.FindMaterial(docMaterialId);
         string name = def?.Name ?? "lambert1";
@@ -598,11 +600,11 @@ public sealed partial class FbxSceneBuilder
         var emis = def?.Get("emissive") ?? Vector3.Zero;
         float emisStrength = def?.GetF("emissiveStrength") ?? 1f;
         bool hasEmis = emis != Vector3.Zero || def?.Tex("emissive") != null;
-        p.Add("P", "EmissiveColor", "Color", "", "A", (double)emis.X, (double)emis.Y, (double)emis.Z);
+        p.Add("P", "EmissiveColor", "Color", "", "A", Lin(emis.X), Lin(emis.Y), Lin(emis.Z));
         p.Add("P", "EmissiveFactor", "Number", "", "A", hasEmis ? (double)emisStrength : 0.0);
         p.Add("P", "AmbientColor", "Color", "", "A", 0.0, 0.0, 0.0);
         p.Add("P", "AmbientFactor", "Number", "", "A", 0.0);
-        p.Add("P", "DiffuseColor", "Color", "", "A", (double)color.X, (double)color.Y, (double)color.Z);
+        p.Add("P", "DiffuseColor", "Color", "", "A", Lin(color.X), Lin(color.Y), Lin(color.Z));
         p.Add("P", "DiffuseFactor", "Number", "", "A", 1.0);
         p.Add("P", "TransparentColor", "Color", "", "A", 1.0, 1.0, 1.0);
         float opacity = def?.GetF("alpha") ?? 1f;
@@ -614,7 +616,7 @@ public sealed partial class FbxSceneBuilder
             // BlinnPhong은 값 그대로, PBR은 스펙큘러 = 0.04 + 0.9·metallic 회색, 광택 지수 = (1 − roughness)²·128(최소 2)로 근사한다.
             var spec = def!.Type == MaterialType.BlinnPhong ? def.Specular : new Vector3(def.Metallic * 0.9f + 0.04f);
             float shininess = def.Type == MaterialType.BlinnPhong ? def.Shininess : MathF.Max(2f, (1f - def.Roughness) * (1f - def.Roughness) * 128f);
-            p.Add("P", "SpecularColor", "Color", "", "A", (double)spec.X, (double)spec.Y, (double)spec.Z);
+            p.Add("P", "SpecularColor", "Color", "", "A", Lin(spec.X), Lin(spec.Y), Lin(spec.Z));
             p.Add("P", "SpecularFactor", "Number", "", "A", 1.0);
             p.Add("P", "Shininess", "Number", "", "A", (double)shininess);
             p.Add("P", "ShininessExponent", "Number", "", "A", (double)shininess);
@@ -624,7 +626,7 @@ public sealed partial class FbxSceneBuilder
         // Maya 호환 단일 값 속성
         p.Add("P", "Emissive", "Vector3D", "Vector", "", 0.0, 0.0, 0.0);
         p.Add("P", "Ambient", "Vector3D", "Vector", "", 0.0, 0.0, 0.0);
-        p.Add("P", "Diffuse", "Vector3D", "Vector", "", (double)color.X, (double)color.Y, (double)color.Z);
+        p.Add("P", "Diffuse", "Vector3D", "Vector", "", Lin(color.X), Lin(color.Y), Lin(color.Z));
         p.Add("P", "Opacity", "double", "Number", "", 1.0);
         _objects.Add(m);
 
@@ -641,6 +643,9 @@ public sealed partial class FbxSceneBuilder
         }
         return id;
     }
+
+    /// <summary>sRGB 0..1 성분을 선형 값으로 바꾼다(FBX 색 속성용).</summary>
+    internal static double Lin(float c) => c <= 0.04045f ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
 
     // ---------------------------------------------------------------- 스킨
 
