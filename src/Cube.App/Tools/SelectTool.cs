@@ -43,6 +43,11 @@ public class SelectTool : ToolBase
     private bool _marquee;
     /// <summary>누를 때의 수식어로 정한 선택 방식(Replace/Toggle/Remove/Add).</summary>
     private SelectModifier _modifier;
+    /// <summary>Lasso 드래그 경로(뷰포트 로컬 픽셀). <see cref="UseLasso"/>일 때만 쓴다.</summary>
+    private readonly List<Vector2> _lasso = new();
+
+    /// <summary>true면 드래그 선택이 사각형 마키 대신 자유 곡선(Lasso)이 된다(<see cref="LassoTool"/>).</summary>
+    protected virtual bool UseLasso => false;
 
     /// <summary>클릭과 마키를 구분하는 최소 드래그 거리(px, UI 배율을 곱해 씀).</summary>
     public const float DragThresholdPx = 4f;
@@ -67,13 +72,15 @@ public class SelectTool : ToolBase
                     if (mb.DoubleClick && TryDoubleClickSelect(mb)) { _swallowRelease = true; return true; }
                     if (OnPrimaryPress(mb)) return true;
                     _pressed = true; _marquee = false; _pressPos = mb.Position; _modifier = ModifierOf(mb);
+                    _lasso.Clear(); _lasso.Add(mb.Position);
                     return true;
                 }
                 if (_swallowRelease) { _swallowRelease = false; _pressed = false; return true; }
                 if (_pressed)
                 {
                     _pressed = false;
-                    if (_marquee) FinishMarquee(mb.Position);
+                    if (_marquee && UseLasso) FinishLasso(mb.Position);
+                    else if (_marquee) FinishMarquee(mb.Position);
                     else ClickSelect(mb.Position, _modifier);
                     return true;
                 }
@@ -84,7 +91,13 @@ public class SelectTool : ToolBase
                 {
                     // 누른 위치에서 임계 거리 이상 움직이면 마키로 전환하고 오버레이에 사각형을 그린다
                     if (!_marquee && (mm.Position - _pressPos).Length() >= DragThresholdPx * CubeApp.Instance.UiScale) _marquee = true;
-                    if (_marquee) Ctx.Viewport.Overlay.Marquee = RectFrom(_pressPos, mm.Position);
+                    if (_marquee && UseLasso)
+                    {
+                        // 직전 점에서 일정 거리 이상 움직였을 때만 경로에 점을 더한다(점 수 제한)
+                        if ((mm.Position - _lasso[^1]).Length() >= 3f * CubeApp.Instance.UiScale) _lasso.Add(mm.Position);
+                        Ctx.Viewport.Overlay.Lasso = _lasso;
+                    }
+                    else if (_marquee) Ctx.Viewport.Overlay.Marquee = RectFrom(_pressPos, mm.Position);
                     return true;
                 }
                 if (OnHoverMotion(mm)) return true;
@@ -105,6 +118,8 @@ public class SelectTool : ToolBase
     {
         _pressed = false; _marquee = false;
         Ctx.Viewport.Overlay.Marquee = null;
+        Ctx.Viewport.Overlay.Lasso = null;
+        _lasso.Clear();
     }
 
     /// <summary>
@@ -213,6 +228,19 @@ public class SelectTool : ToolBase
         // 박스 선택은 옵션(기본 on)에 따라 가려진 요소도 포함한다; 클릭 선택은 항상 보이는 것 우선
         var items = Picker.Marquee(rect, Ctx.Sel.Mode, cameraBased: !Ctx.Settings.MarqueeSelectThrough);
         if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] marquee {rect} mode={Ctx.Sel.Mode} through={Ctx.Settings.MarqueeSelectThrough} -> {items.Count} items: {string.Join(",", items.Select(i => i.Component))}");
+        if (items.Count == 0 && _modifier != SelectModifier.Replace) return;
+        var mod = _modifier;
+        UI.Shell.Instance.RecordSelection(s => s.Apply(items, mod));
+    }
+
+    /// <summary>Lasso 선택 확정: 경로(마지막 → 처음으로 닫음) 안의 요소를 집어 누를 때의 수식어로 적용한다. 규칙은 마키와 같다.</summary>
+    private void FinishLasso(Vector2 px)
+    {
+        if ((px - _lasso[^1]).Length() > 0.5f) _lasso.Add(px);
+        Ctx.Viewport.Overlay.Lasso = null;
+        var items = Picker.Lasso(_lasso, Ctx.Sel.Mode, cameraBased: !Ctx.Settings.MarqueeSelectThrough);
+        if (Hotkeys.ShellInput.Verbose) GD.Print($"[Select] lasso {_lasso.Count} pts mode={Ctx.Sel.Mode} through={Ctx.Settings.MarqueeSelectThrough} -> {items.Count} items: {string.Join(",", items.Select(i => i.Component))}");
+        _lasso.Clear();
         if (items.Count == 0 && _modifier != SelectModifier.Replace) return;
         var mod = _modifier;
         UI.Shell.Instance.RecordSelection(s => s.Apply(items, mod));

@@ -191,4 +191,50 @@ public class RayPickerTests
         Assert.NotNull(hit);
         Assert.True(Vector3.Dot(mesh.Faces[hit.Value.Component].Normal, Vector3.UnitZ) > 0.99f);
     }
+
+    /// <summary>
+    /// Lasso 다각형 판정: 오목한 L자 다각형의 안/밖(움푹 들어간 부분은 밖), 자기 교차(8자) 곡선은 짝홀 규칙으로 처리되는지,
+    /// 선분이 다각형을 가로지르기만 해도(끝점이 모두 밖이어도) 걸리는지 확인한다.
+    /// </summary>
+    [Fact]
+    public void LassoPolygon_InsideAndSegmentTests()
+    {
+        var l = new List<Vector2> { new(0, 0), new(10, 0), new(10, 4), new(4, 4), new(4, 10), new(0, 10) };
+        Assert.True(RayPicker.InsidePolygon(new Vector2(2, 8), l));
+        Assert.True(RayPicker.InsidePolygon(new Vector2(8, 2), l));
+        Assert.False(RayPicker.InsidePolygon(new Vector2(8, 8), l)); // L자의 빈 모서리
+        Assert.False(RayPicker.InsidePolygon(new Vector2(-1, 5), l));
+        // 끝점이 둘 다 밖이지만 L자를 가로지르는 선분
+        Assert.True(RayPicker.SegmentIntersectsPolygon(new Vector2(-5, 2), new Vector2(15, 2), l));
+        Assert.False(RayPicker.SegmentIntersectsPolygon(new Vector2(6, 6), new Vector2(9, 9), l));
+        // 8자(꼬인) 곡선: 두 고리 안은 안, 교차점 바깥은 밖
+        var eight = new List<Vector2> { new(0, 0), new(10, 10), new(10, 0), new(0, 10) };
+        Assert.True(RayPicker.InsidePolygon(new Vector2(1, 5), eight));
+        Assert.True(RayPicker.InsidePolygon(new Vector2(9, 5), eight));
+        Assert.False(RayPicker.InsidePolygon(new Vector2(5, 1), eight));
+    }
+
+    /// <summary>
+    /// Lasso 선택: 뷰포트 전체를 감싸는 사각형 곡선은 마키와 같은 결과(앞면 정점 4개 / 전체 8개 / 오브젝트 1개)이고,
+    /// 화면 왼쪽 절반만 감싸면 투영 X가 중앙보다 왼쪽인 정점만 고른다. 꼭짓점이 3개 미만이면 빈 결과.
+    /// </summary>
+    [Fact]
+    public void Lasso_MatchesMarqueeAndSelectsInsideOnly()
+    {
+        var (targets, _, cam) = CubeScene();
+        var full = new List<Vector2> { Vector2.Zero, new(Vp.X, 0), Vp, new(0, Vp.Y) };
+        Assert.Equal(4, RayPicker.Lasso(targets, cam, full, SelectMode.Vertex, cameraBased: true).Count);
+        Assert.Equal(8, RayPicker.Lasso(targets, cam, full, SelectMode.Vertex, cameraBased: false).Count);
+        Assert.Single(RayPicker.Lasso(targets, cam, full, SelectMode.Object, cameraBased: false));
+        var left = new List<Vector2> { Vector2.Zero, new(Vp.X / 2, 0), new(Vp.X / 2, Vp.Y), new(0, Vp.Y) };
+        var items = RayPicker.Lasso(targets, cam, left, SelectMode.Vertex, cameraBased: false);
+        Assert.NotEmpty(items);
+        Assert.True(items.Count < 8);
+        foreach (var it in items)
+        {
+            var sp = cam.Project(Vector3.Transform(targets[0].Mesh.Verts[it.Component].Position, targets[0].World), out _);
+            Assert.True(sp!.Value.X <= Vp.X / 2);
+        }
+        Assert.Empty(RayPicker.Lasso(targets, cam, new List<Vector2> { Vector2.Zero, Vp }, SelectMode.Vertex, cameraBased: false));
+    }
 }

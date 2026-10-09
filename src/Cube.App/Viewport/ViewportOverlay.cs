@@ -17,6 +17,8 @@ public partial class ViewportOverlay : Control
     public string CameraLabel = "persp";
     /// <summary>드래그 중인 마키 사각형(뷰포트 로컬 픽셀). null이면 없음.</summary>
     public Rect2? Marquee;
+    /// <summary>드래그 중인 Lasso 경로(뷰포트 로컬 픽셀). null이면 없음. 끝점 → 시작점은 점선으로 닫아 보인다.</summary>
+    public List<Vector2>? Lasso;
     /// <summary>페인트 브러시 원(중심 픽셀, 반지름 픽셀).</summary>
     public (Vector2 center, float radiusPx)? Brush;
     /// <summary>Create Polygon Tool 미리보기(화면 점 목록).</summary>
@@ -127,6 +129,14 @@ public partial class ViewportOverlay : Control
             for (int i = 0; i + 1 < pl.Count; i++) DrawLine(pl[i], pl[i + 1], MathConvert.Rgb(0xffe034), 1.5f * s, true);
             if (pl.Count > 2) DrawLine(pl[^1], pl[0], new Color(1f, 0.88f, 0.2f, 0.4f), 1f * s, true);
             foreach (var p in pl) DrawCircle(p, 3.5f * s, MathConvert.Rgb(0xffe034));
+        }
+        // Lasso: 지나온 경로(실선) + 놓으면 닫힐 선(점선). 꼬인 곡선일 수 있어 채우기는 하지 않는다
+        if (Lasso is { Count: > 1 } ls)
+        {
+            var arr = ls.ToArray();
+            DrawPolyline(arr, new Color(0, 0, 0, 0.6f), 3f * s, true);
+            DrawPolyline(arr, new Color(1, 1, 1, 0.95f), 1.2f * s, true);
+            if (ls.Count > 2) DrawDashedLine(ls[^1], ls[0], new Color(1, 1, 1, 0.6f), 1f * s, 5f * s, true, true);
         }
         // 마키
         if (Marquee is { } r)

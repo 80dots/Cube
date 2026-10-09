@@ -211,4 +211,34 @@ public sealed class Picker
         }
         return items;
     }
+
+    /// <summary>
+    /// 자유 곡선(Lasso) 선택. 코어 RayPicker.Lasso로 화면 다각형 안의 메시 요소를 모으고(UV 모드는 정점 → UV 점 확장),
+    /// 오브젝트 모드에서는 화면 위치가 다각형 안에 든 조인트·라이트도 더한다. 판정 규칙은 마키와 같다.
+    /// </summary>
+    /// <param name="points">드래그 경로(뷰포트 로컬 픽셀, 마지막 → 처음으로 닫힌 것으로 본다).</param>
+    public List<SelItem> Lasso(IReadOnlyList<Vector2> points, SelectMode mode, bool cameraBased)
+    {
+        var poly = new List<NVec2>(points.Count);
+        foreach (var p in points) poly.Add(new NVec2(p.X, p.Y));
+        var items = RayPicker.Lasso(Targets(), Projection(), poly, mode == SelectMode.Uv ? SelectMode.Vertex : mode, cameraBased);
+        if (mode == SelectMode.Uv) items = ExpandUv(items);
+        if (mode == SelectMode.Object && poly.Count >= 3)
+        {
+            var proj = Projection();
+            foreach (var (id, jv) in _panel.Scene.JointViews)
+            {
+                if (!jv.Pickable) continue;
+                var sp = proj.Project(jv.GlobalPosition.ToNumerics(), out _);
+                if (sp != null && RayPicker.InsidePolygon(sp.Value, poly)) items.Add(new SelItem(id, -1));
+            }
+            foreach (var (id, lv) in _panel.Scene.LightViews)
+            {
+                if (!lv.Visible) continue;
+                var sp = proj.Project(lv.GlobalPosition.ToNumerics(), out _);
+                if (sp != null && RayPicker.InsidePolygon(sp.Value, poly)) items.Add(new SelItem(id, -1));
+            }
+        }
+        return items;
+    }
 }

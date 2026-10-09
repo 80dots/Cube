@@ -392,7 +392,6 @@ public partial class Shell : Control
             var b = Icons.IconButton(iconName, tip, icon, toggle: true);
             string tool = id;
             b.Pressed += () => Actions.Invoke("tool." + tool);
-            if (id == "lasso") b.Disabled = true;
             _toolButtons[id] = b;
             ToolBox.AddChild(b);
         }

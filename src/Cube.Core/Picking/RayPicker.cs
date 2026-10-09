@@ -318,6 +318,29 @@ public static class RayPicker
     /// 오브젝트 모드는 정점 하나라도 사각형 안이거나 엣지 하나라도 사각형을 지나면 그 노드를 선택한다(가림 무시).
     /// </remarks>
     public static List<SelItem> Marquee(IReadOnlyList<PickTarget> targets, CameraProjection cam, Vector2 min, Vector2 max, SelectMode mode, bool cameraBased)
+        => Region(targets, cam, p => Inside(p, min, max), (a, b) => SegmentIntersectsRect(a, b, min, max), mode, cameraBased);
+
+    /// <summary>
+    /// 자유 곡선(Lasso Tool) 선택: 화면 픽셀 다각형 <paramref name="polygon"/>(닫힌 것으로 본다) 안의 컴포넌트.
+    /// 판정 규칙은 마키와 같다 — 정점·면 중심은 투영점이 다각형 안(짝홀 규칙), 엣지는 끝점이 안이거나 다각형 변과 교차, 오브젝트는 둘 중 하나라도.
+    /// 꼭짓점이 3개 미만이면 빈 결과. 다각형 경계 상자로 먼저 걸러 비용을 줄인다.
+    /// </summary>
+    public static List<SelItem> Lasso(IReadOnlyList<PickTarget> targets, CameraProjection cam, IReadOnlyList<Vector2> polygon, SelectMode mode, bool cameraBased)
+    {
+        if (polygon.Count < 3) return new List<SelItem>();
+        var min = new Vector2(float.MaxValue); var max = new Vector2(float.MinValue);
+        foreach (var q in polygon) { min = Vector2.Min(min, q); max = Vector2.Max(max, q); }
+        return Region(targets, cam,
+            p => Inside(p, min, max) && InsidePolygon(p, polygon),
+            (a, b) => SegmentIntersectsRect(a, b, min, max) && SegmentIntersectsPolygon(a, b, polygon),
+            mode, cameraBased);
+    }
+
+    /// <summary>
+    /// 마키·Lasso 공통: 대상마다 화면 영역 판정 함수로 컴포넌트를 모은다.
+    /// <paramref name="inside"/> = 점이 영역 안인지, <paramref name="segHits"/> = 선분이 영역에 걸리는지(끝점 포함 또는 경계 교차).
+    /// </summary>
+    private static List<SelItem> Region(IReadOnlyList<PickTarget> targets, CameraProjection cam, Func<Vector2, bool> inside, Func<Vector2, Vector2, bool> segHits, SelectMode mode, bool cameraBased)
     {
         var result = new List<SelItem>();
         foreach (var tg in targets)
@@ -331,7 +354,7 @@ public static class RayPicker
                     {
                         var w = Vector3.Transform(r.PointPositions[i], tg.World);
                         var sp = cam.Project(w, out _);
-                        if (sp == null || !Inside(sp.Value, min, max)) continue;
+                        if (sp == null || !inside(sp.Value)) continue;
                         if (cameraBased && IsOccluded(targets, cam, w, tg.Id)) continue;
                         result.Add(new SelItem(tg.Id, r.PointToVertex[i]));
                     }
@@ -344,7 +367,7 @@ public static class RayPicker
                         var wb = Vector3.Transform(r.LinePositions[i * 2 + 1], tg.World);
                         var sa = cam.Project(wa, out _); var sb = cam.Project(wb, out _);
                         if (sa == null || sb == null) continue;
-                        if (!(Inside(sa.Value, min, max) || Inside(sb.Value, min, max) || SegmentIntersectsRect(sa.Value, sb.Value, min, max))) continue;
+                        if (!(segHits(sa.Value, sb.Value))) continue;
                         if (cameraBased && IsOccluded(targets, cam, (wa + wb) * 0.5f, tg.Id)) continue;
                         result.Add(new SelItem(tg.Id, r.LineToEdge[i]));
                     }
@@ -355,7 +378,7 @@ public static class RayPicker
                     {
                         var w = Vector3.Transform(r.FaceCenters[i], tg.World);
                         var sp = cam.Project(w, out _);
-                        if (sp == null || !Inside(sp.Value, min, max)) continue;
+                        if (sp == null || !inside(sp.Value)) continue;
                         int f = r.FaceCenterToFace[i];
                         if (cameraBased && IsOccluded(targets, cam, w, tg.Id, f)) continue;
                         result.Add(new SelItem(tg.Id, f));
@@ -368,13 +391,13 @@ public static class RayPicker
                         for (int i = 0; i < r.PointCount && !hit; i++)
                         {
                             var sp = cam.Project(Vector3.Transform(r.PointPositions[i], tg.World), out _);
-                            if (sp != null && Inside(sp.Value, min, max)) hit = true;
+                            if (sp != null && inside(sp.Value)) hit = true;
                         }
                         for (int i = 0; i < r.LineCount && !hit; i++)
                         {
                             var sa = cam.Project(Vector3.Transform(r.LinePositions[i * 2], tg.World), out _);
                             var sb = cam.Project(Vector3.Transform(r.LinePositions[i * 2 + 1], tg.World), out _);
-                            if (sa != null && sb != null && SegmentIntersectsRect(sa.Value, sb.Value, min, max)) hit = true;
+                            if (sa != null && sb != null && segHits(sa.Value, sb.Value)) hit = true;
                         }
                         if (hit) result.Add(new SelItem(tg.Id, -1));
                         break;
@@ -394,6 +417,42 @@ public static class RayPicker
         var ab = b - a; float len2 = ab.LengthSquared();
         if (len2 < 1e-12f) return 0;
         return Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+    }
+
+    /// <summary>점 p가 다각형(꼭짓점 순서대로, 마지막→처음으로 닫힘) 안인지. 짝홀 규칙(수평 반직선 교차 횟수)이라 꼬인 곡선도 처리한다.</summary>
+    public static bool InsidePolygon(Vector2 p, IReadOnlyList<Vector2> poly)
+    {
+        bool inside = false;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+        {
+            var a = poly[i]; var b = poly[j];
+            // 변 a-b가 p의 수평선을 가로지르고, 교차점이 p의 오른쪽이면 안/밖이 뒤집힌다
+            if ((a.Y > p.Y) != (b.Y > p.Y) && p.X < (b.X - a.X) * (p.Y - a.Y) / (b.Y - a.Y) + a.X) inside = !inside;
+        }
+        return inside;
+    }
+
+    /// <summary>선분 a-b가 다각형에 걸리는지: 끝점 하나라도 안이거나 다각형의 어느 변과 교차.</summary>
+    public static bool SegmentIntersectsPolygon(Vector2 a, Vector2 b, IReadOnlyList<Vector2> poly)
+    {
+        if (InsidePolygon(a, poly) || InsidePolygon(b, poly)) return true;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+            if (SegmentsIntersect(a, b, poly[j], poly[i])) return true;
+        return false;
+    }
+
+    /// <summary>두 2D 선분이 교차(접촉 포함)하는지: 방향(외적 부호) 판정 + 일직선 겹침.</summary>
+    public static bool SegmentsIntersect(Vector2 p1, Vector2 p2, Vector2 q1, Vector2 q2)
+    {
+        static float Cross(Vector2 o, Vector2 a, Vector2 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
+        static bool OnSeg(Vector2 a, Vector2 b, Vector2 c) => MathF.Min(a.X, b.X) <= c.X && c.X <= MathF.Max(a.X, b.X) && MathF.Min(a.Y, b.Y) <= c.Y && c.Y <= MathF.Max(a.Y, b.Y);
+        float d1 = Cross(q1, q2, p1), d2 = Cross(q1, q2, p2), d3 = Cross(p1, p2, q1), d4 = Cross(p1, p2, q2);
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+        if (d1 == 0 && OnSeg(q1, q2, p1)) return true;
+        if (d2 == 0 && OnSeg(q1, q2, p2)) return true;
+        if (d3 == 0 && OnSeg(p1, p2, q1)) return true;
+        if (d4 == 0 && OnSeg(p1, p2, q2)) return true;
+        return false;
     }
 
     /// <summary>점 p가 축 정렬 사각형 [min, max] 안(경계 포함)인지.</summary>

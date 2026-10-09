@@ -24,6 +24,7 @@ public partial class Shell
     private void RegisterTools()
     {
         Tools.Register(new SelectTool());
+        Tools.Register(new LassoTool());
         Tools.Register(new MoveTool());
         Tools.Register(new RotateTool());
         Tools.Register(new ScaleTool());
@@ -54,7 +55,7 @@ public partial class Shell
 
         // tool.* = 기본 변형 툴 전환(체크 = 현재 툴), tool.last = 직전 툴로 되돌아가기, axis.* = 조작기 축 방향
         // --- 툴
-        foreach (var (id, label) in new[] { ("select", "Select Tool"), ("move", "Move Tool"), ("rotate", "Rotate Tool"), ("scale", "Scale Tool") })
+        foreach (var (id, label) in new[] { ("select", "Select Tool"), ("lasso", "Lasso Tool"), ("move", "Move Tool"), ("rotate", "Rotate Tool"), ("scale", "Scale Tool") })
         {
             string t = id;
             Actions.Register("tool." + id, label, () => Tools.SetTool(t), isChecked: () => Tools.Current?.Id == t);
@@ -668,6 +669,7 @@ public partial class Shell
             .Submenu("Lights", m => m.Item("create.lightDirectional", "Directional Light").Item("create.lightPoint", "Point Light").Item("create.lightSpot", "Spot Light"));
 
         Menus.Build(Add("Select"))
+            .Item("tool.select").Item("tool.lasso").Separator()
             .Item("mode.object").Item("mode.vertex").Item("mode.edge").Item("mode.face").Item("mode.uv").Separator()
             .Item("select.grow").Item("select.shrink").Separator()
             .Item("select.lights").Separator()
