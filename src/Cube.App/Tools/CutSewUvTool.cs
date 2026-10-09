@@ -8,7 +8,7 @@ namespace Cube.App.Tools;
 /// <summary>Maya 3D Cut and Sew UV Tool: 뷰포트에서 엣지를 클릭하면 UV 심으로 자르고(Cut), Ctrl+클릭이면 꿰맨다(Sew). 드래그하면 지나간 엣지에 연속 적용.</summary>
 /// <remarks>
 /// 엣지 하나마다 별도 UvEditCommand(Undo 한 단계)로 <see cref="UvOps.CutEdges"/>/<see cref="UvOps.SewEdges"/>를 실행하고,
-/// 한 스트로크에서 같은 엣지는 한 번만 처리한다. 이미 원하는 상태(심이면 Cut 생략, 심이 아니면 Sew 생략)인 엣지는 건너뛴다.
+/// 한 스트로크에서 같은 엣지는 한 번만 처리한다. 이미 원하는 상태(심이면 Cut 생략, UV가 이어져 있으면 Sew 생략)인 엣지는 건너뛴다.
 /// </remarks>
 public sealed class CutSewUvTool : SelectTool
 {
@@ -58,7 +58,8 @@ public sealed class CutSewUvTool : SelectTool
         var node = Ctx.Doc.Find(hit.Value.Node); if (node?.Mesh == null) return;
         // 범위 밖/죽은 엣지는 무시
         if (edge >= node.Mesh.EdgeCount || node.Mesh.Edges[edge].He1 < 0) return;
-        if (node.Mesh.Edges[edge].Seam == !sew) return; // 이미 그 상태
+        // 이미 그 상태면 건너뛴다: Cut = 이미 심, Sew = 이미 이어짐(심 플래그 없이 UV만 갈라진 엣지도 꿰맨다)
+        if (sew ? UvOps.IsEdgeSewn(node.Mesh, edge) : node.Mesh.Edges[edge].Seam) return;
         var cmd = new UvEditCommand(sew ? "Sew UV Edge" : "Cut UV Edge", node.Id, m => { if (sew) UvOps.SewEdges(m, new[] { edge }); else UvOps.CutEdges(m, new[] { edge }); });
         Ctx.Undo.Push(cmd);
         UI.Shell.Instance.UvEditorWindow?.Canvas.Invalidate();

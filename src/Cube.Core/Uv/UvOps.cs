@@ -538,6 +538,15 @@ public static partial class UvOps
         }
     }
 
+    /// <summary>내부 엣지가 이미 꿰매져 있는지: 심이 아니고 양쪽 면의 코너 UV가 엣지 양끝에서 같으면 true(경계 엣지는 false).</summary>
+    /// <remarks>심 플래그 없이 UV만 갈라진 엣지(투영·Unitize 결과 등)도 Sew 대상이므로, Cut/Sew 툴은 플래그가 아니라 이것으로 건너뛸지 정한다.</remarks>
+    public static bool IsEdgeSewn(PolyMesh m, int e)
+    {
+        if (e < 0 || e >= m.EdgeCount || !m.Edges[e].Alive || m.Edges[e].He1 < 0 || m.Edges[e].Seam) return false;
+        var ed = m.Edges[e]; var he = m.Hes[ed.He0]; var tw = m.Hes[ed.He1];
+        return Vector2.DistanceSquared(he.Uv0, m.Hes[tw.Next].Uv0) < 1e-10f && Vector2.DistanceSquared(m.Hes[he.Next].Uv0, tw.Uv0) < 1e-10f;
+    }
+
     /// <summary>Sew UV Edges: 심을 해제하고 양쪽 코너 UV를 평균으로 맞춘다.</summary>
     /// <remarks>
     /// 엣지 양끝 정점마다 두 면의 코너 UV 평균을 구해 네 코너에 써서 이음매를 붙인다(셸이 멀리 떨어져 있으면 중간에서 만난다).
