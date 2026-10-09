@@ -193,8 +193,10 @@ public partial class ComponentEditorWindow : FloatingPanel
         var id = sel.IsComponentMode && sel.ComponentTarget != NodeId.None ? sel.ComponentTarget : sel.ActiveObject;
         if (_doc.Find(id)?.Mesh == null)
         {
-            // 컴포넌트가 선택된 메시라도 대상으로
-            id = sel.NodesWithComponents(sel.Mode).FirstOrDefault(n => _doc.Find(n)?.Mesh != null);
+            // 컴포넌트가 선택된 메시라도 대상으로(없으면 원래 id를 유지해 아래 그룹 → 첫 메시 규칙이 적용되게;
+            // 전에는 여기서 None으로 덮어써 가져온 모델의 최상위 그룹을 골라도 "No mesh selected"였음)
+            var withComps = sel.NodesWithComponents(sel.Mode).FirstOrDefault(n => _doc.Find(n)?.Mesh != null);
+            if (_doc.Find(withComps)?.Mesh != null) id = withComps;
         }
         // 그룹·스켈레톤 등 메시가 아닌 노드면 그 아래 첫 메시(가져온 모델의 최상위 노드를 골랐을 때)
         if (_doc.Find(id) is { Mesh: null } grp)
