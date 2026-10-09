@@ -499,7 +499,7 @@ public partial class Shell : Control
             new[] { ("windows.renderSettings", "Settings", "render_settings"), ("render.ibl", "IBL", "light_ibl"), ("render.background", "HDRI BG", "light_background"), ("render.nextHdri", "Next HDRI", "light_next_hdri"), ("render.headlight", "Headlight", "light_headlight"), ("render.shadows", "Shadows", "light_shadows") },
             new[] { ("render.ssao", "SSAO", "render_ssao"), ("render.glow", "Glow", "render_glow"), ("render.ssr", "SSR", "render_ssr"), ("render.ssil", "SSIL", "render_ssil"), ("render.sdfgi", "SDFGI", "render_sdfgi") },
             new[] { ("render.fog", "Fog", "render_fog"), ("render.volumetricFog", "Vol. Fog", "render_volfog"), ("render.adjust", "Color Adj.", "render_adjust"), ("render.dof", "DOF", "render_dof"), ("render.autoExposure", "Auto Exp.", "render_autoexp") },
-            new[] { ("render.fxaa", "FXAA", "render_fxaa"), ("render.smaa", "SMAA", "render_smaa"), ("render.taa", "TAA", "render_taa"), ("render.debanding", "Debanding", "render_debanding"), ("render.postReset", "All Off", "render_off") });
+            new[] { ("render.fxaa", "FXAA", "render_fxaa"), ("render.smaa", "SMAA", "render_smaa"), ("render.taa", "TAA", "render_taa"), ("render.debanding", "Debanding", "render_debanding"), ("render.postReset", "FX Off", "render_off") });
         // 선택·모드·툴이 바뀌면 CanExecute/IsChecked가 달라지므로 버튼 상태를 다시 맞춘다
         Document.Selection.Changed += RefreshShelf;
         Document.Selection.ModeChanged += RefreshShelf;
