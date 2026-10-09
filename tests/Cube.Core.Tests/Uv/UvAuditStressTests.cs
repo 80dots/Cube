@@ -363,4 +363,32 @@ public class UvAuditStressTests
         Assert.Equal(new[] { "map1", "uvSet1", "uvSet2", "map1_copy", "map1_copy1" }, m.UvSets.Select(s => s.Name));
         Assert.Equal("uvSet1", m.UniqueUvSetName("uvSet1", exceptIndex: 1));
     }
+    /// <summary>
+    /// Bevel(이력) → Auto Wrap(UvEditCommand) → Bevel Distance 편집: 위상이 같으므로 UV 작업이 이력 재실행 뒤에도 남아야 한다
+    /// (예전에는 UV 편집이 이력에 없어 Bevel을 고치면 UV가 Bevel 직후 상태로 돌아갔다). Undo는 이력 항목도 뺀다.
+    /// </summary>
+    [Fact]
+    public void UvEdits_SurviveHistoryReplay_WhenTopologyUnchanged()
+    {
+        var doc = new Core.Scene.Document();
+        var cube = Core.Commands.CreatePrimitiveCommand.Cube(doc); doc.Undo.Push(cube);
+        var node = cube.Node; var mesh = node.Mesh!;
+        var edges = Enumerable.Range(0, mesh.EdgeCount).ToArray();
+        doc.Undo.Push(new Core.Commands.MeshOpCommand("Bevel", node.Id, new Core.Commands.HistoryParams(Core.Commands.HistoryParam.F("Distance", 0.1f, 0, 10)),
+            (m, p) => { var f = MeshOps.BevelEdges(m, edges, p.Float("Distance")); return (f.Count > 0, Core.Selection.SelectMode.Face, f); }));
+        doc.Undo.Push(new Core.Commands.UvEditCommand("Auto Wrap", node.Id, m => UvOps.AutoWrap(m)));
+        var shape = node.MeshShape!;
+        Assert.Equal("Auto Wrap", shape.History[^1].Name);
+        var wrapped = mesh.SnapshotUvs();
+        int bevelIdx = shape.History.FindIndex(h => h.Name == "Bevel");
+        var p2 = shape.History[bevelIdx].Params.Clone(); p2["Distance"].Float = 0.2f;
+        doc.Undo.Push(new Core.Commands.EditHistoryCommand(node.Id, bevelIdx, p2));
+        var after = node.Mesh!.SnapshotUvs();
+        Assert.Equal(wrapped, after);
+        Assert.Empty(MeshValidator.Check(node.Mesh!));
+        // 편집 Undo → 이력 항목 유지, UV Undo → 이력 항목 제거
+        doc.Undo.Undo();
+        doc.Undo.Undo();
+        Assert.DoesNotContain(node.MeshShape!.History, h => h.Name == "Auto Wrap");
+    }
 }

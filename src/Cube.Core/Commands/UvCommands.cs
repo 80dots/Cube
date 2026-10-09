@@ -8,9 +8,15 @@ namespace Cube.Core.Commands;
 /// UV 편집(코너 UV + 엣지 심)의 전/후 스냅샷 명령. 위상은 바뀌지 않으므로 하프에지/엣지 ID로 배열을 저장한다.
 /// 드래그는 <see cref="Capture"/> → 변경 → <see cref="Commit"/> 후 alreadyApplied로 밀어 넣는다.
 /// </summary>
-/// <remarks>저장 대상: 코너 UV(Uv0, 하단 원점), 엣지 심(<c>Edge.Seam</c>), 코너 UV 핀(<c>HalfEdge.PinUv</c>). 다른 UV 세트는 건드리지 않는다.</remarks>
-public sealed class UvEditCommand : ICommand
+/// <remarks>
+/// 저장 대상: 코너 UV(Uv0, 하단 원점), 엣지 심(<c>Edge.Seam</c>), 코너 UV 핀(<c>HalfEdge.PinUv</c>). 다른 UV 세트는 건드리지 않는다.
+/// 실제로 바뀐 편집은 구성 이력(<see cref="MeshShape.History"/>)에도 항목을 남긴다 — 앞 항목(Bevel 폭 등)을 고쳐 이력을 다시 실행할 때
+/// 위상(하프에지·엣지 수)이 같으면 이 UV 결과를 슬롯 그대로 다시 써서, 예전처럼 그 뒤에 한 UV 작업이 통째로 사라지지 않게 한다.
+/// </remarks>
+public sealed class UvEditCommand : ICommand, IAppliedHook
 {
+    /// <summary>구성 이력 항목(실제로 바뀌었을 때 처음 등록하며 만든다).</summary>
+    private HistoryEntry? _entry;
     /// <summary>대상 노드.</summary>
     private readonly NodeId _node;
     /// <summary>하프에지 슬롯별 변경 전/후 UV.</summary>
@@ -66,14 +72,40 @@ public sealed class UvEditCommand : ICommand
         }
         else Restore(mesh, _uvAfter, _seamAfter, _pinAfter);
         doc.Notify(new DocChange(ChangeKind.MeshAttributes, _node));
+        RegisterHistory(doc);
     }
 
-    /// <summary>변경 전 UV·심·핀을 복원한다.</summary>
+    /// <summary>드래그형(Capture/Commit 후 alreadyApplied로 들어옴): 이력 항목만 등록한다.</summary>
+    public void OnPushedApplied(Document doc) => RegisterHistory(doc);
+
+    /// <summary>
+    /// 바뀐 것이 있으면 구성 이력에 항목을 더한다. Before = 지금 메시에 변경 전 UV·심·핀을 되돌린 복사본,
+    /// Replay = 하프에지·엣지 수가 기록 때와 같으면 변경 후 배열을 슬롯 그대로 다시 쓴다(위상이 달라졌으면 건너뜀).
+    /// </summary>
+    private void RegisterHistory(Document doc)
+    {
+        if (!Changed || doc.Get(_node).MeshShape is not { } shape) return;
+        if (_entry == null)
+        {
+            var snapshot = shape.Mesh.Clone();
+            Restore(snapshot, _uvBefore, _seamBefore, _pinBefore);
+            var uv = _uvAfter; var seam = _seamAfter; var pin = _pinAfter;
+            _entry = new HistoryEntry
+            {
+                Name = Name, Before = snapshot,
+                Replay = (m, _) => { if (m.HalfEdgeCount != uv.Length || m.EdgeCount != seam.Length) return false; Restore(m, uv, seam, pin); return true; },
+            };
+        }
+        if (!shape.History.Contains(_entry)) { shape.History.Add(_entry); doc.Notify(new DocChange(ChangeKind.HistoryChanged, _node)); }
+    }
+
+    /// <summary>변경 전 UV·심·핀을 복원하고 이력 항목을 뺀다.</summary>
     public void Undo(Document doc)
     {
         var mesh = doc.Get(_node).Mesh!;
         Restore(mesh, _uvBefore, _seamBefore, _pinBefore);
         doc.Notify(new DocChange(ChangeKind.MeshAttributes, _node));
+        if (_entry != null && doc.Get(_node).MeshShape?.History.Remove(_entry) == true) doc.Notify(new DocChange(ChangeKind.HistoryChanged, _node));
     }
 
     /// <summary>배열을 메시에 다시 써 넣는다(구조체는 꺼내서 고친 뒤 되돌려 넣음, 길이가 다르면 짧은 쪽까지).</summary>
