@@ -108,7 +108,11 @@ public static partial class MeshOps
         // 시작 엣지의 a/b 방향(EdgeVertices 순서)을 링 전체의 기준으로 쓴다
         var (a0, b0) = m.EdgeVertices(edge);
         var ed = m.Edges[edge];
-        var fwd = WalkRing(m, ed.He0, a0, b0, edge, out var fwdFaces, out bool closed);
+        // seen: 두 방향 걷기가 공유하는 지나간 면. 링이 자기 자신을 가로지르면(이미 지난 쿼드에 다른 엣지로 다시 들어감) 그 앞에서 멈춘다
+        // (v0.0.57; 전에는 한 쿼드에 링 엣지가 셋 이상 생겨 분할 정점이 한쪽 면에만 끼워지며 메시가 열렸다).
+        var seen = new HashSet<int>();
+        int reserved = ed.He1 >= 0 ? m.Hes[ed.He1].Face : -1;
+        var fwd = WalkRing(m, ed.He0, a0, b0, edge, seen, reserved, out var fwdFaces, out bool closed);
         if (closed)
         {
             entries.Add((edge, a0, b0)); entries.AddRange(fwd);
@@ -116,7 +120,7 @@ public static partial class MeshOps
             return (entries, faces, true);
         }
         var back = new List<(int, int, int)>(); var backFacesList = new List<int>();
-        if (ed.He1 >= 0) back = WalkRing(m, ed.He1, a0, b0, edge, out backFacesList, out _);
+        if (ed.He1 >= 0) back = WalkRing(m, ed.He1, a0, b0, edge, seen, -1, out backFacesList, out _);
         back.Reverse(); backFacesList.Reverse();
         entries.AddRange(back); entries.Add((edge, a0, b0)); entries.AddRange(fwd);
         faces.AddRange(backFacesList); faces.AddRange(fwdFaces);
@@ -132,17 +136,18 @@ public static partial class MeshOps
     /// <param name="he">출발 하프에지(시작 엣지의 He0 또는 He1).</param>
     /// <param name="faces">지나간 쿼드 면들(출력).</param>
     /// <param name="closed">한 바퀴 돌아 시작 엣지로 돌아왔는지(출력).</param>
-    private static List<(int edge, int a, int b)> WalkRing(PolyMesh m, int he, int a, int b, int startEdge, out List<int> faces, out bool closed)
+    /// <param name="seen">이미 링에 들어간 면(두 방향 걷기가 공유). 다음 면이 여기 있으면 현재 면을 링에서 빼고 멈춘다(현재 면은 끝 면이 됨).</param>
+    /// <param name="reserved">아직 걷지 않았지만 반대 방향 걷기가 쓸 면(시작 엣지의 다른 쪽 면). seen과 같이 취급한다.</param>
+    private static List<(int edge, int a, int b)> WalkRing(PolyMesh m, int he, int a, int b, int startEdge, HashSet<int> seen, int reserved, out List<int> faces, out bool closed)
     {
         var list = new List<(int, int, int)>();
         faces = new List<int>();
         closed = false;
-        var seen = new HashSet<int>();
         int guard = 0;
         while (he >= 0 && guard++ < 100000)
         {
             int f = m.Hes[he].Face;
-            if (m.FaceDegree(f) != 4 || !seen.Add(f)) break;
+            if (m.FaceDegree(f) != 4) break;
             var h = m.Hes[he];
             int opp = m.Hes[h.Next].Next;          // 반대편 하프에지: loop[2] → loop[3]
             int v2 = m.Hes[opp].Vertex, v3 = m.Hes[m.Hes[opp].Next].Vertex;
@@ -150,6 +155,14 @@ public static partial class MeshOps
             if (h.Vertex == a) { nb = v2; na = v3; }  // 루프 [a, b, b', a']
             else { na = v2; nb = v3; }                // 루프 [b, a, a', b']
             int e2 = m.Hes[opp].Edge;
+            // 링이 자기를 가로지름: 이미 지난 쿼드에 다른 엣지로 다시 들어왔거나, 반대 방향 걷기의 첫 면에 시작 엣지의 맞은편이 아닌 엣지로 들어옴
+            // → 들어온 엣지와 직전 면을 링에서 빼고 멈춘다(직전 면은 분할 정점만 끼우는 끝 면이 된다)
+            if (seen.Contains(f) || (f == reserved && e2 != startEdge))
+            {
+                if (list.Count > 0) { list.RemoveAt(list.Count - 1); seen.Remove(faces[^1]); faces.RemoveAt(faces.Count - 1); }
+                break;
+            }
+            seen.Add(f);
             faces.Add(f);
             if (e2 == startEdge) { closed = true; break; }
             list.Add((e2, na, nb));

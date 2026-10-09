@@ -307,28 +307,45 @@ public static partial class MeshOps
             foreach (int he in hes) { int tw = m.Hes[he].Twin; if (tw >= 0 && !set.Contains(m.Hes[tw].Face) && !neighbors.Contains(m.Hes[tw].Face)) neighbors.Add(m.Hes[tw].Face); }
         }
         foreach (int f in neighbors) rb.Capture(f);
-        // 엣지별 분할 정점(방향: 정점 쌍 키, 작은 ID → 큰 ID 순서로 저장)
-        var edgePts = new Dictionary<long, int[]>(PairKeyComparer.Instance);
+        // 엣지별 분할 요청: 같은 엣지를 공유하는 두 쿼드가 서로 다른 분할 수(U/V 방향이 엇갈림)를 요청할 수 있으므로
+        // 요청된 모든 분할 수의 매개변수(i/d)를 합집합으로 만들어 한 번에 정점을 만든다(v0.0.57; 전에는 어긋난 쪽이 따로 점을 만들어 이음매가 열렸다).
         long K(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
-        // 엣지 a→b 방향의 분할점 배열(divisions-1개). 처음 요청에 작은 ID→큰 ID 순서로 생성해 캐시하고, 방향에 맞게 뒤집어 돌려준다.
-        int[] PtsFromTo(int a, int b, int divisions)
-        {
-            long k = K(a, b);
-            if (!edgePts.TryGetValue(k, out var pts))
-            {
-                int lo = Math.Min(a, b), hi = Math.Max(a, b);
-                pts = new int[divisions - 1];
-                for (int i = 1; i < divisions; i++) { pts[i - 1] = m.AddVertex(Vector3.Lerp(m.Verts[lo].Position, m.Verts[hi].Position, (float)i / divisions)); rb.SetParent(pts[i - 1], a, b); }
-                edgePts[k] = pts;
-            }
-            if (pts.Length != divisions - 1) return Array.Empty<int>(); // 분할 수 충돌(이웃 쿼드의 U/V가 다름): 사용 안 함
-            return a < b ? pts : pts.Reverse().ToArray();
-        }
-        // 1차: 모든 쿼드의 엣지 분할점 생성(코너 0→1, 2→3 = U, 1→2, 3→0 = V)
+        var requests = new Dictionary<long, HashSet<int>>(PairKeyComparer.Instance);
+        void Request(int a, int b, int d) { if (d < 2) return; long k = K(a, b); if (!requests.TryGetValue(k, out var hs)) requests[k] = hs = new HashSet<int>(); hs.Add(d); }
         foreach (var (f, corners, _) in rb.Captured.Where(c => set.Contains(c.face)))
         {
-            PtsFromTo(corners[0].Vertex, corners[1].Vertex, divU); PtsFromTo(corners[2].Vertex, corners[3].Vertex, divU);
-            PtsFromTo(corners[1].Vertex, corners[2].Vertex, divV); PtsFromTo(corners[3].Vertex, corners[0].Vertex, divV);
+            Request(corners[0].Vertex, corners[1].Vertex, divU); Request(corners[2].Vertex, corners[3].Vertex, divU);
+            Request(corners[1].Vertex, corners[2].Vertex, divV); Request(corners[3].Vertex, corners[0].Vertex, divV);
+        }
+        // 엣지별 (t, 정점) 목록: t는 작은 ID 정점에서 큰 ID 정점 쪽 비율, 오름차순
+        var edgePts = new Dictionary<long, List<(double t, int v)>>(PairKeyComparer.Instance);
+        foreach (var (k, ds) in requests)
+        {
+            int lo = (int)(k >> 32), hi = (int)(k & 0xffffffff);
+            var ts = new List<double>();
+            foreach (int d in ds) for (int i = 1; i < d; i++) { double t = (double)i / d; if (!ts.Any(x => Math.Abs(x - t) < 1e-9)) ts.Add(t); }
+            ts.Sort();
+            var list = new List<(double, int)>();
+            foreach (double t in ts) { int v = m.AddVertex(Vector3.Lerp(m.Verts[lo].Position, m.Verts[hi].Position, (float)t)); rb.SetParent(v, lo, hi); list.Add((t, v)); }
+            edgePts[k] = list;
+        }
+        // a→b 방향 매개변수 s(0 = a)의 분할 정점(없으면 -1)
+        int PointAt(int a, int b, double s)
+        {
+            if (!edgePts.TryGetValue(K(a, b), out var list)) return -1;
+            double t = a < b ? s : 1 - s;
+            foreach (var (tt, v) in list) if (Math.Abs(tt - t) < 1e-9) return v;
+            return -1;
+        }
+        // a→b 방향으로 매개변수 s0과 s1 사이(양끝 제외)에 있는 분할 정점과 그 s(s0 → s1 순서)
+        List<(double s, int v)> Between(int a, int b, double s0, double s1)
+        {
+            var res = new List<(double, int)>();
+            if (!edgePts.TryGetValue(K(a, b), out var list)) return res;
+            double lo = Math.Min(s0, s1), hi = Math.Max(s0, s1);
+            foreach (var (tt, v) in list) { double s = a < b ? tt : 1 - tt; if (s > lo + 1e-9 && s < hi - 1e-9) res.Add((s, v)); }
+            res.Sort((x, y) => s1 >= s0 ? x.Item1.CompareTo(y.Item1) : y.Item1.CompareTo(x.Item1));
+            return res;
         }
         rb.RemoveCaptured();
         foreach (var (f, corners, material) in rb.Captured)
@@ -342,11 +359,7 @@ public static partial class MeshOps
                 {
                     var c = corners[i]; var d = corners[(i + 1) % n];
                     loop.Add(c);
-                    if (edgePts.TryGetValue(K(c.Vertex, d.Vertex), out var pts))
-                    {
-                        var ordered = c.Vertex < d.Vertex ? pts : pts.Reverse().ToArray();
-                        for (int k = 0; k < ordered.Length; k++) loop.Add(new Corner(ordered[k], Vector2.Lerp(c.Uv, d.Uv, (k + 1f) / (ordered.Length + 1)), c.Normal));
-                    }
+                    foreach (var (s, v) in Between(c.Vertex, d.Vertex, 0, 1)) loop.Add(new Corner(v, Vector2.Lerp(c.Uv, d.Uv, (float)s), c.Normal));
                 }
                 rb.AddFace(loop, material);
                 continue;
@@ -355,33 +368,42 @@ public static partial class MeshOps
             var grid = new int[divU + 1, divV + 1];
             var uv = new Vector2[divU + 1, divV + 1];
             var p0 = m.Verts[corners[0].Vertex].Position; var p1 = m.Verts[corners[1].Vertex].Position; var p2 = m.Verts[corners[2].Vertex].Position; var p3 = m.Verts[corners[3].Vertex].Position;
-            var bottom = PtsFromTo(corners[0].Vertex, corners[1].Vertex, divU); var top = PtsFromTo(corners[3].Vertex, corners[2].Vertex, divU);
-            var left = PtsFromTo(corners[0].Vertex, corners[3].Vertex, divV); var right = PtsFromTo(corners[1].Vertex, corners[2].Vertex, divV);
-            // 격자점 위치/UV = 네 코너의 쌍선형 보간. 테두리는 공유 분할점을 쓰고(개수가 맞을 때), 내부는 새 정점.
+            int c0 = corners[0].Vertex, c1 = corners[1].Vertex, c2 = corners[2].Vertex, c3 = corners[3].Vertex;
+            // 격자점 위치/UV = 네 코너의 쌍선형 보간. 테두리는 공유 분할점, 내부는 새 정점.
             for (int i = 0; i <= divU; i++)
                 for (int j = 0; j <= divV; j++)
                 {
                     float s = (float)i / divU, t = (float)j / divV;
                     uv[i, j] = Vector2.Lerp(Vector2.Lerp(corners[0].Uv, corners[1].Uv, s), Vector2.Lerp(corners[3].Uv, corners[2].Uv, s), t);
-                    if (i == 0 && j == 0) grid[i, j] = corners[0].Vertex;
-                    else if (i == divU && j == 0) grid[i, j] = corners[1].Vertex;
-                    else if (i == divU && j == divV) grid[i, j] = corners[2].Vertex;
-                    else if (i == 0 && j == divV) grid[i, j] = corners[3].Vertex;
-                    else if (j == 0 && bottom.Length == divU - 1) grid[i, j] = bottom[i - 1];
-                    else if (j == divV && top.Length == divU - 1) grid[i, j] = top[i - 1];
-                    else if (i == 0 && left.Length == divV - 1) grid[i, j] = left[j - 1];
-                    else if (i == divU && right.Length == divV - 1) grid[i, j] = right[j - 1];
+                    if (i == 0 && j == 0) grid[i, j] = c0;
+                    else if (i == divU && j == 0) grid[i, j] = c1;
+                    else if (i == divU && j == divV) grid[i, j] = c2;
+                    else if (i == 0 && j == divV) grid[i, j] = c3;
+                    else if (j == 0) grid[i, j] = PointAt(c0, c1, (double)i / divU);
+                    else if (j == divV) grid[i, j] = PointAt(c3, c2, (double)i / divU);
+                    else if (i == 0) grid[i, j] = PointAt(c0, c3, (double)j / divV);
+                    else if (i == divU) grid[i, j] = PointAt(c1, c2, (double)j / divV);
                     else grid[i, j] = m.AddVertex(Vector3.Lerp(Vector3.Lerp(p0, p1, s), Vector3.Lerp(p3, p2, s), t));
                 }
-            // 격자 칸마다 쿼드(감김 방향은 원래 코너 순서와 같음)
+            // 테두리 칸은 이웃 쿼드가 더 잘게 나눈 공유 엣지의 분할점을 사이에 끼운다(이음매가 닫히도록; 그 칸은 n각형이 된다)
+            Corner Cn(int v, Vector2 u) => new(v, u, corners[0].Normal);
             for (int i = 0; i < divU; i++)
                 for (int j = 0; j < divV; j++)
                 {
-                    int nf = rb.AddFace(new[]
-                    {
-                        new Corner(grid[i, j], uv[i, j], corners[0].Normal), new Corner(grid[i + 1, j], uv[i + 1, j], corners[0].Normal),
-                        new Corner(grid[i + 1, j + 1], uv[i + 1, j + 1], corners[0].Normal), new Corner(grid[i, j + 1], uv[i, j + 1], corners[0].Normal),
-                    }, material);
+                    var loop = new List<Corner>();
+                    // 아래 변(j == 0): c0→c1 방향, s = i/U → (i+1)/U
+                    loop.Add(Cn(grid[i, j], uv[i, j]));
+                    if (j == 0) foreach (var (s, v) in Between(c0, c1, (double)i / divU, (double)(i + 1) / divU)) loop.Add(Cn(v, Vector2.Lerp(corners[0].Uv, corners[1].Uv, (float)s)));
+                    loop.Add(Cn(grid[i + 1, j], uv[i + 1, j]));
+                    // 오른쪽 변(i == U−1): c1→c2 방향, s = j/V → (j+1)/V
+                    if (i == divU - 1) foreach (var (s, v) in Between(c1, c2, (double)j / divV, (double)(j + 1) / divV)) loop.Add(Cn(v, Vector2.Lerp(corners[1].Uv, corners[2].Uv, (float)s)));
+                    loop.Add(Cn(grid[i + 1, j + 1], uv[i + 1, j + 1]));
+                    // 위 변(j == V−1): c3→c2 위에서 s = (i+1)/U → i/U(역방향)
+                    if (j == divV - 1) foreach (var (s, v) in Between(c3, c2, (double)(i + 1) / divU, (double)i / divU)) loop.Add(Cn(v, Vector2.Lerp(corners[3].Uv, corners[2].Uv, (float)s)));
+                    loop.Add(Cn(grid[i, j + 1], uv[i, j + 1]));
+                    // 왼쪽 변(i == 0): c0→c3 위에서 s = (j+1)/V → j/V(역방향)
+                    if (i == 0) foreach (var (s, v) in Between(c0, c3, (double)(j + 1) / divV, (double)j / divV)) loop.Add(Cn(v, Vector2.Lerp(corners[0].Uv, corners[3].Uv, (float)s)));
+                    int nf = rb.AddFace(loop, material);
                     if (nf >= 0) result.Add(nf);
                 }
         }

@@ -207,11 +207,31 @@ public static partial class MeshOps
         m.BumpTopology();
     }
 
+    /// <summary>
+    /// 후보 정점 중 더 이상 어떤 면에도 속하지 않는(고립) 정점을 지운다. 면을 지우거나 다시 만드는 연산이 끝에 부른다
+    /// (고립 정점은 보이지 않지만 정점 모드에서 점으로 그려지고 집히며 내보내기에도 남는다; Maya는 남기지 않는다).
+    /// </summary>
+    internal static void RemoveIsolatedVertices(PolyMesh m, IEnumerable<int> candidates)
+    {
+        foreach (int v in candidates.Distinct().ToArray())
+            if (v >= 0 && v < m.Verts.Count && m.Verts[v].Alive && m.VertexOutgoing(v).Length == 0) m.RemoveVertexIfIsolated(v);
+    }
+
+    /// <summary>면 루프의 정점들을 set에 더한다(삭제·재구성 전에 고립 정점 후보를 모을 때).</summary>
+    internal static void CollectFaceVertices(PolyMesh m, int f, HashSet<int> set)
+    {
+        if (f < 0 || f >= m.Faces.Count || !m.Faces[f].Alive) return;
+        int start = m.Faces[f].HalfEdge, he = start;
+        do { set.Add(m.Hes[he].Vertex); he = m.Hes[he].Next; } while (he != start);
+    }
+
     /// <summary>엣지 삭제(Maya Delete Edge): 양쪽 면을 하나로 합친다. 경계 엣지는 인접 면을 지운다. 결과로 생긴 2가 정점은 녹인다.</summary>
     public static void DeleteEdges(PolyMesh m, IEnumerable<int> edgeIds)
     {
         // touched: 삭제된 엣지의 양끝 정점 — 마지막에 2가 정점 정리/고립 정점 제거 대상
         var touched = new HashSet<int>();
+        // orphans: 경계 엣지로 지운 면의 나머지 정점(고립 후보; 2가 정점 녹이기 대상은 아님)
+        var orphans = new HashSet<int>();
         foreach (int e in edgeIds.ToArray())
         {
             if (e < 0 || e >= m.Edges.Count || !m.Edges[e].Alive) continue;
@@ -219,12 +239,12 @@ public static partial class MeshOps
             touched.Add(a); touched.Add(b);
             // 경계 엣지(한쪽 면만)는 합칠 상대가 없으니 그 면을 지운다. 내부 엣지는 두 면을 하나로 병합.
             var (f0, f1) = m.EdgeFaces(e);
-            if (f1 < 0) { m.RemoveFace(f0, removeIsolated: false); continue; }
+            if (f1 < 0) { CollectFaceVertices(m, f0, orphans); m.RemoveFace(f0, removeIsolated: false); continue; }
             MergeFacesAcrossEdgeReturning(m, e);
         }
         // 엣지를 지우면 직선 위에 엣지 2개만 남은 정점이 생기므로 녹이고, 남은 고립 정점을 지운다
         foreach (int v in touched) DissolveIfValence2(m, v);
-        foreach (int v in touched) m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, touched.Concat(orphans));
         m.BumpTopology();
     }
 
@@ -241,6 +261,7 @@ public static partial class MeshOps
         var edges = new List<int>(); m.GetVertexEdges(v, edges);
         if (edges.Count != 2) return false;
         var faces = new List<int>(); m.GetVertexFaces(v, faces);
+        var orphans = new List<int>();
         foreach (int f in faces.Distinct().ToArray())
         {
             // v를 뺀 코너 목록과 새 엣지(c[i]-c[i+1])의 하드 여부: 원래 엣지 또는 v를 거치던 두 엣지 중 하나가 하드면 하드
@@ -249,14 +270,16 @@ public static partial class MeshOps
             for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex) || IsHard(m, corners[i].Vertex, v) || IsHard(m, v, corners[(i + 1) % corners.Count].Vertex));
             int material = m.Faces[f].Material;
             m.RemoveFace(f, removeIsolated: false);
-            // 삼각형에서 정점을 빼면 면이 사라진다(선분) — 다시 만들지 않는다
+            // 삼각형에서 정점을 빼면 면이 사라진다(선분) — 다시 만들지 않는다(남은 두 정점은 아래에서 고립 정리)
             if (corners.Count >= 3)
             {
                 int nf = AddFaceWithCorners(m, corners, material);
                 if (nf >= 0) for (int i = 0; i < corners.Count; i++) SetHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex, hard[i]);
             }
+            orphans.AddRange(corners.Select(c => c.Vertex));
         }
         m.RemoveVertexIfIsolated(v);
+        RemoveIsolatedVertices(m, orphans);
         return true;
     }
 
@@ -267,6 +290,8 @@ public static partial class MeshOps
     /// </remarks>
     public static void DeleteVertices(PolyMesh m, IEnumerable<int> vertIds)
     {
+        // 지운 면의 정점들: 마지막에 고립된 것을 정리한다(경계 정점 삭제로 부채꼴 면이 사라지면 이웃 정점이 남던 문제)
+        var orphans = new HashSet<int>();
         foreach (int v in vertIds.ToArray())
         {
             if (v < 0 || v >= m.Verts.Count || !m.Verts[v].Alive) continue;
@@ -277,7 +302,7 @@ public static partial class MeshOps
             if (boundary || outgoing.Length == 0)
             {
                 var faces = new List<int>(); m.GetVertexFaces(v, faces);
-                foreach (int f in faces.Distinct()) m.RemoveFace(f, removeIsolated: false);
+                foreach (int f in faces.Distinct()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
                 m.RemoveVertexIfIsolated(v);
                 continue;
             }
@@ -301,7 +326,7 @@ public static partial class MeshOps
             for (int i = 0; i < loop.Count; i++) hard.Add(IsHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex));
             // 새 면의 머티리얼은 부채꼴 첫 면을 따른다
             int material = m.Faces[visitedFaces[0]].Material;
-            foreach (int f in visitedFaces.Distinct()) m.RemoveFace(f, removeIsolated: false);
+            foreach (int f in visitedFaces.Distinct()) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
             m.RemoveVertexIfIsolated(v);
             if (loop.Count >= 3)
             {
@@ -309,6 +334,7 @@ public static partial class MeshOps
                 if (nf >= 0) for (int i = 0; i < loop.Count; i++) SetHard(m, loop[i].Vertex, loop[(i + 1) % loop.Count].Vertex, hard[i]);
             }
         }
+        RemoveIsolatedVertices(m, orphans);
         m.BumpTopology();
     }
 
@@ -370,7 +396,8 @@ public static partial class MeshOps
             for (int i = 0; i < corners.Count; i++) hard.Add(IsHard(m, corners[i].Vertex, corners[(i + 1) % corners.Count].Vertex));
             rebuilt.Add((corners, m.Faces[f].Material, hard));
         }
-        foreach (int f in affected) m.RemoveFace(f, removeIsolated: false);
+        var orphans = new HashSet<int>();
+        foreach (int f in affected) { CollectFaceVertices(m, f, orphans); m.RemoveFace(f, removeIsolated: false); }
         // 면을 모두 지운 뒤에 다시 만들어야 일시적인 같은 방향 엣지 충돌이 없다
         foreach (var (corners, material, hard) in rebuilt)
         {
@@ -388,6 +415,8 @@ public static partial class MeshOps
         }
         foreach (int v in map.Keys) m.RemoveVertexIfIsolated(v);
         foreach (int v in map.Values.Distinct()) m.RemoveVertexIfIsolated(v);
+        // 퇴화(2각 이하)로 버린 면이나 비매니폴드로 다시 못 만든 면의 나머지 정점도 고립될 수 있다
+        RemoveIsolatedVertices(m, orphans);
     }
 
     // ------------------------------------------------------------ 기타

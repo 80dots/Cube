@@ -94,14 +94,47 @@ public static partial class MeshOps
         rb.RemoveCaptured();
         foreach (var (corners, idx, material) in plans)
         {
-            for (int i = 0; i + 2 < idx.Count; i += 3)
+            // 귀 자르기 결과 → 실패하면 각 꼭짓점에서의 팬 → 모두 실패하면 원래 다각형을 되살린다.
+            // (대각선이 이미 다른 곳의 엣지면(두 면이 엣지 둘 이상을 공유하는 등) 그 삼각형이 엉뚱한 면과 이어지거나 거부되어 구멍이 났다, v0.0.57)
+            int n = corners.Count;
+            bool done = TryAddTriangles(m, rb, corners, idx, material, result);
+            for (int k = 0; !done && k < n; k++)
             {
-                int nf = rb.AddFace(new[] { corners[idx[i]], corners[idx[i + 1]], corners[idx[i + 2]] }, material);
-                if (nf >= 0) result.Add(nf);
+                var fan = new List<int>();
+                for (int i = 1; i + 1 < n; i++) { fan.Add(k); fan.Add((k + i) % n); fan.Add((k + i + 1) % n); }
+                done = TryAddTriangles(m, rb, corners, fan, material, result);
             }
+            if (!done) rb.AddFace(corners, material);
         }
         m.BumpTopology();
         return result;
+    }
+
+    /// <summary>
+    /// 삼각형 인덱스 목록(코너 로컬 번호 3개씩)을 면으로 추가한다. 다각형 변이 아닌 대각선이 이미 메시에 엣지로 있으면 시도하지 않고,
+    /// 추가 도중 하나라도 거부되면 이번에 넣은 삼각형을 모두 지우고 false를 돌려준다(정점은 남긴다).
+    /// </summary>
+    private static bool TryAddTriangles(PolyMesh m, FaceRebuilder rb, List<Corner> corners, List<int> idx, int material, List<int> result)
+    {
+        int n = corners.Count;
+        if (idx.Count != (n - 2) * 3) return false;
+        // 대각선(이웃하지 않은 코너 쌍)이 이미 있는 엣지면 이 분할은 쓸 수 없다
+        for (int i = 0; i + 2 < idx.Count; i += 3)
+            for (int k = 0; k < 3; k++)
+            {
+                int x = idx[i + k], y = idx[i + (k + 1) % 3];
+                bool side = (x + 1) % n == y || (y + 1) % n == x;
+                if (!side && m.FindEdge(corners[x].Vertex, corners[y].Vertex) >= 0) return false;
+            }
+        var added = new List<int>();
+        for (int i = 0; i + 2 < idx.Count; i += 3)
+        {
+            int nf = rb.AddFace(new[] { corners[idx[i]], corners[idx[i + 1]], corners[idx[i + 2]] }, material);
+            if (nf < 0) { foreach (int f in added) m.RemoveFace(f, removeIsolated: false); return false; }
+            added.Add(nf);
+        }
+        result.AddRange(added);
+        return true;
     }
 
     /// <summary>Quadrangulate: 공유 엣지로 맞닿은 삼각형 쌍을 각도 임계 안에서 쿼드로 합친다. 반환값은 새 쿼드들.</summary>

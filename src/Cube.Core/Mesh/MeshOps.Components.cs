@@ -492,6 +492,8 @@ public static partial class MeshOps
             int q = AddFaceWithCorners(m, new[] { new Corner(b, uvB, h.Normal), new Corner(a, uvA, h.Normal), new Corner(a2, uvA, h.Normal), new Corner(b2, uvB, h.Normal) }, m.Faces[h.Face].Material);
             if (q >= 0) { result.Add(q); SetFlags(m, a2, b2, flags); int ne = m.FindEdge(a2, b2); if (ne >= 0) newEdges.Add(ne); }
         }
+        // 비매니폴드라 쿼드를 못 붙인 엣지의 복제 정점은 고립으로 남으므로 지운다
+        RemoveIsolatedVertices(m, dup.Values);
         m.BumpTopology();
         return result;
     }
