@@ -73,6 +73,9 @@ public partial class DockRow : HSplitContainer
     /// <summary>현재 폭을 기억한다(그룹 추가·제거·레이아웃 복원 직후 등).</summary>
     public void RememberWidths() { _lastTotal = -1; _pin = null; }
 
+    /// <summary>그룹 사이 드래거 두께(실측값, 아직 정렬 전이면 테마 값).</summary>
+    public float Separation => _sepReal > 0 ? _sepReal : Math.Max(GetThemeConstant("separation"), GetThemeConstant("minimum_grab_thickness"));
+
     /// <summary>그룹 하나의 폭을 고정한다(옆에 붙일 때 원래 그룹 폭 유지; 나머지 그룹이 남는 폭을 쓴다). 두 그룹짜리 행에서만 쓰며 행 안 경계를 끌면 풀린다.</summary>
     public void PinWidth(DockGroup g, float w) { _pin = (g, w); _lastTotal = -1; _keep.Clear(); }
 
@@ -415,7 +418,17 @@ public partial class DockManager : Node
         var side = g == null ? null : SideOfGroup(g);
         if (g != null && side != null) p.LastDock = new DockSlot(side.Kind, side.Groups.IndexOf(g));
         g?.RemoveChild(p);
+        // 나란한 행에서 그룹이 빠지면 도크를 그 그룹 폭(+드래거)만큼 좁혀 남는 그룹들의 폭을 그대로 유지한다(v0.0.73, 사용자 지시:
+        // 전에는 남은 그룹이 도크 폭을 채우며 넓어졌다). 행이 풀려 그룹 하나가 도크 항목이 되어도 같은 폭이 된다.
+        float shrink = 0;
+        if (g != null && side != null && !g.Panels.Any() && g.GetParent() is DockRow rowOf && rowOf.Groups.Count >= 2) shrink = g.Size.X + rowOf.Separation;
         if (g != null && side != null && !g.Panels.Any()) RemoveGroup(side, g);
+        if (side != null && shrink > 0)
+        {
+            float cur = side.Kind == DockSideKind.Left ? _leftWidth : _rightWidth;
+            SetSideWidth(side.Kind, Math.Max(SideMin, cur - shrink));
+            _widened.Remove(side.Kind);
+        }
         // 이 패널 때문에 넓혔던 도크는, 사용자가 그 뒤 폭을 바꾸지 않았다면 원래 폭으로 되돌린다.
         if (side != null && _widened.TryGetValue(side.Kind, out var w) && w.panel == p)
         {
