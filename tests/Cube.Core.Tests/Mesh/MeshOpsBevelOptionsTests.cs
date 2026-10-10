@@ -98,12 +98,13 @@ public class MeshOpsBevelOptionsTests
         {
             BevelIntersection.NGon => 1,
             BevelIntersection.Cutoff => 3 + 1,                    // 엣지별 막음 면 3 + 가운데 삼각형
-            _ => 3 * s % 2 == 0 ? 3 * s / 2 : 3 * s,               // 짝수 둘레 = 쿼드, 홀수 = 삼각형 부채
+            // 셋백 패치(v0.0.63): 짝수 s = 부채꼴 3개 × (s/2)² 쿼드, 홀수 s = 3·m² + 걸침 띠 3·m + 가운데 삼각형(m = (s−1)/2)
+            _ => s % 2 == 0 ? 3 * (s / 2) * (s / 2) : 3 * ((s - 1) / 2) * ((s - 1) / 2) + 3 * ((s - 1) / 2) + 1,
         };
         Assert.Equal(strips + 8 * corner, faces.Count);
-        // 그리드 채움 가운데 점은 원래 코너 쪽으로 부푼다(캡 평균보다 바깥)
+        // 패치 가운데 점은 캡 평균보다 원래 코너 쪽에(짝수 s = 구면 위 0.4 + 0.1/√3 ≈ 0.458, 홀수 s = 가운데 삼각형 꼭짓점이 그 절반쯤)
         if (type == BevelIntersection.GridFill)
-            Assert.Contains(Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive), v => { var p = m.Verts[v].Position; return MathF.Abs(p.X) > 0.46f && MathF.Abs(p.Y) > 0.46f && MathF.Abs(p.Z) > 0.46f; });
+            Assert.Contains(Enumerable.Range(0, m.VertexCount).Where(v => m.Verts[v].Alive), v => { var p = m.Verts[v].Position; return MathF.Abs(p.X) > 0.42f && MathF.Abs(p.Y) > 0.42f && MathF.Abs(p.Z) > 0.42f; });
     }
 
     /// <summary>

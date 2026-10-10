@@ -3,6 +3,8 @@ using Cube.Core.Commands;
 using Cube.Core.Mesh;
 using Cube.Core.Scene;
 using Cube.Core.Selection;
+using Godot;
+using NVec2 = System.Numerics.Vector2;
 using NVec3 = System.Numerics.Vector3;
 
 namespace Cube.App.UI;
@@ -29,7 +31,7 @@ public partial class Shell
     /// <summary>Profile Type 선택지: 초타원(Shape 값) 또는 Custom(프리셋 프로파일).</summary>
     private static readonly string[] BevelProfileTypes = { "Superellipse", "Custom" };
     /// <summary>Custom 프로파일 프리셋 이름(BevelProfilePreset 순서).</summary>
-    private static readonly string[] BevelPresets = { "Default", "Support Loops", "Cornice Molding", "Crown Molding", "Steps" };
+    private static readonly string[] BevelPresets = { "Default", "Support Loops", "Cornice Molding", "Crown Molding", "Steps", "User Points" };
 
     /// <summary>
     /// Bevel 옵션 창 정의. 기본값은 new BevelOptions()를 WriteBevelOptions로 옮겨 Core 기본값과 일치시킨다.
@@ -61,6 +63,10 @@ public partial class Shell
         OptionField.E("preset", "Custom Preset", BevelPresets),
         OptionField.B("sampleStraight", "Sample Straight Edges", "Custom profile: spread extra samples evenly over every segment instead of the longest ones"),
         OptionField.B("sampleEven", "Sample Even Lengths", "Custom profile: distribute samples evenly along the whole profile length"),
+        OptionField.F("sideRatio", "Side B Width ×", 0.05, 20, 0.05, "Asymmetric bevel: width multiplier for the lower (side B) face; 1 = symmetric"),
+        OptionField.V("cp1", "User Point 1 (X Y, Z<0 off)", 0.05),
+        OptionField.V("cp2", "User Point 2 (X Y, Z<0 off)", 0.05),
+        OptionField.V("cp3", "User Point 3 (X Y, Z<0 off)", 0.05),
     }, "Bevel");
 
     /// <summary>옵션 값 → BevelOptions(없는 키는 기본값).</summary>
@@ -97,7 +103,16 @@ public partial class Shell
             Preset = (BevelProfilePreset)I("preset", (int)d.Preset),
             SampleStraightEdges = B("sampleStraight", d.SampleStraightEdges),
             SampleEvenLengths = B("sampleEven", d.SampleEvenLengths),
+            SideRatio = F("sideRatio", 1f),
+            CustomPoints = UserPoints(v.Vec("cp1", new Vector3(0.75f, 0.75f, -1)), v.Vec("cp2", new Vector3(0, 0, -1)), v.Vec("cp3", new Vector3(0, 0, -1))),
         };
+    }
+
+    /// <summary>사용자 프로파일 점: Z ≥ 0인 것만(순서대로) 단위 정사각 좌표로.</summary>
+    private static List<NVec2>? UserPoints(params Vector3[] pts)
+    {
+        var list = pts.Where(p => p.Z >= 0).Select(p => new NVec2(p.X, p.Y)).ToList();
+        return list.Count > 0 ? list : null;
     }
 
     /// <summary>
@@ -116,6 +131,8 @@ public partial class Shell
         v.Set("intersection", (int)o.Intersection); v.Set("faceStrength", (int)o.FaceStrength);
         v.Set("profileType", (int)o.ProfileType); v.Set("preset", (int)o.Preset);
         v.Set("sampleStraight", o.SampleStraightEdges ? 1 : 0); v.Set("sampleEven", o.SampleEvenLengths ? 1 : 0);
+        v.Set("sideRatio", o.SideRatio);
+        for (int i = 0; i < 3; i++) { var c = o.CustomPoints != null && i < o.CustomPoints.Count ? new Vector3(o.CustomPoints[i].X, o.CustomPoints[i].Y, 1) : new Vector3(i == 0 ? 0.75f : 0, i == 0 ? 0.75f : 0, -1); v.Set($"cp{i + 1}", c); }
     }
 
     /// <summary>bool 구성 이력 파라미터 생성 헬퍼(Value.X = 0/1, 체크박스로 표시).</summary>
@@ -143,8 +160,13 @@ public partial class Shell
         HistoryParam.I("Intersection (0 Grid 1 Cutoff 2 N-gon)", (int)o.Intersection, 0, 2),
         HistoryParam.I("Face Strength (0 None 1 New 2 Affected 3 All)", (int)o.FaceStrength, 0, 3),
         HistoryParam.I("Profile Type (0 Superellipse 1 Custom)", (int)o.ProfileType, 0, 1),
-        HistoryParam.I("Custom Preset (0-4)", (int)o.Preset, 0, 4),
-        HB("Sample Straight Edges", o.SampleStraightEdges), HB("Sample Even Lengths", o.SampleEvenLengths));
+        HistoryParam.I("Custom Preset (0-5, 5 = User Points)", (int)o.Preset, 0, 5),
+        HB("Sample Straight Edges", o.SampleStraightEdges), HB("Sample Even Lengths", o.SampleEvenLengths),
+        HistoryParam.F("Side B Width", o.SideRatio, 0.05f, 20f, 0.05f),
+        HistoryParam.V("User Point 1", UserPointVec(o, 0), 0.05f), HistoryParam.V("User Point 2", UserPointVec(o, 1), 0.05f), HistoryParam.V("User Point 3", UserPointVec(o, 2), 0.05f));
+
+    /// <summary>이력용 사용자 점(없으면 Z = −1).</summary>
+    private static NVec3 UserPointVec(BevelOptions o, int i) => o.CustomPoints != null && i < o.CustomPoints.Count ? new NVec3(o.CustomPoints[i].X, o.CustomPoints[i].Y, 1) : new NVec3(0, 0, -1);
 
     /// <summary>
     /// 구성 이력 파라미터 → BevelOptions. 히스토리 Replay(이력 편집/Action Popup)마다 호출된다.
@@ -171,8 +193,10 @@ public partial class Shell
             MiterOuter = (BevelMiter)Math.Clamp(I("Miter Outer"), 0, 2), MiterInner = I("Miter Inner") == 1 ? BevelMiter.Arc : BevelMiter.Sharp,
             Spread = p.Float("Spread"),
             Intersection = (BevelIntersection)Math.Clamp(I("Intersection"), 0, 2), FaceStrength = (BevelFaceStrength)Math.Clamp(I("Face Strength"), 0, 3),
-            ProfileType = (BevelProfileType)Math.Clamp(I("Profile Type"), 0, 1), Preset = (BevelProfilePreset)Math.Clamp(I("Custom Preset"), 0, 4),
+            ProfileType = (BevelProfileType)Math.Clamp(I("Profile Type"), 0, 1), Preset = (BevelProfilePreset)Math.Clamp(I("Custom Preset"), 0, 5),
             SampleStraightEdges = B("Sample Straight Edges"), SampleEvenLengths = B("Sample Even Lengths"),
+            SideRatio = p.Items.Any(x => x.Name == "Side B Width") ? p.Float("Side B Width") : 1f,
+            CustomPoints = p.Items.Any(x => x.Name == "User Point 1") ? UserPoints(new Vector3(p.Vec("User Point 1").X, p.Vec("User Point 1").Y, p.Vec("User Point 1").Z), new Vector3(p.Vec("User Point 2").X, p.Vec("User Point 2").Y, p.Vec("User Point 2").Z), new Vector3(p.Vec("User Point 3").X, p.Vec("User Point 3").Y, p.Vec("User Point 3").Z)) : null,
         };
     }
 

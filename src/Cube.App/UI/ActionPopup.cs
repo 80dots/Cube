@@ -33,6 +33,8 @@ public partial class ActionPopup : PanelContainer
     private Button _header = null!;
     /// <summary>2열(라벨 / 값 컨트롤) 필드 그리드.</summary>
     private GridContainer _grid = null!;
+    /// <summary>필드 그리드를 감싸는 스크롤(옵션이 많은 명령(Bevel 29개)이 뷰포트를 다 덮지 않도록 높이를 패널의 45%로 제한, v0.0.63).</summary>
+    private ScrollContainer _scroll = null!;
     /// <summary>하단 보조 설명(후속 단계 목록, "No adjustable parameters" 등).</summary>
     private Label _note = null!;
     /// <summary>사용자가 팝업을 접었는지(다음 표시에도 유지).</summary>
@@ -98,12 +100,14 @@ public partial class ActionPopup : PanelContainer
         box.AddThemeConstantOverride("separation", (int)(4 * s));
         AddChild(box);
         _header = new Button { Flat = true, Alignment = HorizontalAlignment.Left, FocusMode = FocusModeEnum.None };
-        _header.Pressed += () => { _collapsed = !_collapsed; UpdateHeader(); _grid.Visible = !_collapsed && _grid.GetChildCount() > 0; _note.Visible = !_collapsed && _note.Text.Length > 0; ResetSize(); };
+        _header.Pressed += () => { _collapsed = !_collapsed; UpdateHeader(); _scroll.Visible = !_collapsed && _grid.GetChildCount() > 0; _note.Visible = !_collapsed && _note.Text.Length > 0; ResetSize(); };
         box.AddChild(_header);
         _grid = new GridContainer { Columns = 2 };
         _grid.AddThemeConstantOverride("h_separation", (int)(10 * s));
         _grid.AddThemeConstantOverride("v_separation", (int)(3 * s));
-        box.AddChild(_grid);
+        _scroll = new ScrollContainer { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled, VerticalScrollMode = ScrollContainer.ScrollMode.Auto };
+        _scroll.AddChild(_grid);
+        box.AddChild(_scroll);
         _note = new Label { Text = "" };
         _note.AddThemeColorOverride("font_color", MayaTheme.TextDim);
         box.AddChild(_note);
@@ -121,6 +125,10 @@ public partial class ActionPopup : PanelContainer
         var vp = _shell.Viewport;
         if (vp == null || !vp.IsVisibleInTree()) return;
         float s = CubeApp.Instance.UiScale;
+        // 그리드 높이가 패널의 45%를 넘으면 스크롤(폭은 그리드 폭 + 스크롤바)
+        var g = _grid.GetCombinedMinimumSize();
+        var want = new Vector2(g.X + 14 * s, MathF.Min(g.Y, vp.Size.Y * 0.45f));
+        if (_scroll.CustomMinimumSize != want) _scroll.CustomMinimumSize = want;
         var min = GetCombinedMinimumSize();
         if (Size != min) Size = min; // 필드 수가 바뀌면 다음 프레임에 최소 크기가 갱신되므로 매 프레임 맞춘다
         GlobalPosition = vp.GlobalPosition + new Vector2(8 * s, vp.Size.Y - Size.Y - 8 * s);
@@ -377,7 +385,7 @@ public partial class ActionPopup : PanelContainer
                 break;
         }
         UpdateHeader();
-        _grid.Visible = !_collapsed && _kind != Kind.None;
+        _scroll.Visible = !_collapsed && _kind != Kind.None;
         _note.Visible = !_collapsed && _note.Text.Length > 0;
         // 필드가 줄었을 때 패널이 이전 크기로 남지 않도록 즉시 + 다음 프레임에 최소 크기로 되돌린다.
         Size = Vector2.Zero; ResetSize();

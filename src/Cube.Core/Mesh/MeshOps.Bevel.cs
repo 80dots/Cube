@@ -38,7 +38,7 @@ public enum BevelProfileType { Superellipse, Custom }
 
 // Default = 원호 근사, SupportLoops = 양끝에 보조 루프가 몰리는 형태, CorniceMolding/CrownMolding = 몰딩 단면, Steps = 계단.
 /// <summary>Custom 프로파일 프리셋(Blender Profile Presets).</summary>
-public enum BevelProfilePreset { Default, SupportLoops, CorniceMolding, CrownMolding, Steps }
+public enum BevelProfilePreset { Default, SupportLoops, CorniceMolding, CrownMolding, Steps, UserPoints }
 
 // None = 노멀 고정 안 함, New = 새 면 기준, Affected = 새 면에 닿은 원래 면을 가장 세게, All = 원래 면 모두 가장 세게.
 /// <summary>Weighted Normal용 면 세기(Blender Face Strength). Cube에는 Weighted Normal 모디파이어가 없으므로 그 결과(가중 노멀)를 코너 노멀로 바로 고정한다.</summary>
@@ -109,6 +109,13 @@ public sealed record BevelOptions
     public bool SkipNonManifold { get; init; } = true;
     /// <summary>베벨에 닿은 비평면·오목 n각형 면을 먼저 삼각화한다(전처리).</summary>
     public bool FixBadFaces { get; init; }
+    /// <summary>
+    /// 비대칭 폭(E, v0.0.63): 엣지 양쪽 면 중 B쪽 오프셋 배율(A = 법선 Y가 더 큰(위를 향한) 면, 같으면 He0 쪽). 1 = 대칭.
+    /// Offset/Width/Depth/Absolute/Percent 모두에 적용되며 프로파일은 두 끝점 사이 K 기준으로 그대로 만들어진다.
+    /// </summary>
+    public float SideRatio { get; init; } = 1f;
+    /// <summary>사용자 프로파일 제어점(Profile Type Custom + Preset UserPoints): 단위 정사각 좌표 (1,0) → … → (0,1) 사이의 중간 점들(0..3개).</summary>
+    public IReadOnlyList<Vector2>? CustomPoints { get; init; }
     /// <summary>Weighted Normal 방식의 코너 노멀 고정 범위(<see cref="ApplyFaceStrength"/>).</summary>
     public BevelFaceStrength FaceStrength { get; init; } = BevelFaceStrength.None;
     /// <summary>프로파일 종류(초타원/Custom 프리셋).</summary>
@@ -284,7 +291,18 @@ public static partial class MeshOps
         public static ProfileSpec From(BevelOptions o)
         {
             var p = new ProfileSpec { R = SuperellipseExponent(o.Shape), EvenLengths = o.SampleEvenLengths, StraightEdges = o.SampleStraightEdges };
-            if (o.ProfileType == BevelProfileType.Custom) p.Custom = PresetPoints(o.Preset, System.Math.Max(1, o.Segments));
+            if (o.ProfileType == BevelProfileType.Custom)
+            {
+                if (o.Preset == BevelProfilePreset.UserPoints)
+                {
+                    // 사용자 점: 단위 정사각 안으로 자르고 양 끝 (1,0)/(0,1)을 붙인다
+                    var pts = new List<Vector2> { new(1, 0) };
+                    if (o.CustomPoints != null) foreach (var c in o.CustomPoints) pts.Add(new Vector2(System.Math.Clamp(c.X, 0f, 1f), System.Math.Clamp(c.Y, 0f, 1f)));
+                    pts.Add(new Vector2(0, 1));
+                    p.Custom = pts;
+                }
+                else p.Custom = PresetPoints(o.Preset, System.Math.Max(1, o.Segments));
+            }
             return p;
         }
 
@@ -327,6 +345,9 @@ public static partial class MeshOps
                     if (pts[^1] != new Vector2(0, 1)) pts.Add(new Vector2(0, 1));
                     break;
                 }
+            case BevelProfilePreset.UserPoints:
+                pts.Add(new Vector2(1, 0)); pts.Add(new Vector2(0, 1));
+                break;
             case BevelProfilePreset.CorniceMolding:
                 pts.AddRange(new Vector2[] { new(1, 0), new(1, 0.2f), new(0.82f, 0.3f), new(0.78f, 0.52f), new(0.55f, 0.62f), new(0.4f, 0.88f), new(0.2f, 0.95f), new(0, 1) });
                 break;
@@ -517,6 +538,26 @@ public static partial class MeshOps
         }
         // Absolute/Percent는 "엣지를 따라 잰 거리"라서 면 위 수직 오프셋 계산을 쓰지 않는다
         bool slideTypes = o.WidthType is BevelWidthType.Absolute or BevelWidthType.Percent;
+        // 비대칭 폭(E): 베벨 엣지 e의 면 f쪽 배율. A쪽(법선 Y가 큰 면) = 1, B쪽 = SideRatio. f = -1(면 불명)이면 큰 쪽(클램프 안전).
+        float sideRatio = System.Math.Clamp(o.SideRatio, 0.05f, 20f);
+        float SideFactor(int e, int f)
+        {
+            if (MathF.Abs(sideRatio - 1f) < 1e-6f || !facesOfSel.TryGetValue(e, out var ff)) return 1f;
+            if (f < 0) return MathF.Max(1f, sideRatio);
+            float y0 = faceNormal[ff.f0].Y, y1 = faceNormal[ff.f1].Y;
+            int sideA = y1 > y0 + 1e-4f ? ff.f1 : ff.f0;
+            return f == sideA ? 1f : sideRatio;
+        }
+        // 비베벨 엣지 eu를 따라 물러날 때의 배율: eu가 놓인 쪽(베벨 엣지 es의 두 면 중 eu를 가진 면)으로 정한다
+        // (pOnEdge 점은 eu를 공유하는 두 면이 함께 쓰므로 호출한 면이 아니라 eu 자체로 판정해야 한다)
+        float SideFactorByEdge(int es, int eu)
+        {
+            if (MathF.Abs(sideRatio - 1f) < 1e-6f || !facesOfSel.TryGetValue(es, out var ff)) return 1f;
+            var hes = new List<int>();
+            m.GetFaceHalfEdges(ff.f0, hes); if (hes.Any(h => m.Hes[h].Edge == eu)) return SideFactor(es, ff.f0);
+            m.GetFaceHalfEdges(ff.f1, hes); if (hes.Any(h => m.Hes[h].Edge == eu)) return SideFactor(es, ff.f1);
+            return 1f;
+        }
 
         // 비베벨 엣지 eu를 따라 v에서 물러나는 길이(클램프 전). 관련 베벨 엣지는 같은 면에서 이웃한 것 우선.
         int RelatedSel(int v, int eu, int f)
@@ -537,13 +578,14 @@ public static partial class MeshOps
         {
             float len = EdgeLen(eu);
             int es = RelatedSel(v, eu, f);
-            if (o.WidthType == BevelWidthType.Absolute) return width * WidthScale(es);
-            if (o.WidthType == BevelWidthType.Percent) return len * width / 100f * WidthScale(es);
+            float sf = f < 0 ? SideFactor(es, -1) : SideFactorByEdge(es, eu);
+            if (o.WidthType == BevelWidthType.Absolute) return width * WidthScale(es) * sf;
+            if (o.WidthType == BevelWidthType.Percent) return len * width / 100f * WidthScale(es) * sf;
             float sin = Vector3.Cross(Dir(v, OtherEnd(eu, v)), Dir(v, OtherEnd(es, v))).Length();
             // 베벨 엣지와 거의 일직선으로 이어지는 엣지(차수 2 끝점 등): 오프셋 선이 그 엣지와 만나지 않으므로 물러나지 않는다(띠가 끝점에서 뾰족하게 끝남).
             // 예전에는 sin을 0.05로 잘라 이어진 엣지를 거의 끝까지(98%) 미끄러졌다.
             if (sin < 0.05f) return 0f;
-            return OffsetOf(es) / sin;
+            return OffsetOf(es) * sf / sin;
         }
 
         // Clamp Overlap: 이동 길이가 이웃 엣지 끝을 넘지 않게(양끝이 모두 베벨이면 절반까지).
@@ -582,8 +624,8 @@ public static partial class MeshOps
             if (o.LegacyPerEdgeClamp) L = MathF.Min(L, EdgeLen(eu) * 0.45f);
             return MathF.Max(L, 1e-6f);
         }
-        // 클램프가 적용된 면 위 오프셋 거리
-        float Off(int e) => OffsetOf(e) * clampOf[e];
+        // 클램프가 적용된 면 위 오프셋 거리(면 f쪽; 비대칭 배율 포함)
+        float Off(int e, int f = -1) => OffsetOf(e) * clampOf[e] * (f >= 0 ? SideFactor(e, f) : 1f);
 
         // pOnEdge: (정점, 엣지) → 그 엣지 위 새 점(면 둘이 공유). qOnFace: (정점, 면) → 면 안쪽 교점.
         // uvOf: 새 정점의 대표 UV(캡 면 UV용). side: (면, 베벨 엣지, 정점) → 띠 가장자리 점과 UV.
@@ -626,7 +668,7 @@ public static partial class MeshOps
                 {
                     perp = Vector3.Normalize(perp);
                     if (Vector3.Dot(perp, du) < 0) perp = -perp;
-                    p = pv + perp * Off(es);
+                    p = pv + perp * Off(es, f);
                 }
             }
             id = m.AddVertex(p);
@@ -678,13 +720,14 @@ public static partial class MeshOps
                     Vector3 q;
                     // 면 안쪽 법선(왼쪽): prev→c 방향과 c→next 방향 기준
                     var Lp = Vector3.Cross(nf, -dpH); var Ln = Vector3.Cross(nf, dnH);
-                    float oP = Off(ePrev), oN = Off(eNext);
+                    float oP = Off(ePrev, f), oN = Off(eNext, f);
                     // Absolute/Percent: 두 엣지를 따라 각각 비율만큼 간 벡터 합(평행사변형 꼭짓점)
                     if (slideTypes)
                     {
                         float fp = o.WidthType == BevelWidthType.Percent ? width / 100f : MathF.Min(width * clamp / MathF.Max(lp, 1e-9f), 1f);
                         float fn2 = o.WidthType == BevelWidthType.Percent ? width / 100f : MathF.Min(width * clamp / MathF.Max(ln, 1e-9f), 1f);
                         if (o.WidthType == BevelWidthType.Percent) { fp *= clamp; fn2 *= clamp; }
+                        fp *= SideFactor(ePrev, f); fn2 *= SideFactor(eNext, f);
                         if (o.LegacyPerEdgeClamp) { fp = MathF.Min(width, lp * 0.45f) / MathF.Max(lp, 1e-9f); fn2 = MathF.Min(width, ln * 0.45f) / MathF.Max(ln, 1e-9f); }
                         q = pc + dp * fp + dn * fn2;
                     }
@@ -855,7 +898,11 @@ public static partial class MeshOps
             var capFaces = new List<int>();
             int nSel = selAt[v].Count;
             if (nSel >= 3 && segments >= 2 && o.Intersection == BevelIntersection.GridFill)
-                capFaces.AddRange(GridFillCap(m, loop, Uv, pos[v], spec.Bulge, mat));
+            {
+                // 셋백 코너(D): 모든 조각이 프로파일(세그먼트+1 점)이면 n변 그리드 패치, 아니면(비베벨 엣지가 섞임) 예전 가운데 점 채움
+                var patch = loopSegs.All(c => c.owner >= 0 && c.pts.Count == segments + 1) ? SetbackCap(m, loopSegs.Select(c => c.pts).ToList(), Uv, pos[v], spec.Bulge, mat) : null;
+                capFaces.AddRange(patch ?? GridFillCap(m, loop, Uv, pos[v], spec.Bulge, mat));
+            }
             else if (nSel >= 3 && segments >= 2 && o.Intersection == BevelIntersection.Cutoff)
             {
                 // 엣지마다 프로파일을 평평한 면으로 막고, 가운데에 프로파일 끝점만으로 된 면
@@ -920,7 +967,160 @@ public static partial class MeshOps
         return order;
     }
 
-    /// <summary>Grid Fill: 캡 둘레 가운데에 원래 정점 쪽으로 부푼 점을 넣고 쿼드(짝수 둘레) 또는 삼각형으로 채운다.</summary>
+    /// <summary>
+    /// 셋백 코너 패치(v0.0.63, CAD의 setback vertex blend를 메시로 일반화): 베벨 엣지 n개(≥ 3)가 모이는 정점에서 각 프로파일(s 세그먼트)을 절반으로 나눠
+    /// n개의 부채꼴 쿼드 그리드로 채운다. 짝수 s = 가운데 점 하나 + 부채꼴마다 (s/2)×(s/2) 그리드, 홀수 s = 가운데 n각형 + 부채꼴 (m×m, m = (s−1)/2) +
+    /// 프로파일 가운데 구간에 걸치는 띠(Blender의 straddling faces). 안쪽 점은 쿤스 패치(네 경계 곡선 보간)로 만든 뒤 둘레 점에 최소제곱으로 맞춘 구에
+    /// 가운데일수록 세게 투영한다(원형 프로파일이면 정확히 구면 조각). 구 맞춤이 안 되면(거의 평면) 예전처럼 원래 모서리 쪽으로 부풀린다.
+    /// </summary>
+    /// <param name="prof">캡 둘레 순서의 프로파일들(각 s+1 점, prof[i][s] == prof[i+1][0]).</param>
+    /// <returns>만든 면들. 전제가 깨지면 null(호출자가 Grid Fill로 대체).</returns>
+    private static List<int>? SetbackCap(PolyMesh m, List<List<int>> prof, Func<int, Vector2> uv, Vector3 corner, float bulge, int mat)
+    {
+        int n = prof.Count; if (n < 3) return null;
+        int s = prof[0].Count - 1; if (s < 2) return null;
+        for (int i = 0; i < n; i++) if (prof[i].Count != s + 1 || prof[i][s] != prof[(i + 1) % n][0]) return null;
+        Vector3 P(int id) => m.Verts[id].Position;
+        // 둘레 점에 구 맞춤(대수적 최소제곱: |p|² = 2p·c − k)
+        var boundary = prof.SelectMany(pr => pr.Take(s)).Select(P).ToList();
+        bool sphere = FitSphere(boundary, out var sc, out float sr);
+        var avgB = Vector3.Zero; foreach (var b in boundary) avgB += b; avgB /= boundary.Count;
+        float extent = boundary.Max(b => Vector3.Distance(b, avgB));
+        if (sphere && (sr > extent * 20f || sr < extent * 0.2f)) sphere = false;
+        // 안쪽 점 보정: w(1 = 가운데 … 0 = 둘레)만큼 구에 투영(구가 없으면 원래 모서리 쪽으로 bulge 부풀림)
+        Vector3 Fix(Vector3 p, float w)
+        {
+            if (w <= 0f) return p;
+            if (sphere) { var d = p - sc; float l = d.Length(); if (l < 1e-9f) return p; return Vector3.Lerp(p, sc + d / l * sr, w); }
+            return p + (corner - avgB) * (bulge * w);
+        }
+        var faces = new List<int>();
+        var uvCache = new Dictionary<int, Vector2>();
+        Vector2 U(int id) => uvCache.TryGetValue(id, out var u) ? u : uv(id);
+        int Add(Vector3 p, Vector2 u) { int id = m.AddVertex(p); uvCache[id] = u; return id; }
+        bool Quad(int a, int b, int c, int d)
+        {
+            var ids = new[] { a, b, c, d }.Distinct().ToList();
+            if (ids.Count < 3) return true;
+            int f = AddFaceWithCorners(m, ids.Select(id => new Corner(id, U(id), Vector3.Zero)).ToList(), mat);
+            if (f >= 0) faces.Add(f);
+            return f >= 0;
+        }
+        // 선(두 점 사이 k = 0..steps, 끝점은 주어진 ID) 생성: 안쪽 점은 보간 후 Fix
+        int[] Line(int from, int to, int steps, float wFrom, float wTo)
+        {
+            var ids = new int[steps + 1]; ids[0] = from; ids[steps] = to;
+            for (int k = 1; k < steps; k++)
+            {
+                float t = (float)k / steps;
+                ids[k] = Add(Fix(Vector3.Lerp(P(from), P(to), t), wFrom + (wTo - wFrom) * t), Vector2.Lerp(U(from), U(to), t));
+            }
+            return ids;
+        }
+        // 부채꼴 그리드: g[0][0]=c00, 위(k=m) = top[j] (c00쪽→Q), 오른쪽(j=m) = right[k] (c00쪽→Q), 왼쪽(j=0) = left[k], 아래(k=0) = bottom[j]
+        void Sector(int[] left, int[] bottom, int[] top, int[] right, int mm)
+        {
+            var g = new int[mm + 1, mm + 1];
+            for (int k = 0; k <= mm; k++) { g[0, k] = left[k]; g[mm, k] = right[k]; }
+            for (int j = 0; j <= mm; j++) { g[j, 0] = bottom[j]; g[j, mm] = top[j]; }
+            for (int j = 1; j < mm; j++)
+                for (int k = 1; k < mm; k++)
+                {
+                    float u = (float)j / mm, v = (float)k / mm;
+                    // 쿤스 패치
+                    var pos = (1 - v) * P(bottom[j]) + v * P(top[j]) + (1 - u) * P(left[k]) + u * P(right[k])
+                            - ((1 - u) * (1 - v) * P(left[0]) + u * (1 - v) * P(bottom[mm]) + (1 - u) * v * P(top[0]) + u * v * P(top[mm]));
+                    var tuv = (1 - v) * U(bottom[j]) + v * U(top[j]) + (1 - u) * U(left[k]) + u * U(right[k])
+                            - ((1 - u) * (1 - v) * U(left[0]) + u * (1 - v) * U(bottom[mm]) + (1 - u) * v * U(top[0]) + u * v * U(top[mm]));
+                    g[j, k] = Add(Fix(pos, 1f - MathF.Max(u, v)), tuv);
+                }
+            for (int j = 0; j < mm; j++)
+                for (int k = 0; k < mm; k++)
+                    Quad(g[j, k + 1], g[j + 1, k + 1], g[j + 1, k], g[j, k]);
+        }
+        if (s % 2 == 0)
+        {
+            int mm = s / 2;
+            // 가운데 점 = 프로파일 중점 평균을 구에 투영
+            var cAvg = Vector3.Zero; var cUv = Vector2.Zero;
+            for (int i = 0; i < n; i++) { cAvg += P(prof[i][mm]); cUv += U(prof[i][mm]); }
+            int center = Add(Fix(cAvg / n, 1f), cUv / n);
+            // 안쪽 선 L_i: 가운데 → 프로파일 i의 중점
+            var L = new int[n][];
+            for (int i = 0; i < n; i++) L[i] = Line(center, prof[i][mm], mm, 1f, 0f);
+            for (int i = 0; i < n; i++)
+            {
+                int ni = (i + 1) % n;
+                var top = new int[mm + 1]; for (int j = 0; j <= mm; j++) top[j] = prof[i][mm + j];           // M_i → Q_i
+                var right = new int[mm + 1]; for (int k = 0; k <= mm; k++) right[k] = prof[ni][mm - k];     // M_{i+1} → Q_i
+                Sector(L[i], L[ni], top, right, mm);
+            }
+        }
+        else
+        {
+            int mm = (s - 1) / 2;
+            // 가운데 n각형: 각 프로파일 가운데 구간의 중점 방향으로 구 중심 평균에서 1/(m+1)만큼
+            var mids = new Vector3[n]; var midUv = new Vector2[n];
+            var cAvg = Vector3.Zero; var cUv = Vector2.Zero;
+            for (int i = 0; i < n; i++) { mids[i] = (P(prof[i][mm]) + P(prof[i][mm + 1])) * 0.5f; midUv[i] = (U(prof[i][mm]) + U(prof[i][mm + 1])) * 0.5f; cAvg += mids[i]; cUv += midUv[i]; }
+            cAvg /= n; cUv /= n;
+            var C = new int[n];
+            for (int i = 0; i < n; i++) { float t = 1f / (mm + 1); C[i] = Add(Fix(Vector3.Lerp(cAvg, mids[i], t), 1f - t), Vector2.Lerp(cUv, midUv[i], t)); }
+            // 선: Lf_i = C_i → P_i[m+1] (프로파일 i 후반 시작), Bt_i = C_i → P_{i+1}[m] (프로파일 i+1 전반 끝)
+            var Lf = new int[n][]; var Bt = new int[n][];
+            for (int i = 0; i < n; i++)
+            {
+                Lf[i] = Line(C[i], prof[i][mm + 1], mm, 1f - 1f / (mm + 1), 0f);
+                Bt[i] = Line(C[i], prof[(i + 1) % n][mm], mm, 1f - 1f / (mm + 1), 0f);
+            }
+            for (int i = 0; i < n; i++)
+            {
+                int ni = (i + 1) % n;
+                var top = new int[mm + 1]; for (int j = 0; j <= mm; j++) top[j] = prof[i][mm + 1 + j];      // P_i[m+1] → Q_i
+                var right = new int[mm + 1]; for (int k = 0; k <= mm; k++) right[k] = prof[ni][mm - k];     // P_{i+1}[m] → Q_i
+                if (mm >= 1) Sector(Lf[i], Bt[i], top, right, mm);
+                // 프로파일 i 가운데 구간에 걸치는 띠: Bt_{i-1}(C_{i-1} → P_i[m])와 Lf_i(C_i → P_i[m+1]) 사이
+                var bt = Bt[(i - 1 + n) % n];
+                for (int k = 0; k < mm; k++) Quad(Lf[i][k], bt[k], bt[k + 1], Lf[i][k + 1]);
+            }
+            // 가운데 n각형(C_{i-1} → C_i 방향)
+            int cf = AddFaceWithCorners(m, C.Select(id => new Corner(id, U(id), Vector3.Zero)).ToList(), mat);
+            if (cf >= 0) faces.Add(cf);
+        }
+        return faces;
+    }
+
+    /// <summary>점들에 구를 대수적 최소제곱으로 맞춘다(|p|² = 2p·c − k → 4×4 정규방정식). 특이하거나 반지름이 0 이하면 false.</summary>
+    private static bool FitSphere(List<Vector3> pts, out Vector3 center, out float radius)
+    {
+        center = default; radius = 0;
+        if (pts.Count < 4) return false;
+        // A = [2x 2y 2z -1], b = x²+y²+z². AᵀA x = Aᵀb
+        var ata = new double[4, 4]; var atb = new double[4];
+        foreach (var p in pts)
+        {
+            double[] row = { 2 * p.X, 2 * p.Y, 2 * p.Z, -1 };
+            double b = p.X * p.X + p.Y * p.Y + p.Z * p.Z;
+            for (int i = 0; i < 4; i++) { atb[i] += row[i] * b; for (int j = 0; j < 4; j++) ata[i, j] += row[i] * row[j]; }
+        }
+        // 가우스 소거(부분 피벗)
+        var x = new double[4];
+        for (int c = 0; c < 4; c++)
+        {
+            int piv = c; for (int r = c + 1; r < 4; r++) if (System.Math.Abs(ata[r, c]) > System.Math.Abs(ata[piv, c])) piv = r;
+            if (System.Math.Abs(ata[piv, c]) < 1e-12) return false;
+            if (piv != c) { for (int j = 0; j < 4; j++) (ata[c, j], ata[piv, j]) = (ata[piv, j], ata[c, j]); (atb[c], atb[piv]) = (atb[piv], atb[c]); }
+            for (int r = c + 1; r < 4; r++) { double f = ata[r, c] / ata[c, c]; for (int j = c; j < 4; j++) ata[r, j] -= f * ata[c, j]; atb[r] -= f * atb[c]; }
+        }
+        for (int r = 3; r >= 0; r--) { double sum = atb[r]; for (int j = r + 1; j < 4; j++) sum -= ata[r, j] * x[j]; x[r] = sum / ata[r, r]; }
+        center = new Vector3((float)x[0], (float)x[1], (float)x[2]);
+        double r2 = x[0] * x[0] + x[1] * x[1] + x[2] * x[2] - x[3];
+        if (!(r2 > 1e-12)) return false;
+        radius = (float)System.Math.Sqrt(r2);
+        return float.IsFinite(radius);
+    }
+
+    /// <summary>Grid Fill: 캡 둘레 가운데에 원래 정점 쪽으로 부푼 점을 넣고 쿼드(짝수 둘레) 또는 삼각형으로 채운다(셋백 패치를 쓸 수 없는 코너용).</summary>
     private static List<int> GridFillCap(PolyMesh m, List<int> loop, Func<int, Vector2> uv, Vector3 corner, float bulge, int mat)
     {
         var faces = new List<int>();
@@ -1108,7 +1308,10 @@ public static partial class MeshOps
             int mat = o.MaterialIndex >= 0 ? o.MaterialIndex : faceMat.Values.DefaultIfEmpty(0).First();
             Vector2 Uv(int id) => uvOf.TryGetValue(id, out var uv) ? uv : Vector2.Zero;
             if (segments >= 2 && linked != null && o.Intersection != BevelIntersection.NGon)
-                result.AddRange(GridFillCap(m, loop, Uv, pos[v], spec.Bulge, mat));
+            {
+                var patch = linked.Count >= 3 && linked.All(c => c.pts.Count == segments + 1) ? SetbackCap(m, linked.Select(c => c.pts).ToList(), Uv, pos[v], spec.Bulge, mat) : null;
+                result.AddRange(patch ?? GridFillCap(m, loop, Uv, pos[v], spec.Bulge, mat));
+            }
             else
             {
                 int cf = AddFaceWithCorners(m, loop.Select(id => new Corner(id, Uv(id), Vector3.Zero)).ToList(), mat);
