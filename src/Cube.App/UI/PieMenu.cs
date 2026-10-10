@@ -17,6 +17,8 @@ public sealed record PieItem(string Label, string ActionId, bool Enabled = true)
     public Action? Run { get; init; }
     /// <summary>항목 왼쪽에 그릴 아이콘(머티리얼 썸네일 등).</summary>
     public Texture2D? Icon { get; init; }
+    /// <summary>true면 아이콘을 글자 높이의 작은 아이콘(18px)으로 그린다(액션 아이콘). false = 큰 썸네일(34px).</summary>
+    public bool SmallIcon { get; init; }
 }
 
 /// <summary>
@@ -95,65 +97,108 @@ public partial class PieMenu : Control
     /// <summary>
     /// 항목 사각형을 계산한다. 높이는 아이콘 항목이 있으면 아이콘+6, 아니면 24(× 배율). 앞 8개는 방향 벡터 × Radius 지점에 놓되
     /// 오른쪽 항목은 왼쪽 끝을, 왼쪽 항목은 오른쪽 끝을, 위/아래 항목은 가운데를 그 지점에 맞춘다.
-    /// 9번째부터는 오버플로: <see cref="OverflowLayout"/>가 정한 열·행 격자(패널 안으로 자름)에 세로 목록으로 놓는다.
+    /// 9번째부터는 오버플로: <see cref="OverflowLayout"/>가 방사형을 덮지 않는 자리(아래 → 위 → 좌우 옆)에 열·행 격자로 놓는다.
     /// </summary>
     private void Layout()
     {
         _rects.Clear();
         float s = CubeApp.Instance.UiScale;
-        float padX = 10 * s, h = (_items.Any(it => it.Icon != null) ? IconPx + 6 : 24) * s;
-        // 오버플로 목록 배치(9번째 항목부터): 열 수·열당 개수·시작 위치를 한 번에 정한다
-        var (perCol, startY, left, colW, gap) = OverflowLayout(padX, h, s);
-        // 각 항목의 폭 = 글자 폭 + 좌우 여백(+ 아이콘).
-        for (int i = 0; i < _items.Count; i++)
+        float padX = 10 * s, h = (_items.Any(it => it.Icon != null && !it.SmallIcon) ? IconPx + 6 : 24) * s;
+        // 방사형 8개: 방향 벡터 × Radius 지점. 좌우 항목은 중심에서 바깥쪽으로 정렬
+        for (int i = 0; i < _items.Count && i < 8; i++)
         {
             float w = ItemWidth(_items[i], padX, s);
-            Vector2 pos;
-            if (i < 8)
-            {
-                var d = Dirs[i];
-                var p = _center + d * Radius;
-                // 좌우 항목은 중심에서 바깥쪽으로 정렬
-                float x = d.X > 0.1f ? p.X : d.X < -0.1f ? p.X - w : p.X - w / 2;
-                pos = new Vector2(x, p.Y - h / 2);
-            }
-            else
-            {
-                int k = i - 8, col = k / perCol, row = k % perCol;
-                pos = new Vector2(left + col * (colW + gap) + (colW - w) / 2, startY + row * (h + 4 * s));
-            }
-            _rects.Add(new Rect2(pos, new Vector2(w, h)));
+            var d = Dirs[i];
+            var p = _center + d * Radius;
+            float x = d.X > 0.1f ? p.X : d.X < -0.1f ? p.X - w : p.X - w / 2;
+            _rects.Add(new Rect2(new Vector2(x, p.Y - h / 2), new Vector2(w, h)));
         }
+        if (_items.Count > 8) _rects.AddRange(OverflowLayout(padX, h, s));
     }
 
     /// <summary>
-    /// 오버플로 목록(9번째 항목부터)의 배치: 열당 최대 6개를 기본으로 하되, 열 묶음이 패널 폭을 넘으면 열당 개수를 늘려 열 수를 줄이고,
-    /// 방사형 아래(공간이 모자라면 위, 둘 다 모자라면 더 넓은 쪽)에 두며 패널 안으로 자른다.
-    /// 예전에는 열당 개수를 2~6으로만 정해 4분할처럼 작은 패널에서 Edit 파이(오브젝트 모드 21개 오버플로)의 일부 항목이 패널 밖으로 나가 고를 수 없었다.
+    /// 오버플로 목록(9번째 항목부터)의 배치(v0.0.61). 열마다 그 열 항목들의 최대 폭을 쓰고(열 폭이 제각각), 방사형 항목을 덮지 않는 자리를 순서대로 찾는다:
+    /// ① 방사형 아래(남는 높이에 들어가는 행 수로 열을 나눔) ② 위 ③ 좌우 옆(방사형 바깥쪽부터 패널 끝까지, 패널 전체 높이; 오른쪽 먼저, 남으면 왼쪽)
+    /// ④ 모두 모자라면 아래에 겹쳐서라도 패널 안에. 전에는 열당 6개 고정 + 모든 열이 최대 폭이라 항목이 많은 Edit 파이가 방사형 항목 위로 올라왔다.
     /// </summary>
-    /// <returns>열당 개수, 첫 행 Y, 묶음 왼쪽 X, 열 폭, 열 간격.</returns>
-    private (int perCol, float startY, float left, float colW, float gap) OverflowLayout(float padX, float h, float s)
+    private List<Rect2> OverflowLayout(float padX, float h, float s)
     {
         int n = _items.Count - 8;
         float gap = 8 * s, rowH = h + 4 * s, margin = 4 * s;
-        if (n <= 0) return (1, 0, 0, 0, gap);
-        float colW = 0;
-        for (int j = 8; j < _items.Count; j++) colW = MathF.Max(colW, ItemWidth(_items[j], padX, s));
-        int maxCols = Math.Max(1, (int)((Size.X - 2 * margin + gap) / (colW + gap)));
-        int perCol = Math.Min(6, n);
-        if ((n + perCol - 1) / perCol > maxCols) perCol = (n + maxCols - 1) / maxCols;
-        int cols = (n + perCol - 1) / perCol;
-        float blockH = perCol * rowH - 4 * s;
-        float belowTop = _center.Y + Radius + h * 1.6f, aboveBottom = _center.Y - Radius - h * 1.6f;
-        float belowSpace = Size.Y - margin - belowTop, aboveSpace = aboveBottom - margin;
-        float startY;
-        if (blockH <= belowSpace || belowSpace >= aboveSpace) startY = belowTop;
-        else startY = aboveBottom - blockH;
-        // 패널 안으로(위·아래) 자른다
-        startY = Math.Clamp(startY, margin, MathF.Max(margin, Size.Y - margin - blockH));
-        float blockW = cols * colW + (cols - 1) * gap;
-        float left = Math.Clamp(_center.X - blockW / 2, margin, MathF.Max(margin, Size.X - blockW - margin));
-        return (perCol, startY, left, colW, gap);
+        float clearance = h * 1.2f;
+        // 방사형이 차지하는 사각형(항목 포함)
+        float radLeft = float.MaxValue, radRight = float.MinValue, radTop = float.MaxValue, radBottom = float.MinValue;
+        for (int i = 0; i < _rects.Count; i++) { var r = _rects[i]; radLeft = MathF.Min(radLeft, r.Position.X); radRight = MathF.Max(radRight, r.End.X); radTop = MathF.Min(radTop, r.Position.Y); radBottom = MathF.Max(radBottom, r.End.Y); }
+        if (!string.IsNullOrEmpty(Title)) radBottom = MathF.Max(radBottom, _center.Y + DeadZone + 30 * s);
+        int RowsIn(float height) => Math.Max(0, (int)((height + 4 * s) / rowH));
+        float W(int k) => ItemWidth(_items[8 + k], padX, s);
+        // 열 묶음: start부터 count개를 rows행 열로 묶었을 때 열별 폭. 반환 = 전체 폭(간격 포함)
+        float ColumnWidths(int start, int count, int rows, List<float> widths)
+        {
+            widths.Clear();
+            for (int k = 0; k < count; k++) { int col = k / rows; if (col == widths.Count) widths.Add(0); widths[col] = MathF.Max(widths[col], W(start + k)); }
+            return widths.Sum() + MathF.Max(0, widths.Count - 1) * gap;
+        }
+        List<Rect2> Grid(float left, float top, int rows, int start, int count, List<float> widths)
+        {
+            var list = new List<Rect2>();
+            float x = left;
+            for (int k = 0; k < count; k++)
+            {
+                int col = k / rows, row = k % rows;
+                if (row == 0 && k > 0) x += widths[col - 1] + gap;
+                float w = W(start + k);
+                list.Add(new Rect2(new Vector2(x + (widths[col] - w) / 2, top + row * rowH), new Vector2(w, h)));
+            }
+            return list;
+        }
+        var widths = new List<float>();
+        float panelW = Size.X - 2 * margin;
+        // ① 아래 ② 위
+        float belowTop = radBottom + clearance, aboveBottom = radTop - clearance;
+        foreach (var (space, above) in new[] { (Size.Y - margin - belowTop, false), (aboveBottom - margin, true) })
+        {
+            int rows = Math.Min(n, RowsIn(space));
+            if (rows <= 0) continue;
+            int cols = (n + rows - 1) / rows; rows = (n + cols - 1) / cols; // 열을 고르게
+            float blockW = ColumnWidths(0, n, rows, widths);
+            if (blockW > panelW) continue;
+            float blockH = rows * rowH - 4 * s;
+            float left = Math.Clamp(_center.X - blockW / 2, margin, MathF.Max(margin, Size.X - blockW - margin));
+            return Grid(left, above ? aboveBottom - blockH : belowTop, rows, 0, n, widths);
+        }
+        // ③ 좌우 옆: 패널 전체 높이. 오른쪽에 들어가는 열까지 채우고 나머지를 왼쪽에
+        {
+            int rows = Math.Min(n, RowsIn(Size.Y - 2 * margin));
+            float rightX = radRight + gap * 2, leftEnd = radLeft - gap * 2;
+            float availR = Size.X - margin - rightX, availL = leftEnd - margin;
+            if (rows > 0)
+            {
+                ColumnWidths(0, n, rows, widths);
+                int colsR = 0; float wR = 0;
+                while (colsR < widths.Count && wR + widths[colsR] + (colsR > 0 ? gap : 0) <= availR) { wR += widths[colsR] + (colsR > 0 ? gap : 0); colsR++; }
+                int countR = Math.Min(n, colsR * rows), countL = n - countR;
+                var lw = new List<float>();
+                float wL = countL > 0 ? ColumnWidths(countR, countL, rows, lw) : 0;
+                if (countL == 0 || wL <= availL)
+                {
+                    var rw = widths.GetRange(0, colsR);
+                    var list = Grid(rightX, margin, rows, 0, countR, rw);
+                    if (countL > 0) list.AddRange(Grid(leftEnd - wL, margin, rows, countR, countL, lw));
+                    return list;
+                }
+            }
+        }
+        // ④ 폴백: 아래에 겹쳐서라도(패널 안으로 자름)
+        {
+            int rows = Math.Max(1, Math.Min(n, RowsIn(Size.Y - 2 * margin)));
+            float blockW = ColumnWidths(0, n, rows, widths);
+            while (blockW > panelW && rows < n) { rows++; blockW = ColumnWidths(0, n, rows, widths); }
+            float blockH = rows * rowH - 4 * s;
+            float left = Math.Clamp(_center.X - blockW / 2, margin, MathF.Max(margin, Size.X - blockW - margin));
+            float top = Math.Clamp(belowTop, margin, MathF.Max(margin, Size.Y - margin - blockH));
+            return Grid(left, top, rows, 0, n, widths);
+        }
     }
 
     /// <summary>아이콘 크기(UI 배율 1 기준 px).</summary>
@@ -161,7 +206,12 @@ public partial class PieMenu : Control
 
     /// <summary>항목 폭(px): 라벨 글자 폭 + 좌우 여백 + 아이콘이 있으면 아이콘 폭과 간격.</summary>
     private float ItemWidth(PieItem it, float padX, float s)
-        => _font.GetStringSize(it.Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2 + (it.Icon != null ? (IconPx + 6) * s : 0);
+        => _font.GetStringSize(it.Label, HorizontalAlignment.Left, -1, _fontSize).X + padX * 2 + (it.Icon != null ? (IconSize(it) + 6) * s : 0);
+
+    /// <summary>항목 아이콘 한 변(배율 1 기준 px): 작은 액션 아이콘 18, 썸네일 34.</summary>
+    private static float IconSize(PieItem it) => it.SmallIcon ? SmallIconPx : IconPx;
+    /// <summary>작은 액션 아이콘 크기(UI 배율 1 기준 px).</summary>
+    private const float SmallIconPx = 18;
 
     /// <summary>라벨이 label로 시작하는 항목의 화면(전역) 중심. 없으면 null(DebugDriver `pieitem`용).</summary>
     public Vector2? ItemGlobalCenter(string label)
@@ -265,7 +315,7 @@ public partial class PieMenu : Control
             if (_items[i].Icon is { } icon)
             {
                 // 아이콘은 왼쪽, 글자는 그 오른쪽(남는 폭 가운데)
-                float ip = IconPx * s;
+                float ip = IconSize(_items[i]) * s;
                 var ir = new Rect2(r.Position.X + 4 * s, r.Position.Y + (r.Size.Y - ip) / 2, ip, ip);
                 DrawTextureRect(icon, ir, false, enabled ? Colors.White : new Color(1, 1, 1, 0.4f));
                 float rest = r.Size.X - (ip + 8 * s);

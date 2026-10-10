@@ -1,4 +1,5 @@
 using Cube.Core.Selection;
+using Godot;
 
 namespace Cube.App.UI;
 
@@ -10,62 +11,79 @@ namespace Cube.App.UI;
 /// <summary>뷰포트 파이 메뉴 구성. RMB = 선택 모드 전환, Shift+RMB = 현재 모드에서 수행 가능한 편집 액션, Space 홀드 = 뷰 전환.</summary>
 public static class PieMenus
 {
-    /// <summary>RMB 기본 파이: 선택 모드 전환(현재 모드에는 • 표시) + 전체 선택/해제 + Frame Selected.</summary>
-    /// <remarks>방향 배치: N Vertex, NE UV, E Edge, SE Deselect All, S Face, SW Select All, W Object Mode, NW Frame Selected.</remarks>
-    /// <summary>N, NE, E, SE, S, SW, W, NW 순.</summary>
+    /// <summary>
+    /// RMB 기본 파이 = Maya 폴리곤 RMB 마킹 메뉴 배치(v0.0.61): N Vertex, E Edge, S Face, W Object Mode, SE UV.
+    /// Maya의 NE(Vertex Face)·NW(Multi)는 Cube에 없는 모드라 그 자리에 Select All(NE)·Frame Selected(NW)를, SW에 Deselect All을 둔다.
+    /// 오버플로(Maya 목록부): Select Hierarchy, Hide/Show, Assign Material ▸.
+    /// </summary>
     public static List<PieItem> ModeMenu(Shell shell)
     {
         var sel = shell.Document.Selection;
-        // 모드 항목 헬퍼: 현재 선택 모드와 같으면 라벨 뒤에 " •"를 붙인다.
-        PieItem Mode(string label, string action, SelectMode mode) => new(label + (sel.Mode == mode ? " •" : ""), action);
+        PieItem Mode(string label, string action, SelectMode mode) => Item(shell, action, label + (sel.Mode == mode ? " •" : ""));
+        bool hasMesh = sel.Objects.Any(id => shell.Document.Find(id)?.Mesh != null);
         return new List<PieItem>
         {
-            Mode("Vertex", "mode.vertex", SelectMode.Vertex),
-            Mode("UV", "mode.uv", SelectMode.Uv),
-            Mode("Edge", "mode.edge", SelectMode.Edge),
-            Item(shell, "select.none", "Deselect All"),
-            Mode("Face", "mode.face", SelectMode.Face),
-            Item(shell, "select.all", "Select All"),
-            Mode("Object Mode", "mode.object", SelectMode.Object),
-            Item(shell, "view.frameSelected", "Frame Selected"),
+            Mode("Vertex", "mode.vertex", SelectMode.Vertex),          // N
+            Item(shell, "select.all", "Select All"),                    // NE (Maya: Vertex Face)
+            Mode("Edge", "mode.edge", SelectMode.Edge),                // E
+            Mode("UV", "mode.uv", SelectMode.Uv),                      // SE
+            Mode("Face", "mode.face", SelectMode.Face),                // S
+            Item(shell, "select.none", "Deselect All"),                 // SW
+            Mode("Object Mode", "mode.object", SelectMode.Object),     // W
+            Item(shell, "view.frameSelected", "Frame Selected"),        // NW (Maya: Multi)
+            Item(shell, "select.hierarchy", "Select Hierarchy"),
+            Item(shell, "display.hideSelection", "Hide Selection"),
+            Item(shell, "display.showAll", "Show All"),
+            new PieItem("Assign Material ▸", "material.assign", hasMesh) { Sub = () => MaterialItems(shell), Icon = PieIcon("material.assign"), SmallIcon = true },
         };
     }
 
-    /// <remarks>
-    /// Shift+RMB Edit 파이. 모드별 액션 ID 배열에서 앞 8개가 방사형, 나머지는 오버플로 목록이다.
-    /// 오브젝트 모드에서는 9~11번째 자리에 Assign Material 서브 파이(메시가 선택돼 있을 때만 활성), Center Pivot, Edit Pivot을 끼워 넣는다.
-    /// UV 모드 등 그 밖의 모드에서는 모드 전환 항목만 보여 준다.
-    /// </remarks>
-    /// <summary>현재 선택 모드에서 의미 있는 액션들. 실행 불가한 것은 비활성으로 표시한다.</summary>
+    /// <summary>
+    /// Shift+RMB Edit 파이 = Maya 폴리곤 모델링 마킹 메뉴(contextPolyTools*MM) 배치를 따른다(v0.0.61).
+    /// 공통 앵커: S = Extrude, SW = Delete, E = Multi-Cut(Maya 2015+ 공통 항목). 모드별 방사형:
+    /// 오브젝트 N Combine·NE Mirror·SE Smooth·W Separate·NW Insert Edge Loop / 정점 N Merge·NE Chamfer·SE Connect·W Average·NW Target Weld /
+    /// 엣지 N Bevel·NE Bridge·SE Connect·W Insert Edge Loop·NW Collapse / 면 N Bevel·NE Bridge·SE Duplicate Face·W Extract·NW Poke.
+    /// 9번째부터는 Maya 목록부에 해당하는 나머지 기능(오버플로 목록).
+    /// </summary>
     public static List<PieItem> ContextMenu(Shell shell)
     {
         var sel = shell.Document.Selection;
-        // 선택 모드 → 표시할 액션 ID 목록(대부분 *Apply = 마지막 옵션으로 즉시 실행).
-        string[] ids = sel.Mode switch
+        (string id, string? label)[] ids = sel.Mode switch
         {
-            SelectMode.Object => new[] { "mesh.combine", "edit.duplicate", "mesh.separate", "mesh.harden", "edit.delete", "mesh.soften", "mesh.reverse", "view.frameSelected",
-                                         "mesh.smoothApply", "skin.detach", "skin.paintTool", "edit.deleteHistory", "tool.move", "tool.rotate", "tool.scale", "file.exportSelection",
-                                         "mesh.mirrorApply", "mesh.arrayApply", "normals.smartSoftenHardenApply", "mesh.booleanUnionApply", "mesh.booleanDifferenceApply", "mesh.booleanIntersectionApply", "mesh.triangulate", "mesh.quadrangulateApply", "mesh.cleanup", "normals.conform", "mesh.multiCut" },
-            SelectMode.Face => new[] { "mesh.extrudeApply", "select.toEdges", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
-                                       "mesh.reverse", "mesh.mergeApply", "mesh.bevelApply", "mesh.addDivisionsApply", "mesh.pokeApply", "mesh.duplicateFaces", "mesh.extractFaces", "mesh.detach", "mesh.collapse", "mesh.triangulate", "mesh.quadrangulateApply", "mesh.circularizeApply", "mesh.wedgeApply" },
-            SelectMode.Edge => new[] { "mesh.harden", "select.toFaces", "mesh.bridge", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toVertices",
-                                       "mesh.mergeApply", "mesh.bevelApply", "mesh.bevelTool", "mesh.insertLoop", "normals.smartSoftenHardenApply", "mesh.extrudeApply", "mesh.connect", "mesh.collapse", "mesh.flipTriangleEdge", "mesh.spinEdgeForward", "mesh.offsetEdgeLoopApply", "mesh.slideEdgeApply", "mesh.fillHole", "mesh.creaseApply", "mesh.creaseTool", "mesh.multiCut" },
-            SelectMode.Vertex => new[] { "mesh.mergeApply", "select.toFaces", "mesh.harden", "select.grow", "edit.delete", "select.shrink", "mesh.soften", "select.toEdges",
-                                         "mesh.connect", "mesh.extrudeApply", "mesh.extrudeVertexApply", "mesh.chamferVerticesApply", "mesh.bevelVerticesTool", "mesh.mergeToCenter", "mesh.averageVerticesApply", "mesh.detach", "mesh.targetWeld", "mesh.multiCut" },
-            _ => new[] { "mode.object", "mode.vertex", "mode.edge", "mode.face" },
+            SelectMode.Object => new (string, string?)[] {
+                ("mesh.combine", null), ("mesh.mirrorApply", "Mirror"), ("mesh.multiCut", null), ("mesh.smoothApply", "Smooth"), ("mesh.extrudeApply", "Extrude"), ("edit.delete", null), ("mesh.separate", null), ("mesh.insertLoop", "Insert Edge Loop"),
+                ("mesh.targetWeld", null), ("mesh.fillHole", "Fill Holes"), ("mesh.appendPolygon", null), ("normals.softenHardenAngleApply", "Soften/Harden Edge"), ("normals.smartSoftenHardenApply", "Smart Soften/Harden"),
+                ("mesh.offsetEdgeLoopApply", "Offset Edge Loop"), ("mesh.triangulate", null), ("mesh.quadrangulateApply", "Quadrangulate"), ("mesh.booleans", "Booleans ▸"), ("mesh.cleanup", null), ("mesh.connect", null),
+                ("mesh.arrayApply", "Array"), ("edit.duplicate", null), ("edit.centerPivot", null), ("edit.editPivot", null), ("material.assign", "Assign Material ▸") },
+            SelectMode.Vertex => new (string, string?)[] {
+                ("mesh.mergeApply", "Merge Vertices"), ("mesh.chamferVerticesApply", "Chamfer Vertex"), ("mesh.multiCut", null), ("mesh.connect", null), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Vertex"), ("mesh.averageVerticesApply", "Average Vertices"), ("mesh.targetWeld", null),
+                ("mesh.extrudeVertexApply", "Extrude Vertex"), ("mesh.bevelVerticesTool", null), ("mesh.mergeToCenter", null), ("mesh.detach", "Detach Components"),
+                ("mesh.creaseTool", null), ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection") },
+            SelectMode.Edge => new (string, string?)[] {
+                ("mesh.bevelApply", "Bevel Edge"), ("mesh.bridge", null), ("mesh.multiCut", null), ("mesh.connect", null), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Edge"), ("mesh.insertLoop", "Insert Edge Loop"), ("mesh.collapse", "Collapse Edge"),
+                ("mesh.flipTriangleEdge", "Flip Edge"), ("mesh.spinEdgeForward", "Spin Edge"), ("normals.softenHardenAngleApply", "Soften/Harden Edge"), ("normals.smartSoftenHardenApply", "Smart Soften/Harden"),
+                ("mesh.offsetEdgeLoopApply", "Offset Edge Loop"), ("mesh.slideEdgeApply", "Slide Edge"), ("mesh.addDivisionsApply", "Add Divisions"), ("mesh.fillHole", null), ("mesh.bevelTool", null), ("mesh.mergeApply", "Merge Edges"),
+                ("mesh.creaseApply", "Crease"), ("mesh.creaseTool", null), ("mesh.detach", "Detach Components"), ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection") },
+            SelectMode.Face => new (string, string?)[] {
+                ("mesh.bevelApply", "Bevel Face"), ("mesh.bridge", "Bridge Faces"), ("mesh.multiCut", null), ("mesh.duplicateFaces", "Duplicate Face"), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Face"), ("mesh.extractFaces", "Extract Faces"), ("mesh.pokeApply", "Poke Face"),
+                ("mesh.wedgeApply", "Wedge Face"), ("mesh.smoothApply", "Smooth Faces"), ("mesh.addDivisionsApply", "Add Divisions"), ("mesh.triangulate", "Triangulate Faces"), ("mesh.quadrangulateApply", "Quadrangulate Faces"), ("mesh.circularizeApply", "Circularize"),
+                ("mesh.collapse", null), ("mesh.detach", "Detach Components"), ("mesh.mergeApply", "Merge"), ("mesh.reverse", null), ("mesh.targetWeld", null),
+                ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection") },
+            _ => new (string, string?)[] { ("mode.object", null), ("mode.vertex", null), ("mode.edge", null), ("mode.face", null) },
         };
-        // 각 ID를 PieItem으로(라벨 = 액션 라벨, 실행 불가면 비활성).
-        var items = ids.Select(id => Item(shell, id)).ToList();
-        if (sel.Mode == SelectMode.Object)
+        var items = new List<PieItem>();
+        bool hasMesh = sel.Objects.Any(id => shell.Document.Find(id)?.Mesh != null);
+        foreach (var (id, label) in ids)
         {
-            // 메시가 하나라도 선택돼 있어야 머티리얼 할당이 의미가 있다.
-            bool hasMesh = sel.Objects.Any(id => shell.Document.Find(id)?.Mesh != null);
-            items.Insert(8, new PieItem("Assign Material ▸", "material.assign", hasMesh) { Sub = () => MaterialItems(shell) });
-            items.Insert(9, Item(shell, "edit.centerPivot", "Center Pivot"));
-            items.Insert(10, Item(shell, "edit.editPivot", "Edit Pivot"));
+            if (id == "mesh.booleans") items.Add(new PieItem("Booleans ▸", "mesh.booleans", hasMesh) { Sub = () => Group(shell, ("mesh.booleanUnionApply", "Union"), ("mesh.booleanDifferenceApply", "Difference"), ("mesh.booleanIntersectionApply", "Intersection")), Icon = PieIcon("mesh.booleans"), SmallIcon = true });
+            else if (id == "material.assign") items.Add(new PieItem("Assign Material ▸", "material.assign", hasMesh) { Sub = () => MaterialItems(shell), Icon = PieIcon("material.assign"), SmallIcon = true });
+            else items.Add(Item(shell, id, label));
         }
         return items;
     }
+
+    /// <summary>(액션, 라벨) 목록 → 항목 목록(서브 파이용).</summary>
+    private static List<PieItem> Group(Shell shell, params (string action, string label)[] items) => items.Select(i => Item(shell, i.action, i.label)).ToList();
 
     /// <summary>Assign Material 서브 파이: lambert1 + 문서 머티리얼(현재 할당은 •) + Material Editor 열기.</summary>
     /// <remarks>
@@ -93,18 +111,18 @@ public static class PieMenus
         return list;
     }
 
-    /// <summary>Ctrl+RMB: 선택 변환. N To Edge, NE To Boundary Edge, E To Vertex, SE To Face, S To UV, SW To UV Island, W Grow, NW Shrink.</summary>
-    /// <remarks>앞 8개 방사형 이후 Select Hierarchy / Select All / Deselect All이 오버플로 목록으로 붙는다.</remarks>
+    /// <summary>Ctrl+RMB 선택 변환 파이 = Maya Convert Selection 마킹 메뉴 배치(v0.0.61): N To Edges, E To Vertices, S To Faces, W To UVs; NE Edge Perimeter(경계), SE UV Shell, SW Grow, NW Shrink.</summary>
+    /// <remarks>앞 8개 방사형 이후 Select Hierarchy / Non-Manifold / Select All / Deselect All이 오버플로 목록으로 붙는다.</remarks>
     public static List<PieItem> SelectMenu(Shell shell) => new()
     {
-        Item(shell, "select.toEdges", "To Edge"),
-        Item(shell, "select.toBoundaryEdges", "To Boundary Edge"),
-        Item(shell, "select.toVertices", "To Vertex"),
-        Item(shell, "select.toFaces", "To Face"),
-        Item(shell, "select.toUv", "To UV"),
-        Item(shell, "select.toUvIsland", "To UV Island"),
-        Item(shell, "select.grow", "Grow"),
-        Item(shell, "select.shrink", "Shrink"),
+        Item(shell, "select.toEdges", "To Edges"),
+        Item(shell, "select.toBoundaryEdges", "To Edge Perimeter"),
+        Item(shell, "select.toVertices", "To Vertices"),
+        Item(shell, "select.toUvIsland", "To UV Shell"),
+        Item(shell, "select.toFaces", "To Faces"),
+        Item(shell, "select.grow", "Grow Selection"),
+        Item(shell, "select.toUv", "To UVs"),
+        Item(shell, "select.shrink", "Shrink Selection"),
         Item(shell, "select.hierarchy", "Select Hierarchy"),
         Item(shell, "select.nonManifoldApply", "Non-Manifold"),
         Item(shell, "select.all", "Select All"),
@@ -165,7 +183,7 @@ public static class PieMenus
     {
         // Group: (액션, 라벨) 목록을 PieItem 목록으로. Sub: 라벨에 ▸를 붙이고 고르면 하위 파이를 여는 항목.
         List<PieItem> Group(params (string action, string label)[] items) => items.Select(i => Item(shell, i.action, i.label)).ToList();
-        PieItem Sub(string label, Func<List<PieItem>> sub) => new(label + " ▸", "uv.sub") { Sub = sub };
+        PieItem Sub(string label, Func<List<PieItem>> sub) => new(label + " ▸", "uv.sub") { Sub = sub, Icon = PieIcon("uv.sub"), SmallIcon = true };
         return new List<PieItem>
         // 방사형 8개: 자주 쓰는 투영/펼치기/배치/자르기·꿰매기/프레임.
         {
@@ -212,6 +230,9 @@ public static class PieMenus
     private static PieItem Item(Shell shell, string actionId, string? label = null)
     {
         var a = shell.Actions.Get(actionId);
-        return new PieItem(label ?? a?.Label ?? actionId, actionId, a != null && a.Enabled);
+        return new PieItem(label ?? a?.Label ?? actionId, actionId, a != null && a.Enabled) { Icon = PieIcon(actionId), SmallIcon = true };
     }
+
+    /// <summary>액션의 파이 아이콘 텍스처(18px × UI 배율; ActionIcons 표).</summary>
+    public static Texture2D? PieIcon(string actionId) => Icons.Get(ActionIcons.For(actionId), (int)(18 * CubeApp.Instance.UiScale));
 }

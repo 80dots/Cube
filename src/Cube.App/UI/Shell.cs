@@ -399,6 +399,7 @@ public partial class Shell : Control
             var b = Icons.IconButton(iconName, tip, icon, toggle: true);
             string tool = id;
             b.Pressed += () => Actions.Invoke("tool." + tool);
+            ActionIcons.Register("tool." + tool, iconName);
             _toolButtons[id] = b;
             ToolBox.AddChild(b);
         }
@@ -538,6 +539,7 @@ public partial class Shell : Control
         b.AddThemeFontSizeOverride("font_size", (int)(11 * s));
         var tex = Icons.Get(icon, (int)(22 * s));
         if (tex != null) b.Icon = tex;
+        ActionIcons.Register(action, icon); // 파이 메뉴가 같은 아이콘을 쓴다
         if (a?.IsChecked != null) b.ToggleMode = true;
         // 클릭 → 액션 실행 후 즉시 상태 갱신(토글 액션의 눌림 표시를 바로 맞추기 위해)
         b.Pressed += () => { Actions.Invoke(action); RefreshShelf(); };
