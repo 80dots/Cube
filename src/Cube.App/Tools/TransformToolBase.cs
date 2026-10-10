@@ -6,6 +6,7 @@ using Cube.Core.Geometry;
 using Cube.Core.Picking;
 using Cube.Core.Scene;
 using Cube.Core.Selection;
+using Cube.Core.Mesh;
 using Godot;
 using NVec2 = System.Numerics.Vector2;
 using NVec3 = System.Numerics.Vector3;
@@ -435,7 +436,7 @@ public abstract class TransformToolBase : SelectTool
                 }
                 // 기본: 마지막 op를 이 노드의 월드 행렬로 복제해 이동/회전/스케일 히스토리 항목으로 기록
                 ComponentTransformOp? op = null;
-                if (_lastOp != null) op = new ComponentTransformOp { Type = _lastOp.Type, Pivot = _lastOp.Pivot, Axis = _lastOp.Axis, BasisX = _lastOp.BasisX, BasisY = _lastOp.BasisY, BasisZ = _lastOp.BasisZ, MeshWorld = doc.Get(id).WorldMatrix };
+                if (_lastOp != null) op = new ComponentTransformOp { Type = _lastOp.Type, Pivot = _lastOp.Pivot, Axis = _lastOp.Axis, BasisX = _lastOp.BasisX, BasisY = _lastOp.BasisY, BasisZ = _lastOp.BasisZ, MeshWorld = doc.Get(id).WorldMatrix, Symmetry = UI.Shell.Instance.SymmetryPlaneFor(id) };
                 var cmd = new MoveVerticesCommand(Label, id, verts, init, after, op, _lastParams?.Clone());
                 if (!cmd.IsNoop) doc.Undo.Push(cmd, alreadyApplied: true);
             }
@@ -482,12 +483,14 @@ public abstract class TransformToolBase : SelectTool
             doc.Notify(new DocChange(ChangeKind.TransformChanged, node.Id));
         }
         CompensateChildren();
-        // 컴포넌트: 메시 로컬 공간 델타를 정점 시작 위치에 더함
+        // 컴포넌트: 메시 로컬 공간 델타를 정점 시작 위치에 더함(Symmetry: − 쪽은 거울 델타, 평면 위는 평면 투영)
         foreach (var (id, verts, init, _, worldInv) in ComponentTargets)
         {
             var d = NVec3.TransformNormal(worldDelta, worldInv);
+            var plane = UI.Shell.Instance.SymmetryPlaneFor(id);
+            var local = Matrix4x4.CreateTranslation(d);
             var pos = new NVec3[verts.Length];
-            for (int i = 0; i < verts.Length; i++) pos[i] = init[i] + d;
+            for (int i = 0; i < verts.Length; i++) pos[i] = plane == null ? init[i] + d : SymmetryOps.Transform(init[i], local, plane);
             MoveVerticesCommand.Preview(doc, id, verts, pos);
         }
         Gizmo.Pivot = PivotWorld + worldDelta;
@@ -633,13 +636,10 @@ public abstract class TransformToolBase : SelectTool
         var doc = Ctx.Doc;
         foreach (var (id, verts, init, world, worldInv) in ComponentTargets)
         {
+            var plane = UI.Shell.Instance.SymmetryPlaneFor(id);
+            var local = world * worldDelta * worldInv; // 로컬 델타(Symmetry 규칙은 로컬 공간에서 적용)
             var pos = new NVec3[verts.Length];
-            for (int i = 0; i < verts.Length; i++)
-            {
-                var w = NVec3.Transform(init[i], world);
-                w = NVec3.Transform(w, worldDelta);
-                pos[i] = NVec3.Transform(w, worldInv);
-            }
+            for (int i = 0; i < verts.Length; i++) pos[i] = SymmetryOps.Transform(init[i], local, plane);
             MoveVerticesCommand.Preview(doc, id, verts, pos);
         }
         Gizmo.MarkDirty();

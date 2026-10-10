@@ -63,9 +63,19 @@ public sealed class InsertEdgeLoopTool : SelectTool
         if (Ctx.Viewport.IsSnapHeld) t = 0.5f; // J: 중앙 스냅
 
         // 히스토리 파라미터(Position)를 가진 위상 명령: 재생 시 같은 시작 엣지에서 새 비율로 다시 끼운다
+        // Symmetry: 거울 엣지에도 같은 비율(거울 위치를 그 엣지에 투영)로 루프를 넣는다(같은 명령 안, 같은 루프면 한 번만)
+        var plane = UI.Shell.Instance.SymmetryPlaneFor(node);
+        int mirrorEdge = -1; float mirrorT = t;
+        if (plane != null) { var map = SymmetryMap.Get(mesh, plane); mirrorEdge = map.MirrorEdge(mesh, edge); if (mirrorEdge >= 0) mirrorT = SymmetryOps.MirrorParam(mesh, plane, edge, t, mirrorEdge); }
         var cmd = new MeshOpCommand("Insert Edge Loop", node.Id, new HistoryParams(HistoryParam.F("Position", t, 0.01f, 0.99f, 0.01f)), (m, p) =>
         {
             var newEdges = MeshOps.InsertEdgeLoop(m, edge, p.Float("Position"));
+            if (mirrorEdge >= 0 && mirrorEdge != edge && !newEdges.Contains(mirrorEdge) && mirrorEdge < m.EdgeCount && m.Edges[mirrorEdge].Alive)
+            {
+                // 첫 루프가 거울 엣지를 이미 지났으면(링이 평면을 가로지름) 두 번째는 건너뛴다
+                var ring = MeshOps.EdgeRing(m, mirrorEdge).entries.Select(x => x.edge);
+                if (!ring.Any(re => newEdges.Contains(re))) newEdges.AddRange(MeshOps.InsertEdgeLoop(m, mirrorEdge, mirrorT + (p.Float("Position") - t)));
+            }
             return (newEdges.Count > 0, SelectMode.Edge, newEdges);
         });
         Ctx.Undo.Push(cmd);

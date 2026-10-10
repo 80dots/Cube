@@ -128,7 +128,8 @@ public partial class Shell
         // Extrude(옵션 쌍), 컴포넌트 삭제(Maya Delete Edge/Vertex), Combine/Separate, 하드/소프트 엣지, 면 뒤집기, Bridge, 엣지 루프/크리즈 툴
         // --- 메시 편집
         RegisterSmartEdgeActions(); // Mesh Display → Smart Soften/Harden(ShellSmartEdges.cs) + 프리셋
-        RegisterNonManifoldActions(); // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
+        RegisterNonManifoldActions();
+        RegisterSymmetryActions(); // Symmetry 모드(ShellSymmetry.cs): symmetry.off/objectX..worldZ/toggle // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
@@ -233,7 +234,8 @@ public partial class Shell
     /// </remarks>
     public void RecordSelection(Action<SelectionState> change)
     {
-        var cmd = SelectionCommand.Record(Document, change);
+        // Symmetry가 켜져 있으면 변경 전 집합을 기억했다가 더해진/빠진 컴포넌트의 거울 짝을 함께 더하고/뺀다(ShellSymmetry.cs)
+        var cmd = SelectionCommand.Record(Document, s => { var before = SnapshotComponents(s); change(s); ApplySymmetryToSelection(s, before); });
         if (!cmd.IsNoop) Document.Undo.Push(cmd, alreadyApplied: true);
     }
 
@@ -660,6 +662,7 @@ public partial class Shell
         // 스냅 버튼은 토글 설정 또는 홀드 키(X = 그리드, V = 점)가 눌려 있으면 눌림 표시
         _snapGrid.SetPressedNoSignal(Settings.SnapToGrid || Hotkeys.HeldKeys.Contains(Key.X));
         _snapPoint.SetPressedNoSignal(Settings.SnapToPoints || Hotkeys.HeldKeys.Contains(Key.V));
+        SyncSymmetryStatus();
     }
 
     /// <summary>File → Open Recent 하위 메뉴. 파일 메뉴가 열릴 때마다 RefreshRecentMenu로 다시 채운다.</summary>
@@ -716,6 +719,7 @@ public partial class Shell
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
             .Item("edit.delete").Item("edit.duplicate").Separator().Item("edit.deleteHistory").Separator()
             .Item("edit.centerPivot").Item("edit.editPivot").Separator()
+            .Submenu("Symmetry", m => { foreach (var id in SymmetryActionIds) m.Item(id); }).Separator()
             .Item("edit.componentEditor").Separator()
             .Item("select.all").Item("select.none").Item("select.hierarchy").Separator()
             .Item("snap.grid").Item("snap.point").Separator()

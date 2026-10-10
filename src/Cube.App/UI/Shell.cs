@@ -306,6 +306,7 @@ public partial class Shell : Control
         }
         // 그리드 간격, 4분할 여부, 기본 툴(Select)과 버튼 초기 상태
         ApplyGridSettings();
+        foreach (var p in Layout.Panels) { var panel = p; panel.Overlay.SymmetryQuadSource = () => SymmetryQuad(panel); } // 대칭 평면 표시
         if (Settings.QuadView) Layout.SetQuad(true);
         Tools.SetTool("select");
         RefreshModeButtons();
@@ -376,6 +377,7 @@ public partial class Shell : Control
         _snapPoint = Icons.IconButton("snap_point", "Snap to Points (toggle; or hold V)", icon, toggle: true);
         _snapPoint.Pressed += () => Actions.Invoke("snap.point");
         StatusLine.AddChild(_snapPoint);
+        BuildSymmetryStatus(s);
         // X/V를 누르고 있는 동안에도 눌린 상태로 표시
         Hotkeys.HeldKeysChanged += SyncStatusLine;
     }

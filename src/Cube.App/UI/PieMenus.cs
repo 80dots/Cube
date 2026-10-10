@@ -32,6 +32,7 @@ public static class PieMenus
             Mode("Object Mode", "mode.object", SelectMode.Object),     // W
             Item(shell, "view.frameSelected", "Frame Selected"),        // NW (Maya: Multi)
             Item(shell, "select.hierarchy", "Select Hierarchy"),
+            Item(shell, "symmetry.toggle", "Symmetry"),
             Item(shell, "display.hideSelection", "Hide Selection"),
             Item(shell, "display.showAll", "Show All"),
             new PieItem("Assign Material ▸", "material.assign", hasMesh) { Sub = () => MaterialItems(shell), Icon = PieIcon("material.assign"), SmallIcon = true },
@@ -58,17 +59,17 @@ public static class PieMenus
             SelectMode.Vertex => new (string, string?)[] {
                 ("mesh.mergeApply", "Merge Vertices"), ("mesh.chamferVerticesApply", "Chamfer Vertex"), ("mesh.multiCut", null), ("mesh.connect", null), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Vertex"), ("mesh.averageVerticesApply", "Average Vertices"), ("mesh.targetWeld", null),
                 ("mesh.extrudeVertexApply", "Extrude Vertex"), ("mesh.bevelVerticesTool", null), ("mesh.mergeToCenter", null), ("mesh.detach", "Detach Components"),
-                ("mesh.creaseTool", null), ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection") },
+                ("mesh.creaseTool", null), ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection"), ("symmetry.toggle", "Symmetry") },
             SelectMode.Edge => new (string, string?)[] {
                 ("mesh.bevelApply", "Bevel Edge"), ("mesh.bridge", null), ("mesh.multiCut", null), ("mesh.connect", null), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Edge"), ("mesh.insertLoop", "Insert Edge Loop"), ("mesh.collapse", "Collapse Edge"),
                 ("mesh.flipTriangleEdge", "Flip Edge"), ("mesh.spinEdgeForward", "Spin Edge"), ("normals.softenHardenAngleApply", "Soften/Harden Edge"), ("normals.smartSoftenHardenApply", "Smart Soften/Harden"),
                 ("mesh.offsetEdgeLoopApply", "Offset Edge Loop"), ("mesh.slideEdgeApply", "Slide Edge"), ("mesh.addDivisionsApply", "Add Divisions"), ("mesh.fillHole", null), ("mesh.bevelTool", null), ("mesh.mergeApply", "Merge Edges"),
-                ("mesh.creaseApply", "Crease"), ("mesh.creaseTool", null), ("mesh.detach", "Detach Components"), ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection") },
+                ("mesh.creaseApply", "Crease"), ("mesh.creaseTool", null), ("mesh.detach", "Detach Components"), ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection"), ("symmetry.toggle", "Symmetry") },
             SelectMode.Face => new (string, string?)[] {
                 ("mesh.bevelApply", "Bevel Face"), ("mesh.bridge", "Bridge Faces"), ("mesh.multiCut", null), ("mesh.duplicateFaces", "Duplicate Face"), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Face"), ("mesh.extractFaces", "Extract Faces"), ("mesh.pokeApply", "Poke Face"),
                 ("mesh.wedgeApply", "Wedge Face"), ("mesh.smoothApply", "Smooth Faces"), ("mesh.addDivisionsApply", "Add Divisions"), ("mesh.triangulate", "Triangulate Faces"), ("mesh.quadrangulateApply", "Quadrangulate Faces"), ("mesh.circularizeApply", "Circularize"),
                 ("mesh.collapse", null), ("mesh.detach", "Detach Components"), ("mesh.mergeApply", "Merge"), ("mesh.reverse", null), ("mesh.targetWeld", null),
-                ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection") },
+                ("select.grow", "Grow Selection"), ("select.shrink", "Shrink Selection"), ("symmetry.toggle", "Symmetry") },
             _ => new (string, string?)[] { ("mode.object", null), ("mode.vertex", null), ("mode.edge", null), ("mode.face", null) },
         };
         var items = new List<PieItem>();

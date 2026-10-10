@@ -21,6 +21,7 @@ public static class ActionIcons
         ["edit.delete"] = "pie_delete", ["mesh.deleteComponents"] = "pie_delete", ["uv.deleteUvs"] = "pie_delete", ["edit.duplicate"] = "pie_duplicate", ["edit.deleteHistory"] = "pie_history",
         ["edit.centerPivot"] = "pie_pivot", ["edit.editPivot"] = "pie_pivot", ["material.assign"] = "pie_material", ["windows.materialEditor"] = "pie_material",
         ["file.exportSelection"] = "pie_export", ["view.frameSelected"] = "pie_frame", ["view.frameAll"] = "pie_frame", ["uv.frameAll"] = "uv_frame", ["uv.frameSelected"] = "uv_frame",
+        ["symmetry.toggle"] = "shelf_mirror", ["symmetry.off"] = "shelf_mirror", ["symmetry.objectX"] = "shelf_mirror", ["symmetry.objectY"] = "shelf_mirror", ["symmetry.objectZ"] = "shelf_mirror", ["symmetry.worldX"] = "shelf_mirror", ["symmetry.worldY"] = "shelf_mirror", ["symmetry.worldZ"] = "shelf_mirror",
         ["tool.select"] = "select", ["tool.lasso"] = "lasso", ["tool.move"] = "move", ["tool.rotate"] = "rotate", ["tool.scale"] = "scale",
         // 메시
         ["mesh.mergeApply"] = "pie_merge", ["mesh.mergeToCenter"] = "pie_merge_center", ["mesh.collapse"] = "pie_collapse", ["mesh.fillHole"] = "shelf_fillhole",

@@ -29,6 +29,8 @@ public partial class ViewportOverlay : Control
     /// 선이 화면에 고정되지 않고 모델을 따라간다(Multi-Cut/Create Polygon/Append Polygon). <see cref="Polyline"/>을 직접 설정하면 해제된다.
     /// </summary>
     public Func<List<Vector2>?>? PolylineSource;
+    /// <summary>Symmetry 모드의 대칭 평면 사각형(화면 px 네 점 + 축 색)을 매 프레임 돌려주는 함수(Shell.SymmetryQuad). null이면 안 그림.</summary>
+    public Func<(List<Vector2> quad, Color color)?>? SymmetryQuadSource;
     /// <summary>좌상단 Poly Count HUD 수치(Shell이 갱신). null이면 그리지 않는다.</summary>
     public PolyCount? Stats;
 
@@ -128,6 +130,13 @@ public partial class ViewportOverlay : Control
         {
             DrawArc(br.center, Mathf.Max(br.radiusPx, 2f), 0, Mathf.Tau, 48, new Color(1f, 0.35f, 0.35f, 0.9f), 1.5f * s, true);
             DrawCircle(br.center, 2 * s, new Color(1f, 0.35f, 0.35f, 0.9f));
+        }
+        // Symmetry 평면: 반투명 채움 + 테두리(축 색)
+        if (SymmetryQuadSource?.Invoke() is { } sq && sq.quad.Count == 4)
+        {
+            var col = sq.color;
+            DrawColoredPolygon(sq.quad.ToArray(), new Color(col.R, col.G, col.B, 0.07f));
+            for (int i = 0; i < 4; i++) DrawLine(sq.quad[i], sq.quad[(i + 1) % 4], new Color(col.R, col.G, col.B, 0.55f), 1f * s, true);
         }
         // Create Polygon Tool: 찍은 점을 잇는 선, 3점 이상이면 닫는 선(반투명), 각 점에 원
         if (PolylineSource != null) _polyline = PolylineSource();

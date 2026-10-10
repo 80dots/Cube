@@ -105,27 +105,47 @@ public sealed class MultiCutTool : SelectTool
         if (continuing) Ctx.Undo.Undo(); else { _steps.Clear(); _chainWorld.Clear(); }
         _steps.Add((vertexHit, edge, t));
         var steps = _steps.ToArray();
-        var cmd = new MeshOpCommand("Multi-Cut", nodeId, m =>
+        // Symmetry: 체인의 각 점을 거울 짝(정점 → 짝 정점, 엣지 → 짝 엣지 + 투영한 비율)으로 바꾼 두 번째 체인도 같은 명령 안에서 자른다
+        (int, int, float)[]? mirrorSteps = null;
+        if (UI.Shell.Instance.SymmetryPlaneFor(node) is { } plane)
         {
-            int prev = -1; bool any = false;
-            var sel = new List<int>();
+            var map = SymmetryMap.Get(mesh, plane);
+            var ms = new List<(int, int, float)>();
             foreach (var (vHit, e, tt) in steps)
             {
-                // 정점이 아니면 엣지를 t 위치에서 나눠 새 정점을 만든다
-                int v = vHit >= 0 && vHit < m.VertexCount && m.Verts[vHit].Alive ? vHit : -1;
-                if (v < 0 && e >= 0 && e < m.EdgeCount && m.Edges[e].Alive) v = MeshOps.SplitEdge(m, e, tt);
-                if (v < 0) continue;
-                any = true;
-                // 직전 점과 같은 면에 있으면 두 정점 사이로 면을 나누고 새 엣지를 선택
-                if (prev >= 0 && prev != v && m.Verts[prev].Alive)
-                {
-                    int ne = MeshOps.SplitFaceBetween(m, prev, v);
-                    if (ne >= 0) sel.Add(ne);
-                }
-                prev = v;
+                int mv = vHit >= 0 ? map.MirrorVertex(vHit) : -1;
+                int me = e >= 0 ? map.MirrorEdge(mesh, e) : -1;
+                float mt = me >= 0 ? SymmetryOps.MirrorParam(mesh, plane, e, tt, me) : tt;
+                ms.Add((mv, me, mt));
             }
-            _lastVertex = prev;
-            return (any, sel.Count > 0 ? SelectMode.Edge : null, sel.Count > 0 ? sel : null);
+            // 전부 원래 점과 같으면(평면 위 체인) 거울 체인 없음
+            if (ms.Where((x, i) => x.Item1 != steps[i].vertex || x.Item2 != steps[i].edge).Any()) mirrorSteps = ms.ToArray();
+        }
+        var cmd = new MeshOpCommand("Multi-Cut", nodeId, m =>
+        {
+            bool anyAll = false; var selAll = new List<int>(); int last = -1;
+            foreach (var chain in mirrorSteps == null ? new[] { steps } : new[] { steps, mirrorSteps })
+            {
+                int prev = -1;
+                foreach (var (vHit, e, tt) in chain)
+                {
+                    // 정점이 아니면 엣지를 t 위치에서 나눠 새 정점을 만든다
+                    int v = vHit >= 0 && vHit < m.VertexCount && m.Verts[vHit].Alive ? vHit : -1;
+                    if (v < 0 && e >= 0 && e < m.EdgeCount && m.Edges[e].Alive) v = MeshOps.SplitEdge(m, e, tt);
+                    if (v < 0) continue;
+                    anyAll = true;
+                    // 직전 점과 같은 면에 있으면 두 정점 사이로 면을 나누고 새 엣지를 선택
+                    if (prev >= 0 && prev != v && m.Verts[prev].Alive)
+                    {
+                        int ne = MeshOps.SplitFaceBetween(m, prev, v);
+                        if (ne >= 0) selAll.Add(ne);
+                    }
+                    prev = v;
+                }
+                if (last < 0) last = prev; // 원래 체인의 마지막 점이 다음 클릭의 직전 점
+            }
+            _lastVertex = last;
+            return (anyAll, selAll.Count > 0 ? SelectMode.Edge : null, selAll.Count > 0 ? selAll : null);
         });
         Ctx.Undo.Push(cmd);
         if (!cmd.DidChange)
@@ -202,7 +222,16 @@ public sealed class MultiCutTool : SelectTool
                 System.Numerics.Matrix4x4.Invert(node.WorldMatrix, out var inv);
                 var lp = NVec3.Transform(r0.Origin, inv);
                 var ln = NVec3.Normalize(NVec3.TransformNormal(normal, System.Numerics.Matrix4x4.Transpose(node.WorldMatrix)));
-                var cmd = new MeshOpCommand("Slice", id, m => { var ne = MeshOps.SliceWithPlane(m, lp, ln); cuts += ne.Count; return (ne.Count > 0, SelectMode.Edge, ne); });
+                // Symmetry: 거울 평면으로 한 번 더 자른다(같은 평면이면 한 번만)
+                var sym = UI.Shell.Instance.SymmetryPlaneFor(id);
+                NVec3 lp2 = lp, ln2 = ln; bool mirrorSlice = false;
+                if (sym != null) { lp2 = sym.Reflect(lp); ln2 = NVec3.Normalize(NVec3.TransformNormal(ln, sym.ReflectMatrix)); mirrorSlice = NVec3.Distance(lp2, lp) > 1e-5f || MathF.Abs(NVec3.Dot(ln2, ln)) < 0.9999f; }
+                var cmd = new MeshOpCommand("Slice", id, m =>
+                {
+                    var ne = MeshOps.SliceWithPlane(m, lp, ln);
+                    if (mirrorSlice) ne.AddRange(MeshOps.SliceWithPlane(m, lp2, ln2));
+                    cuts += ne.Count; return (ne.Count > 0, SelectMode.Edge, ne);
+                });
                 doc.Undo.Push(cmd);
             }
         Ctx.SetHelp?.Invoke(cuts > 0 ? $"Multi-Cut: sliced {cuts} edge(s)." : "Multi-Cut: the slice line did not cross any faces.");

@@ -218,6 +218,12 @@ public sealed class Settings
     [JsonPropertyName("snapToPoints")] public bool SnapToPoints { get; set; }
     /// <summary>Maya Move Tool "Retain component spacing": 점 스냅 시 선택을 통째로 옮긴다(off면 모두 스냅 점으로 모은다).</summary>
     [JsonPropertyName("retainComponentSpacing")] public bool RetainComponentSpacing { get; set; } = true;
+    /// <summary>Symmetry 모드(Maya Tool Settings): 0 Off, 1~3 Object X/Y/Z, 4~6 World X/Y/Z.</summary>
+    [JsonPropertyName("symmetry")] public int Symmetry { get; set; }
+    /// <summary>symmetry.toggle이 다시 켤 때 쓸 마지막 축(1~6).</summary>
+    [JsonPropertyName("symmetryLast")] public int SymmetryLast { get; set; } = 1;
+    /// <summary>거울 짝을 찾는 허용 오차(로컬 단위).</summary>
+    [JsonPropertyName("symmetryTolerance")] public float SymmetryTolerance { get; set; } = 0.001f;
     /// <summary>J 홀드 회전 증분(도). 기본 15.</summary>
     [JsonPropertyName("rotateSnapDegrees")] public float RotateSnapDegrees { get; set; } = 15f;
     /// <summary>J 홀드 스케일 증분. 기본 0.25.</summary>

@@ -252,6 +252,8 @@ public sealed class ComponentTransformOp
     public Vector3 BasisX = Vector3.UnitX, BasisY = Vector3.UnitY, BasisZ = Vector3.UnitZ; // 스케일 기저(월드)
     /// <summary>드래그 당시 메시 노드의 월드 행렬. 월드 델타를 메시 로컬로 옮길 때 쓴다.</summary>
     public Matrix4x4 MeshWorld = Matrix4x4.Identity;
+    /// <summary>드래그 당시 Symmetry 평면(오브젝트 공간, null = 꺼짐). 재실행도 같은 규칙(− 쪽 거울 변형, 평면 위 투영)을 쓴다.</summary>
+    public Selection.SymmetryPlane? Symmetry;
 
     /// <summary>종류에 맞는 파라미터 하나짜리 묶음을 만든다(드래그 결과 값으로 초기화).</summary>
     public HistoryParams DefaultParams(Vector3 translate, float angleDeg, Vector3 scale) => Type switch

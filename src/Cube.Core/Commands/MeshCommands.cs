@@ -156,7 +156,7 @@ public sealed class MoveVerticesCommand : ICommand, IAppliedHook
                         for (int i = 0; i < ids.Length; i++)
                         {
                             if (ids[i] >= m.VertexCount || !m.Verts[ids[i]].Alive) continue;
-                            var v = m.Verts[ids[i]]; v.Position = Vector3.Transform(v.Position, mat); m.Verts[ids[i]] = v;
+                            var v = m.Verts[ids[i]]; v.Position = Selection.SymmetryOps.Transform(v.Position, mat, op.Symmetry); m.Verts[ids[i]] = v;
                         }
                         return true;
                     }),

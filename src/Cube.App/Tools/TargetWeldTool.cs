@@ -76,12 +76,26 @@ public sealed class TargetWeldTool : SelectTool
                         if (target == null || target.Value.Node != nodeId || target.Value.Component == src) { Ctx.SetHelp?.Invoke("Target Weld: release over another vertex of the same mesh."); return true; }
                         int dst = target.Value.Component;
                         // 명령 본문: 두 정점이 살아 있으면 원본을 대상 위치로 옮긴 뒤 병합, 결과로 대상 정점을 선택
+                        // Symmetry: 거울 짝 정점 쌍도 같은 명령 안에서 합친다
+                        int msrc = -1, mdst = -1;
+                        if (UI.Shell.Instance.SymmetryPlaneFor(nodeId) is { } plane && Ctx.Doc.Find(nodeId)?.Mesh is { } mesh0)
+                        {
+                            var map = SymmetryMap.Get(mesh0, plane);
+                            msrc = map.MirrorVertex(src); mdst = map.MirrorVertex(dst);
+                            if (msrc == src || mdst == dst || msrc < 0 || mdst < 0) { msrc = -1; mdst = -1; }
+                        }
                         var cmd = new MeshOpCommand("Target Weld", nodeId, m =>
                         {
                             if (src >= m.VertexCount || dst >= m.VertexCount || !m.Verts[src].Alive || !m.Verts[dst].Alive) return (false, null, null);
                             var vs = m.Verts[src]; vs.Position = m.Verts[dst].Position; m.Verts[src] = vs;
                             int merged = MeshOps.MergeVertices(m, new[] { dst, src }, 1e-6f);
-                            return (merged > 0, SelectMode.Vertex, new[] { dst });
+                            var result = new List<int> { dst };
+                            if (merged > 0 && msrc >= 0 && msrc < m.VertexCount && mdst < m.VertexCount && m.Verts[msrc].Alive && m.Verts[mdst].Alive)
+                            {
+                                var mv = m.Verts[msrc]; mv.Position = m.Verts[mdst].Position; m.Verts[msrc] = mv;
+                                if (MeshOps.MergeVertices(m, new[] { mdst, msrc }, 1e-6f) > 0) result.Add(mdst);
+                            }
+                            return (merged > 0, SelectMode.Vertex, result);
                         });
                         Ctx.Undo.Push(cmd);
                         Ctx.SetHelp?.Invoke(cmd.DidChange ? "Target Weld: merged." : "Target Weld: could not merge (would create a non-manifold).");
