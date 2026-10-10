@@ -24,7 +24,8 @@ public partial class Shell
         HelpLine.ClipText = true;
         row.AddChild(HelpLine);
         BuildAutoSaveStatus(row, s); // 다음 자동 저장까지 남은 초(ShellAutoSave.cs)
-        _logButton = new Button { Name = "LogButton", Text = "Log", Flat = true, TooltipText = "Show the log panel (messages, warnings and errors)", FocusMode = FocusModeEnum.None };
+        // 아이콘 버튼(v0.0.75): 새 오류/경고가 있을 때만 옆에 개수 텍스트를 붙인다
+        _logButton = new Button { Name = "LogButton", Text = "", Flat = true, TooltipText = "Log panel (messages, warnings and errors)", FocusMode = FocusModeEnum.None, Icon = Icons.Get("panel_log", (int)(16 * s)), IconAlignment = HorizontalAlignment.Left };
         _logButton.AddThemeFontSizeOverride("font_size", (int)(12 * s));
         _logButton.Pressed += () => Actions.Invoke("windows.log");
         row.AddChild(_logButton);
@@ -121,7 +122,7 @@ public partial class Shell
         // ③ 표시할 수가 바뀌었을 때만 버튼 텍스트와 색(오류 = 빨강, 경고 = 노랑, 없음 = 기본)을 갱신
         if (_shownCounts == (newErr, newWarn)) return;
         _shownCounts = (newErr, newWarn);
-        _logButton.Text = newErr > 0 ? $"Log  ● {newErr} error(s)" : newWarn > 0 ? $"Log  ● {newWarn} warning(s)" : "Log";
+        _logButton.Text = newErr > 0 ? $"● {newErr} error(s)" : newWarn > 0 ? $"● {newWarn} warning(s)" : "";
         var col = newErr > 0 ? new Color(1f, 0.45f, 0.4f) : newWarn > 0 ? new Color(1f, 0.8f, 0.35f) : MayaTheme.Text;
         _logButton.AddThemeColorOverride("font_color", col);
         _logButton.AddThemeColorOverride("font_hover_color", col);
