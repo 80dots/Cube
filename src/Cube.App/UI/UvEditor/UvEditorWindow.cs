@@ -151,7 +151,7 @@ public partial class UvEditorWindow : FloatingPanel
             .Op("uv.symmetrize").Item("uv.unitize").Separator()
             .Submenu("Symmetry", m => m.Item("uv.symmetryOff").Item("uv.symmetryU").Item("uv.symmetryV").Separator().Item("uv.symmetryCenterSelection")).Separator()
             .Submenu("Distribute Shells", m => m.Item("uv.distributeShellsU").Item("uv.distributeShellsV")).Item("uv.gatherShells").Op("uv.layout").Item("uv.orientShells").Item("uv.orientToEdge").Op("uv.randomizeShells")
-            .Item("uv.snapAndStack").Item("uv.snapTogether").Item("uv.stackShells").Item("uv.stackSimilar").Item("uv.unstackShells").Separator()
+            .Item("uv.snapAndStack").Item("uv.snapTogether").Item("uv.stackShells").Item("uv.stackSimilar").Item("uv.unstackShells").Op("uv.cloneShell").Separator()
             .Item("uv.flipReversed").Submenu("Map Border", m => m.Item("uv.mapBorderSquare").Item("uv.mapBorderCircle")).Item("uv.optimize").Item("uv.straightenBorder").Item("uv.straightenShell").Op("uv.straighten").Item("uv.unfold");
         M.Build(Add("Tools")).Item("tool.select").Item("tool.move").Item("tool.rotate").Item("tool.scale").Item("uv.toolNone").Separator()
             .Item("uv.toolMoveShell").Item("uv.toolSmooth").Item("uv.toolTweak").Item("uv.toolCutSew").Item("uv.toolGrab").Item("uv.toolPinBrush").Item("uv.toolPinch").Item("uv.toolSmear").Separator().Item("uv.brushOptions");

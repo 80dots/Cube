@@ -100,6 +100,38 @@ public partial class Shell
         UvEditorWindow?.Canvas.Invalidate();
     }
 
+    /// <summary>
+    /// Clone UV Shell 실행: 노드마다 선택 UV 점이 속한 셸이 정확히 하나여야 하며(원본), 그 UV를 대상 셸들에 복사한다(UvEditCommand, Undo 한 단계).
+    /// 원본은 Redo 때도 같은 규칙(선택 점의 셸)으로 다시 찾는다.
+    /// </summary>
+    private void CloneUvShell(CloneShellTarget target, bool keepPosition)
+    {
+        var nodes = new List<SceneNode>();
+        foreach (var n in UvNodes())
+        {
+            var topo = UvTopology.Build(n.Mesh!);
+            var shells = UvOps.ShellsOf(topo, UvPointSelection(n, topo)).ToList();
+            if (shells.Count == 0) continue;
+            if (shells.Count > 1) { HelpLine.Text = $"Clone UV Shell: select exactly one source shell ({shells.Count} selected on {n.Name})."; return; }
+            nodes.Add(n);
+        }
+        if (nodes.Count == 0) { HelpLine.Text = "Clone UV Shell: select the source UV shell first."; return; }
+        int cloned = 0, mismatched = 0, candidates = 0;
+        using (Document.Undo.BeginGroup("Clone UV Shell"))
+            foreach (var node in nodes)
+                Document.Undo.Push(new UvEditCommand("Clone UV Shell", node.Id, m =>
+                {
+                    var topo = UvTopology.Build(m);
+                    int src = UvOps.ShellsOf(topo, UvPointSelection(node, topo)).FirstOrDefault(-1); if (src < 0) return;
+                    var rep = UvOps.CloneToSimilarShells(m, topo, src, target, keepPosition);
+                    cloned += rep.Cloned; mismatched += rep.Mismatched; candidates += rep.Candidates;
+                }));
+        UvEditorWindow?.Canvas.Invalidate();
+        HelpLine.Text = candidates == 0
+            ? (target == CloneShellTarget.Stacked ? "Clone UV Shell: no shell overlaps the source (stack them first, or choose 'All similar shells')." : "Clone UV Shell: no other shell in the mesh.")
+            : $"Clone UV Shell: {cloned} shell(s) cloned from the source" + (mismatched > 0 ? $", {mismatched} skipped (different topology)." : ".");
+    }
+
     /// <summary>ForEachUvPoints의 셸 버전: 선택 UV 점이 속한 셸(섬) 번호 목록을 op에 넘긴다(Unfold/Layout/Stack 등 셸 단위 연산).</summary>
     private void ForEachUvShells(string name, Action<PolyMesh, UvTopology, List<int>> op)
         => ForEachUvPoints(name, (m, topo, pts) => op(m, topo, UvOps.ShellsOf(topo, pts).ToList()));
@@ -237,6 +269,10 @@ public partial class Shell
         Actions.Register("uv.stackShells", "Stack Shells", () => ForEachUvShells("Stack Shells", (m, t, s) => UvOps.StackShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.stackSimilar", "Stack Similar Shells", () => ForEachUvShells("Stack Similar Shells", (m, t, s) => UvOps.StackSimilarShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.unstackShells", "Unstack Shells", () => ForEachUvShells("Unstack Shells", (m, t, s) => UvOps.UnstackShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);
+        // Clone UV Shell(v0.0.68): 선택한 셸 하나의 UV를 같은 위상의 셸(스택된 것 / 메시의 전부)에 그대로 복사한다(UvOps.Clone.cs).
+        RegisterOptionPair("uv.cloneShell", "Clone UV Shell", new OptionSpec("Clone UV Shell Options", v => { v.Set("target", 0); v.Set("placement", 0); },
+            new[] { OptionField.E("target", "Target shells", "Stacked shells (overlapping the source)", "All similar shells in the mesh"), OptionField.E("placement", "Placement", "Same as source (stacked)", "Keep each target's position") }, "Clone"),
+            () => CloneUvShell((CloneShellTarget)Options("uv.cloneShell").Int("target"), Options("uv.cloneShell").Int("placement") == 1), HasUvPoints);
         Actions.Register("uv.distributeShellsU", "Distribute Shells (U)", () => ForEachUvShells("Distribute Shells", (m, t, s) => UvOps.DistributeShells(m, t, s, true, 0.02f)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.distributeShellsV", "Distribute Shells (V)", () => ForEachUvShells("Distribute Shells", (m, t, s) => UvOps.DistributeShells(m, t, s, false, 0.02f)), canExecute: HasUvPoints, repeatable: true);
         Actions.Register("uv.gatherShells", "Gather Shells", () => ForEachUvShells("Gather Shells", (m, t, s) => UvOps.GatherShells(m, t, s)), canExecute: HasUvPoints, repeatable: true);

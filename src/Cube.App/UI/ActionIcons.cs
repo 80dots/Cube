@@ -46,7 +46,7 @@ public static class ActionIcons
         ["uv.toolNone"] = "select", ["uv.toolTweak"] = "uv_tweak", ["uv.toolMoveShell"] = "move", ["uv.toolGrab"] = "uv_brush", ["uv.toolSmooth"] = "uv_brush", ["uv.toolPinch"] = "uv_brush", ["uv.toolSmear"] = "uv_brush", ["uv.toolPinBrush"] = "uv_pin", ["uv.toolCutSew"] = "uv_cutsew", ["uv.brushOptions"] = "uv_brush",
         ["uv.setEditor"] = "uv_sets", ["uv.setCreate"] = "uv_sets", ["uv.setCopy"] = "uv_sets", ["uv.setDelete"] = "uv_sets", ["uv.setNext"] = "uv_sets",
         ["uv.rotateCw"] = "rotate", ["uv.rotateCcw"] = "rotate", ["uv.rotateApply"] = "rotate", ["uv.symmetrizeApply"] = "shelf_mirror", ["uv.cycle"] = "rotate",
-        ["uv.orientShells"] = "rotate", ["uv.orientToEdge"] = "rotate", ["uv.randomizeShellsApply"] = "pie_island", ["uv.stackShells"] = "pie_island", ["uv.stackSimilar"] = "pie_island", ["uv.unstackShells"] = "pie_island",
+        ["uv.orientShells"] = "rotate", ["uv.orientToEdge"] = "rotate", ["uv.randomizeShellsApply"] = "pie_island", ["uv.stackShells"] = "pie_island", ["uv.cloneShell"] = "pie_duplicate", ["uv.cloneShellApply"] = "pie_duplicate", ["uv.stackSimilar"] = "pie_island", ["uv.unstackShells"] = "pie_island",
         ["uv.snapAndStack"] = "pie_island", ["uv.distributeShellsU"] = "pie_island", ["uv.distributeShellsV"] = "pie_island", ["uv.gatherShells"] = "pie_island", ["uv.flipReversed"] = "uv_flip_u",
         ["uv.mapBorderSquare"] = "pie_boundary", ["uv.mapBorderCircle"] = "pie_boundary", ["uv.copy"] = "pie_duplicate", ["uv.paste"] = "pie_duplicate",
         ["uv.cycleBackground"] = "view_tex", ["uv.checkerMap"] = "view_uv", ["uv.checkerSizeUp"] = "view_uv", ["uv.checkerSizeDown"] = "view_uv", ["uv.viewShaded"] = "view_shade", ["uv.viewDistortion"] = "view_shade",
