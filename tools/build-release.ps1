@@ -30,8 +30,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "dotnet build 실패" }
 
     Write-Host "== godot export (Windows Desktop)"
-    & $Godot --headless --path . --export-release "Windows Desktop" (Join-Path $buildDir "Cube.exe")
-    if ($LASTEXITCODE -ne 0) { throw "godot export 실패 ($LASTEXITCODE)" }
+    # Godot은 종료 시 stderr로 무해한 에디터 설정 경고(shutdown_adb_on_exit)를 찍으므로 그 동안 Stop을 풀고 종료 코드만 본다
+    $ErrorActionPreference = "Continue"
+    & $Godot --headless --path . --export-release "Windows Desktop" (Join-Path $buildDir "Cube.exe") 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -notmatch "savepack|Storing File|shutdown_adb_on_exit|_EDITOR_GET" }
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($code -ne 0) { throw "godot export 실패 ($code)" }
     if (-not (Test-Path (Join-Path $buildDir "Cube.exe"))) { throw "Cube.exe가 생성되지 않았습니다" }
     Get-ChildItem $buildDir | ForEach-Object { Write-Host ("   {0,10:N0}  {1}" -f $_.Length, $_.Name) }
 
@@ -81,8 +85,11 @@ try {
         New-Item -ItemType Directory -Force $androidDir | Out-Null
         $apkBuild = Join-Path $androidDir "Cube.apk"
         if (Test-Path $apkBuild) { Remove-Item $apkBuild }
-        & $Godot --headless --path . --export-release "Android" $apkBuild
-        if ($LASTEXITCODE -ne 0) { throw "godot android export 실패 ($LASTEXITCODE)" }
+        $ErrorActionPreference = "Continue"
+        & $Godot --headless --path . --export-release "Android" $apkBuild 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -notmatch "savepack|Storing File|ADDING:|shutdown_adb_on_exit|_EDITOR_GET" }
+        $code2 = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        if ($code2 -ne 0) { throw "godot android export 실패 ($code2)" }
         if (-not (Test-Path $apkBuild)) { throw "APK가 생성되지 않았습니다" }
         $apk = Join-Path $distDir "Cube-$version-android.apk"
         Copy-Item -Force $apkBuild $apk
