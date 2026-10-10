@@ -55,7 +55,7 @@ public static class PieMenus
                 ("mesh.combine", null), ("mesh.mirrorApply", "Mirror"), ("mesh.multiCut", null), ("mesh.smoothApply", "Smooth"), ("mesh.extrudeApply", "Extrude"), ("edit.delete", null), ("mesh.separate", null), ("mesh.insertLoop", "Insert Edge Loop"),
                 ("mesh.targetWeld", null), ("mesh.fillHole", "Fill Holes"), ("mesh.appendPolygon", null), ("normals.softenHardenAngleApply", "Soften/Harden Edge"), ("normals.smartSoftenHardenApply", "Smart Soften/Harden"),
                 ("mesh.offsetEdgeLoopApply", "Offset Edge Loop"), ("mesh.triangulate", null), ("mesh.quadrangulateApply", "Quadrangulate"), ("mesh.booleans", "Booleans ▸"), ("mesh.cleanup", null), ("mesh.connect", null),
-                ("mesh.arrayApply", "Array"), ("edit.duplicate", null), ("edit.centerPivot", null), ("edit.editPivot", null), ("material.assign", "Assign Material ▸") },
+                ("mesh.arrayApply", "Array"), ("edit.duplicate", null), ("edit.centerPivot", null), ("edit.editPivot", null), ("edit.freezeApply", "Freeze Transformations"), ("material.assign", "Assign Material ▸") },
             SelectMode.Vertex => new (string, string?)[] {
                 ("mesh.mergeApply", "Merge Vertices"), ("mesh.chamferVerticesApply", "Chamfer Vertex"), ("mesh.multiCut", null), ("mesh.connect", null), ("mesh.extrudeApply", "Extrude"), ("edit.delete", "Delete Vertex"), ("mesh.averageVerticesApply", "Average Vertices"), ("mesh.targetWeld", null),
                 ("mesh.extrudeVertexApply", "Extrude Vertex"), ("mesh.bevelVerticesTool", null), ("mesh.mergeToCenter", null), ("mesh.detach", "Detach Components"),

@@ -129,7 +129,7 @@ public partial class Shell
         // --- 메시 편집
         RegisterSmartEdgeActions(); // Mesh Display → Smart Soften/Harden(ShellSmartEdges.cs) + 프리셋
         RegisterNonManifoldActions();
-        RegisterSymmetryActions(); RegisterUvSymmetryActions(); // UV 편집기 Symmetry(ShellUvSymmetry.cs): uv.symmetryOff/U/V/toggle/centerSelection // Symmetry 모드(ShellSymmetry.cs): symmetry.off/objectX..worldZ/toggle // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
+        RegisterSymmetryActions(); RegisterUvSymmetryActions(); RegisterFreezeActions(); // Freeze/Reset Transformations(ShellFreeze.cs) // UV 편집기 Symmetry(ShellUvSymmetry.cs): uv.symmetryOff/U/V/toggle/centerSelection // Symmetry 모드(ShellSymmetry.cs): symmetry.off/objectX..worldZ/toggle // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
@@ -719,6 +719,7 @@ public partial class Shell
             .Item("edit.undo").Item("edit.redo").Item("edit.repeatLast").Separator()
             .Item("edit.delete").Item("edit.duplicate").Separator().Item("edit.deleteHistory").Separator()
             .Item("edit.centerPivot").Item("edit.editPivot").Separator()
+            .Op("edit.freeze").Item("edit.resetTransforms").Separator()
             .Submenu("Symmetry", m => { foreach (var id in SymmetryActionIds) m.Item(id); }).Separator()
             .Item("edit.componentEditor").Separator()
             .Item("select.all").Item("select.none").Item("select.hierarchy").Separator()

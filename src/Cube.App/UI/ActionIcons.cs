@@ -19,7 +19,7 @@ public static class ActionIcons
         ["uv.selectTextureBorders"] = "pie_boundary", ["uv.selectUnmapped"] = "mode_uv", ["uv.shortestPath"] = "mode_edge", ["uv.containedFaces"] = "mode_face", ["uv.connectedFaces"] = "mode_face",
         // 편집·오브젝트
         ["edit.delete"] = "pie_delete", ["mesh.deleteComponents"] = "pie_delete", ["uv.deleteUvs"] = "pie_delete", ["edit.duplicate"] = "pie_duplicate", ["edit.deleteHistory"] = "pie_history",
-        ["edit.centerPivot"] = "pie_pivot", ["edit.editPivot"] = "pie_pivot", ["material.assign"] = "pie_material", ["windows.materialEditor"] = "pie_material",
+        ["edit.centerPivot"] = "pie_pivot", ["edit.editPivot"] = "pie_pivot", ["edit.freeze"] = "pie_pivot", ["edit.freezeApply"] = "pie_pivot", ["edit.resetTransforms"] = "pie_pivot", ["material.assign"] = "pie_material", ["windows.materialEditor"] = "pie_material",
         ["file.exportSelection"] = "pie_export", ["view.frameSelected"] = "pie_frame", ["view.frameAll"] = "pie_frame", ["uv.frameAll"] = "uv_frame", ["uv.frameSelected"] = "uv_frame",
         ["symmetry.toggle"] = "shelf_mirror", ["symmetry.off"] = "shelf_mirror", ["symmetry.objectX"] = "shelf_mirror", ["symmetry.objectY"] = "shelf_mirror", ["symmetry.objectZ"] = "shelf_mirror", ["symmetry.worldX"] = "shelf_mirror", ["symmetry.worldY"] = "shelf_mirror", ["symmetry.worldZ"] = "shelf_mirror",
         ["uv.symmetryToggle"] = "shelf_mirror", ["uv.symmetryOff"] = "shelf_mirror", ["uv.symmetryU"] = "uv_flip_u", ["uv.symmetryV"] = "uv_flip_v", ["uv.symmetryCenterSelection"] = "shelf_mirror",
