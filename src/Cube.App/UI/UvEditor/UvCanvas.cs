@@ -119,11 +119,15 @@ public partial class UvCanvas : Control
     // _xformTool: 진행 중인 변형의 이름(Undo 항목·Action Popup용).
     private readonly List<(NodeId node, UvTopology topo, int[] points, NVec2[] initial, UvEditCommand cmd)> _xform = new();
     private string _xformTool = "";
+    /// <summary>드래그 시작 때의 UV Symmetry 축선(꺼져 있으면 null). UpdateTransform이 반대쪽 점에 거울 변형을 적용한다.</summary>
+    private UvSymmetryPlane? _xformPlane;
     // 브러시 상태: _brushPos = 브러시 원 위치(null = 숨김), _brushLast = 직전 스트로크 위치, _brushing = 스트로크 중,
     // _cutSewPainting = Cut/Sew 칠하기 중, _cutSewSew = Ctrl(꿰매기) 모드.
     private GVec2? _brushPos; private GVec2 _brushLast; private bool _brushing; private bool _cutSewPainting; private bool _cutSewSew;
     // 한 스트로크에서 이미 자르거나 꿰맨 (노드, 엣지) — 같은 엣지를 반복 처리하지 않게.
     private readonly HashSet<(NodeId, int)> _cutSewDone = new();
+    /// <summary>CutSewAt이 거울 위치를 처리하는 중(재귀 가드).</summary>
+    private bool _cutSewMirroring;
 
     /// <summary>
     /// 캔버스를 초기화한다: 입력/포커스/크기/클리핑 설정, 그리드 텍스처 로드, 그리기 레이어 생성, 파이 메뉴 추가, 문서·선택·모드·툴 이벤트 구독.
@@ -531,6 +535,13 @@ public partial class UvCanvas : Control
             return;
         }
         DrawHover(targets, sel, s);
+        // UV Symmetry 축선(U = 빨강 세로선, V = 초록 가로선).
+        if (_shell.UvSymmetryPlane is { } symPlane)
+        {
+            var col = symPlane.Axis == 0 ? new Color(1f, 0.35f, 0.35f, 0.85f) : new Color(0.4f, 1f, 0.35f, 0.85f);
+            if (symPlane.Axis == 0) { float x = UvToPx(new NVec2(symPlane.Center, 0)).X; DrawLine(new GVec2(x, 0), new GVec2(x, Size.Y), col, 1.5f * s); }
+            else { float y = UvToPx(new NVec2(0, symPlane.Center)).Y; DrawLine(new GVec2(0, y), new GVec2(Size.X, y), col, 1.5f * s); }
+        }
         // 마키 사각형.
         if (_marquee && _marqueeEnd is { } me)
         {
@@ -550,7 +561,7 @@ public partial class UvCanvas : Control
         string toolText = _tool == UvCanvasTool.None ? _shell.Tools.Current?.Label ?? "" : _tool.ToString();
         string setText = "";
         var first = targets[0].Mesh!; if (first.UvSets.Count > 1) setText = $"   set: {first.UvSets[Math.Clamp(first.CurrentUvSet, 0, first.UvSets.Count - 1)].Name}";
-        DrawString(font, new GVec2(12 * s, Size.Y - 10 * s), $"{modeText} mode   tool: {toolText}   zoom {(_zoom / 400f):P0}{setText}{(_isolate != null ? "   [isolate]" : "")}{(_pixelSnap ? "   [pixel snap]" : "")}", HorizontalAlignment.Left, -1, fs, MayaTheme.TextDim);
+        DrawString(font, new GVec2(12 * s, Size.Y - 10 * s), $"{modeText} mode   tool: {toolText}   zoom {(_zoom / 400f):P0}{setText}{(_isolate != null ? "   [isolate]" : "")}{(_pixelSnap ? "   [pixel snap]" : "")}{(_shell.UvSymmetryPlane is { } sy ? $"   [symmetry {(sy.Axis == 0 ? "U" : "V")} {sy.Center:0.###}]" : "")}", HorizontalAlignment.Left, -1, fs, MayaTheme.TextDim);
         // 통계 HUD: 노드별로 지오메트리 버전이 바뀌었을 때만 다시 계산.
         if (_showStats)
         {
@@ -1431,7 +1442,7 @@ public partial class UvCanvas : Control
         if (items.Length == 0 && _modifier != SelectModifier.Replace) return;
         if (sel.Mode == SelectMode.Object && items.Length == 0) return;
         var mod = _modifier;
-        _shell.RecordSelection(ss => ss.Apply(items, mod));
+        _shell.RecordUvSelection(ss => ss.Apply(items, mod)); // UV Symmetry가 켜져 있으면 UV 거울 짝까지(ShellUvSymmetry.cs)
     }
 
     /// <summary>
@@ -1490,7 +1501,7 @@ public partial class UvCanvas : Control
         if (items.Count == 0 && _modifier != SelectModifier.Replace) return;
         if (sel.Mode == SelectMode.Object) return;
         var mod = _modifier;
-        _shell.RecordSelection(ss => ss.Apply(items, mod));
+        _shell.RecordUvSelection(ss => ss.Apply(items, mod));
     }
 
     // ---------------------------------------------------------------- 변형 (조작기 드래그)
@@ -1515,12 +1526,15 @@ public partial class UvCanvas : Control
     private bool CaptureSelectionForTransform(string name, Func<SceneNode, HashSet<int>>? pointsOf)
     {
         _xform.Clear();
+        _xformPlane = _shell.UvSymmetryPlane;
         int count = 0;
         foreach (var node in TargetNodes())
         {
             var pts = pointsOf?.Invoke(node) ?? SelectedPoints(node);
             if (pts.Count == 0) continue;
             var topo = Topo(node);
+            // UV Symmetry: 집은 점의 거울 짝도 함께 움직인다(Tweak/Move Shell처럼 선택과 무관하게 집은 점도 포함)
+            if (_xformPlane != null) { var map = UvSymmetryMap.Build(topo, _xformPlane); var ext = new HashSet<int>(pts); foreach (int q in pts) { int mq = map.MirrorPoint(q); if (mq >= 0) ext.Add(mq); } pts = ext; }
             var ids = pts.Where(i => !topo.Points[i].Pinned || _tool == UvCanvasTool.Tweak).ToArray();
             if (ids.Length == 0) continue;
             var init = ids.Select(i => topo.Points[i].Uv).ToArray();
@@ -1582,10 +1596,12 @@ public partial class UvCanvas : Control
                 }
         }
         // 시작 UV × 변환을 각 점에 쓰고 메시 속성 변경을 통지한다(Undo 기록은 놓을 때).
+        // UV Symmetry: 피벗(집은 점/선택 중심)이 있는 쪽이 드래그를 그대로 따르고 반대쪽은 거울 변형, 축선 위 점은 축선에 남는다.
+        var plane = _xformPlane; bool positive = plane == null || plane.Signed(_pivotUv) >= -plane.Tolerance;
         foreach (var (id, topo, ids, init, _) in _xform)
         {
             var mesh = _shell.Document.Get(id).Mesh!;
-            for (int i = 0; i < ids.Length; i++) UvOps.SetPointUv(mesh, topo, ids[i], NVec2.Transform(init[i], xf));
+            for (int i = 0; i < ids.Length; i++) UvOps.SetPointUv(mesh, topo, ids[i], plane == null ? NVec2.Transform(init[i], xf) : UvSymmetryOps.Transform(init[i], xf, plane, positive));
             _shell.Document.Notify(new DocChange(ChangeKind.MeshAttributes, id));
         }
         QueueRedraw();
@@ -1688,10 +1704,23 @@ public partial class UvCanvas : Control
     /// </summary>
     private void ApplyBrush(GVec2 px)
     {
-        float r = BrushRadius; float strength = BrushStrength;
         var deltaUv = new NVec2((px.X - _brushLast.X) / _zoom, -(px.Y - _brushLast.Y) / _zoom);
         _brushLast = px;
-        var centerUv = PxToUv(px);
+        BrushStamp(px, deltaUv, PxToUv(px));
+        // UV Symmetry: 거울 위치에도 같은 스탬프(이동량은 축 성분 반전)
+        if (_shell.UvSymmetryPlane is { } sp)
+        {
+            var mc = sp.Reflect(PxToUv(px));
+            var md = sp.Axis == 0 ? new NVec2(-deltaUv.X, deltaUv.Y) : new NVec2(deltaUv.X, -deltaUv.Y);
+            BrushStamp(UvToPx(mc), md, mc);
+        }
+        QueueRedraw();
+    }
+
+    /// <summary>브러시 스탬프 하나(중심 px, UV 이동량, 중심 UV)를 모든 대상에 적용한다.</summary>
+    private void BrushStamp(GVec2 px, NVec2 deltaUv, NVec2 centerUv)
+    {
+        float r = BrushRadius; float strength = BrushStrength;
         foreach (var (id, topo, ids, _, _) in _xform)
         {
             var mesh = _shell.Document.Get(id).Mesh!;
@@ -1728,7 +1757,6 @@ public partial class UvCanvas : Control
             }
             if (any) _shell.Document.Notify(new DocChange(ChangeKind.MeshAttributes, id));
         }
-        QueueRedraw();
     }
 
     /// <summary>
@@ -1751,6 +1779,12 @@ public partial class UvCanvas : Control
     /// </summary>
     private void CutSewAt(GVec2 px)
     {
+        // UV Symmetry: 거울 위치의 엣지도 같은 스트로크에서 처리(재귀 1단계)
+        if (!_cutSewMirroring && _shell.UvSymmetryPlane is { } sp)
+        {
+            _cutSewMirroring = true;
+            try { CutSewAt(UvToPx(sp.Reflect(PxToUv(px)))); } finally { _cutSewMirroring = false; }
+        }
         var hit = PickEdgeAny(px); if (hit == null) return;
         var (node, edge) = hit.Value;
         if (!_cutSewDone.Add((node.Id, edge))) return;

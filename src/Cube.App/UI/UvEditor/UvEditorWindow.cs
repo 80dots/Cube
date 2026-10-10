@@ -97,6 +97,18 @@ public partial class UvEditorWindow : FloatingPanel
         _background.Selected = (int)UvBackground.UvTexture;
         _background.ItemSelected += i => { Canvas.Background = (UvBackground)(int)i; };
         bar.AddChild(_background);
+        // UV Symmetry(Maya UV Toolkit): Off/U/V 드롭다운 + 축선 위치(ShellUvSymmetry.cs).
+        bar.AddChild(new VSeparator());
+        _symmetry = new OptionButton { FocusMode = Control.FocusModeEnum.None, TooltipText = "UV Symmetry: mirror selections and edits across u = center (U) or v = center (V)" };
+        foreach (var name in new[] { "Sym: Off", "Sym: U", "Sym: V" }) _symmetry.AddItem(name);
+        _symmetry.ItemSelected += i => shell.Actions.Invoke(i switch { 1 => "uv.symmetryU", 2 => "uv.symmetryV", _ => "uv.symmetryOff" });
+        bar.AddChild(_symmetry);
+        _symCenter = new SpinBox { MinValue = -10, MaxValue = 10, Step = 0.001, CustomArrowStep = 0.05, TooltipText = "Symmetry center (u or v)", Alignment = HorizontalAlignment.Center };
+        _symCenter.CustomMinimumSize = new Vector2(78 * s, 0);
+        _symCenter.ValueChanged += v => { if (!_syncingSym) shell.SetUvSymmetryCenter((float)v); };
+        bar.AddChild(_symCenter);
+        shell.UvSymmetryChanged += SyncSymmetry;
+        SyncSymmetry();
         Content.AddChild(bar);
         Content.AddChild(Canvas);
 
@@ -137,6 +149,7 @@ public partial class UvEditorWindow : FloatingPanel
             .Op("uv.matchGrid").Item("uv.matchUvs").Op("uv.normalize")
             .Submenu("Rotate", m => m.Op("uv.rotate").Item("uv.rotateCw").Item("uv.rotateCcw"))
             .Op("uv.symmetrize").Item("uv.unitize").Separator()
+            .Submenu("Symmetry", m => m.Item("uv.symmetryOff").Item("uv.symmetryU").Item("uv.symmetryV").Separator().Item("uv.symmetryCenterSelection")).Separator()
             .Submenu("Distribute Shells", m => m.Item("uv.distributeShellsU").Item("uv.distributeShellsV")).Item("uv.gatherShells").Op("uv.layout").Item("uv.orientShells").Item("uv.orientToEdge").Op("uv.randomizeShells")
             .Item("uv.snapAndStack").Item("uv.snapTogether").Item("uv.stackShells").Item("uv.stackSimilar").Item("uv.unstackShells").Separator()
             .Item("uv.flipReversed").Submenu("Map Border", m => m.Item("uv.mapBorderSquare").Item("uv.mapBorderCircle")).Item("uv.optimize").Item("uv.straightenBorder").Item("uv.straightenShell").Op("uv.straighten").Item("uv.unfold");
@@ -146,6 +159,24 @@ public partial class UvEditorWindow : FloatingPanel
         M.Build(Add("Image")).Item("uv.cycleBackground", "Display (cycle background)").Item("uv.imageDim").Item("uv.imageUnfiltered").Item("uv.pixelSnap").Separator().Item("uv.snapshot");
         M.Build(Add("Textures")).Item("uv.checkerMap").Item("uv.checkerSizeUp").Item("uv.checkerSizeDown");
         M.Build(Add("UV Sets")).Item("uv.setEditor").Separator().Item("uv.setCopy").Item("uv.setCreate").Item("uv.setDelete").Item("uv.setNext");
+    }
+
+    private OptionButton _symmetry = null!;
+    private SpinBox _symCenter = null!;
+    private bool _syncingSym;
+
+    /// <summary>툴바의 Symmetry 드롭다운·중심 스핀박스를 설정과 맞춘다(켜져 있으면 강조색).</summary>
+    private void SyncSymmetry()
+    {
+        if (_symmetry == null) return;
+        var st = CubeApp.Instance.Settings;
+        _syncingSym = true;
+        int m = Math.Clamp(st.UvSymmetry, 0, 2);
+        if (_symmetry.Selected != m) _symmetry.Selected = m;
+        if (MathF.Abs((float)_symCenter.Value - st.UvSymmetryCenter) > 1e-6f) _symCenter.Value = st.UvSymmetryCenter;
+        _symCenter.Editable = m > 0;
+        if (m > 0) _symmetry.AddThemeColorOverride("font_color", MayaTheme.Accent); else _symmetry.RemoveThemeColorOverride("font_color");
+        _syncingSym = false;
     }
 
     /// <summary>배경 옵션 순환(파이 메뉴용): None → Grid → UV Texture → Mapped → Checker → ...</summary>

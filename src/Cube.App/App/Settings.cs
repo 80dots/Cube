@@ -224,6 +224,14 @@ public sealed class Settings
     [JsonPropertyName("symmetryLast")] public int SymmetryLast { get; set; } = 1;
     /// <summary>거울 짝을 찾는 허용 오차(로컬 단위).</summary>
     [JsonPropertyName("symmetryTolerance")] public float SymmetryTolerance { get; set; } = 0.001f;
+    /// <summary>UV 편집기 Symmetry(Maya UV Toolkit): 0 Off, 1 U(u = Center 축선), 2 V.</summary>
+    [JsonPropertyName("uvSymmetry")] public int UvSymmetry { get; set; }
+    /// <summary>uv.symmetryToggle이 다시 켤 때 쓸 마지막 축(1~2).</summary>
+    [JsonPropertyName("uvSymmetryLast")] public int UvSymmetryLast { get; set; } = 1;
+    /// <summary>UV 대칭 축선 위치(기본 0.5).</summary>
+    [JsonPropertyName("uvSymmetryCenter")] public float UvSymmetryCenter { get; set; } = 0.5f;
+    /// <summary>UV 거울 짝을 찾는 허용 오차(UV 단위).</summary>
+    [JsonPropertyName("uvSymmetryTolerance")] public float UvSymmetryTolerance { get; set; } = 0.001f;
     /// <summary>J 홀드 회전 증분(도). 기본 15.</summary>
     [JsonPropertyName("rotateSnapDegrees")] public float RotateSnapDegrees { get; set; } = 15f;
     /// <summary>J 홀드 스케일 증분. 기본 0.25.</summary>
