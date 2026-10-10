@@ -1,7 +1,11 @@
-﻿# 릴리즈 빌드: dotnet Release 빌드 → Godot Windows 내보내기 → Inno Setup 인스톨러 + zip → (옵션) 드래프트 릴리즈에 업로드
-# 사용: .\tools\build-release.ps1 [-Upload] [-Tag v0.0.1]
+﻿# 릴리즈 빌드: dotnet Release 빌드 → Godot Windows 내보내기 → Inno Setup 인스톨러 + zip → Android APK(릴리즈 서명) → (옵션) 릴리즈에 업로드
+# 사용: .\tools\build-release.ps1 [-Upload] [-Tag v0.0.1] [-SkipAndroid]
+# Android(v0.0.76): export_presets.cfg "Android" 프리셋의 version/code·name을 project.godot 버전으로 맞춘 뒤 --export-release.
+#   서명 키스토어 = %APPDATA%\Godot\keystores\cube-release.keystore, 사용자/비밀번호 = 같은 폴더의 cube-release.txt(1행 alias, 2행 password; 저장소 밖).
+#   Godot이 GODOT_ANDROID_KEYSTORE_RELEASE_PATH/USER/PASSWORD 환경 변수로 읽는다. 결과 dist\Cube-<ver>-android.apk.
 param(
     [switch]$Upload,
+    [switch]$SkipAndroid,
     [string]$Tag,
     [string]$Godot = "D:\Godot\GodotEngine\Godot_v4.7.2-stable_mono_win64\Godot_v4.7.2-stable_mono_win64_console.exe"
 )
@@ -57,12 +61,41 @@ try {
     $setup = Join-Path $distDir "Cube-$version-Setup.exe"
     if (-not (Test-Path $setup)) { throw "인스톨러가 생성되지 않았습니다" }
 
+    $apk = $null
+    if (-not $SkipAndroid) {
+        Write-Host "== godot export (Android)"
+        # 프리셋 버전 동기화: version/code = 패치 번호(정수, 증가), version/name = 버전 문자열
+        $code = [int]($version.Split('.')[-1])
+        $presets = Get-Content export_presets.cfg -Raw
+        $presets = [regex]::Replace($presets, 'version/code=\d+', "version/code=$code")
+        $presets = [regex]::Replace($presets, 'version/name="[^"]*"', "version/name=`"$version`"")
+        [IO.File]::WriteAllText((Join-Path $root "export_presets.cfg"), $presets, (New-Object System.Text.UTF8Encoding $false))
+        $ksDir = Join-Path $env:APPDATA "Godot\keystores"
+        $ksFile = Join-Path $ksDir "cube-release.keystore"; $ksPass = Join-Path $ksDir "cube-release.txt"
+        if (-not (Test-Path $ksFile) -or -not (Test-Path $ksPass)) { throw "릴리즈 키스토어가 없습니다: $ksFile / $ksPass (keytool -genkeypair -alias cube ... 로 만들고 txt에 alias·password를 한 줄씩)" }
+        $lines = Get-Content $ksPass
+        $env:GODOT_ANDROID_KEYSTORE_RELEASE_PATH = $ksFile
+        $env:GODOT_ANDROID_KEYSTORE_RELEASE_USER = $lines[0].Trim()
+        $env:GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD = $lines[1].Trim()
+        $androidDir = Join-Path $root "build\android"
+        New-Item -ItemType Directory -Force $androidDir | Out-Null
+        $apkBuild = Join-Path $androidDir "Cube.apk"
+        if (Test-Path $apkBuild) { Remove-Item $apkBuild }
+        & $Godot --headless --path . --export-release "Android" $apkBuild
+        if ($LASTEXITCODE -ne 0) { throw "godot android export 실패 ($LASTEXITCODE)" }
+        if (-not (Test-Path $apkBuild)) { throw "APK가 생성되지 않았습니다" }
+        $apk = Join-Path $distDir "Cube-$version-android.apk"
+        Copy-Item -Force $apkBuild $apk
+        Write-Host ("   {0,12:N0}  {1}" -f (Get-Item $apk).Length, (Split-Path -Leaf $apk))
+    }
+
     Write-Host "== 산출물"
     Get-ChildItem $distDir | ForEach-Object { Write-Host ("   {0,12:N0}  {1}" -f $_.Length, $_.Name) }
 
     if ($Upload) {
         Write-Host "== gh release upload $Tag"
-        gh release upload $Tag $setup $zip $addonsZip --clobber
+        $files = @($setup, $zip, $addonsZip); if ($apk) { $files += $apk }
+        gh release upload $Tag @files --clobber
         if ($LASTEXITCODE -ne 0) { throw "gh release upload 실패" }
     }
     Write-Host "OK"

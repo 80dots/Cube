@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 엔진 및 도구 환경
 
 - **Godot 실행 파일**: `D:\Godot\GodotEngine\Godot_v4.7.2-stable_mono_win64\Godot_v4.7.2-stable_mono_win64_console.exe` (`.godot/mono/metadata`가 가리키는 버전). `C:\Projects\Godot\Engine\`의 4.6.1은 쓰지 말 것.
-- .NET SDK 10 설치, 타깃은 `net8.0`(Godot.NET.Sdk 4.7.2). 8.0 런타임도 설치되어 있어 `dotnet test`가 그대로 돈다.
+- .NET SDK 10 설치. **`Cube.csproj`(App)는 `net9.0`**(v0.0.76: Godot 4.7.2의 Android 내보내기 템플릿이 net9.0만 지원), `Cube.Core`/테스트는 `net8.0`. 8.0·9.0 런타임이 설치되어 있어 `dotnet test`와 앱 실행이 그대로 된다.
 - C# 핫리로드 없음 → 순수 로직은 `Cube.Core`에 두고 `dotnet test`로 반복한다.
 
 ## 자주 쓰는 명령
@@ -39,6 +39,13 @@ GUI 동작은 입력 이벤트 주입 스크립트로 검증한다. 좌표는 �
 스텝: `wait N`, `move X Y`, `press L|M|R [alt|shift|ctrl]`, `dblclick L`(DoubleClick=true 프레스; 앞에 press/release로 첫 클릭을 보낼 것), `release`, `drag X Y [mods]`, `wheel N`, `key NAME [mods]`(Godot Key 이름: `Key4`, `F9`, `Escape`...), `action <actionId>`, `export PATH [selection]`, `import PATH`, `save PATH`, `open PATH`, `print`(노드/선택/Undo/툴/ViewportChanged 구독 수 `vpSubs`(툴 전환에도 1이어야 함; 파생 툴은 Activate/Deactivate에서 반드시 base 호출)/활성 노드 트랜스폼·메시 AABB·컴포넌트 수 v/e/f/u), `gizmo`(조작기 피벗/축), `panel N`(활성 뷰포트 선택: 0 top, 1 persp, 2 front, 3 side), `axisdrag X|Y|Z px` / `ringdrag X|Y|Z|S px` / `centerdrag dx dy`(조작기 핸들을 찾아 드래그; 뷰 각도 무관), `histedit INDEX PARAM VALUE[,Y,Z]`(활성 노드 히스토리 파라미터 편집), `matnew TYPE`(머티리얼 생성+선택에 할당), `mattex ID PATH`(머티리얼 컬러 텍스처), `matassign ID`(선택에 할당, 0 = lambert1), `shelf N`(셸프 탭 0 Polygons/1 UV/2 Rigging/3 Light/4 Render), `keydown NAME`/`keyup NAME`(홀드 키), `project v|e ID`(활성 메시 정점/엣지 중점의 뷰포트 로컬 좌표 — 툴 드라이브 좌표 구하기), `shot PATH`. `release`는 버튼 인자가 필요하다(`release L`). 창 전역 좌표 스텝: `gmove X Y`, `gdrag X Y`(버튼을 누른 채), `grab PANELID`(떠 있으면 제목 바, 붙어 있으면 탭 위로 커서 이동), `grip PANELID`(우하단 크기 조절 그립), `dragger NAME [I]`(스플리터 경계), `gdragn X Y N`(N프레임에 걸친 드래그), `perf start LABEL`/`perf stop`(`--uiperf` 측정 구간), `dockinfo`(도킹 레이아웃 요약), `confirm`(열린 확인 창 OK), `logsave PATH`(로그 저장), `logcopy`(로그 클립보드 복사 + 줄 수), `skincheck PATH CLIP TIME`, `anim ...`. 도킹 드라이브는 실제 `user://settings.json`의 레이아웃을 바꾸므로 테스트 전 백업·후 복원할 것. `print`의 active 줄에 `material=`과 피벗(`P<...>`, 0이면 생략)이 찍힌다. `key` 이름은 Godot Key 열거형(`Key3`, `F12`)이며 `print`는 면/정점 수·스무스 프리뷰·uv0·히스토리 목록도 찍는다. 확인 다이얼로그를 띄우는 액션(`file.new`)은 입력을 막아 멈추므로 드라이브에서 쓰지 않는다. 좌표는 `c+10`처럼 뷰포트 중심 기준도 된다. 뷰포트 로컬 원점은 1600×900 창에서 전역 (326, 200)쯤이며(셸프 높이에 따라 달라짐) 플로팅 패널 등 뷰포트 밖 UI를 누르려면 전역 좌표에서 이를 뺀다. 주입된 입력은 다음 프레임에 처리되므로 입력 스텝 뒤에는 자동으로 한 프레임 쉰다. `--drive`가 있으면 핫키/메뉴 로그(`[Hotkey]`, `[Menu]`, `[Select]`)가 켜진다. `--screenshot=PATH --quit-after=N`만으로 정적 스크린샷도 가능. `-- --uvperf`: UV 편집기가 열려 있으면 매 프레임 다시 그리고 합성 호버를 돌려 60프레임마다 `[UvPerf]` 그리기/호버 ms와 fps를 찍는다.
 
 Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_output` → `stop_project`. `add_node`의 properties는 `.tscn`에 저장되지 않으므로 씬은 직접 편집한다.
+
+## Android 빌드(v0.0.76, 키보드·마우스가 있는 태블릿 전제)
+- 환경: Android SDK `%LOCALAPPDATA%\Android\Sdk`(build-tools 36, NDK 27, platform 36), JDK 21 `C:\Program Files\Android\openjdk\jdk-21.0.8`(에디터 설정 `export/android/java_sdk_path`), .NET android 워크로드, Godot 4.7.2 mono 템플릿의 `android_debug.apk/android_release.apk/android_source.zip`(`%APPDATA%\Godot\export_templates\4.7.2.stable.mono\`; 공식 `Godot_v4.7.2-stable_mono_export_templates.tpz` 1.2GB에서 android 파일만 추출). 디버그 키스토어 `%APPDATA%\Godot\keystores\debug.keystore`(비밀번호 android), 릴리즈 키스토어 `cube-release.keystore` + `cube-release.txt`(alias/password 한 줄씩, 저장소 밖).
+- 프리셋: `export_presets.cfg` "Android"(arm64-v8a + x86_64(에뮬레이터), `com.eightydots.cube`, INTERNET·저장소 권한, gradle 빌드 안 씀). `project.godot`: `renderer/rendering_method.mobile="mobile"`(Vulkan; 데스크톱은 Forward+ 그대로), `rendering_device/fallback_to_opengl3=true`, `textures/vram_compression/import_etc2_astc=true`, `display/window/handheld/orientation=4`(sensor_landscape).
+- 명령: `& $godot --headless --path . --export-debug "Android" build/android/Cube-debug.apk`(디버그 키스토어 자동), 릴리즈는 `tools/build-release.ps1`이 환경 변수(`GODOT_ANDROID_KEYSTORE_RELEASE_*`)로 서명해 `dist/Cube-<ver>-android.apk`를 만들고 릴리즈에 첨부한다(`-SkipAndroid`로 생략). 프리셋 `version/code`(패치 번호)·`version/name`은 스크립트가 project.godot에서 맞춘다.
+- 에뮬레이터 검증: AVD `Painto_API36`(x86_64) — **에뮬레이터의 Vulkan은 present 오류로 화면이 검게 나오므로** 프리셋 `command_line/extra_args="--rendering-driver opengl3 --rendering-method gl_compatibility"`로 임시 내보낸 APK(Compatibility 렌더러)로 확인한다(실기기는 Vulkan Mobile). `adb install -r`, 실행은 `adb shell monkey -p com.eightydots.cube -c android.intent.category.LAUNCHER 1`(GodotApp 액티비티는 export 안 됨), 입력 `adb shell input tap X Y`, 스크린샷 `adb shell screencap -p /sdcard/a.png` + `adb pull`(Git Bash는 `MSYS_NO_PATHCONV=1`). 앱 로그는 logcat 태그 `godot`(`[Cube] core=...` 줄이 셸 생성 확인).
+- 코드: `OS.HasFeature("android")`면 Bridge 셸프에서 Blender/RizomUV/Marmoset/Cascadeur/Folder를 숨긴다(Tripo·설정만). 그 외 조작(Alt 내비게이션·RMB 파이·단축키)은 데스크톱과 같다. 파일 다이얼로그는 Godot 네이티브(없으면 자체 다이얼로그) — 실기기 검증 필요.
 
 ## 아키텍처
 
@@ -150,7 +157,7 @@ Godot MCP 서버(`godot`)도 등록되어 있다: `run_project` → `get_debug_o
 - GUI 동작: 위 DebugDriver 스크립트 + 스크린샷. Unity 확인은 `tools/unity-check.md` 체크리스트(수동).
 
 ## 버전 및 릴리즈 워크플로
-- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.75`). v0.0.1~v0.0.75은 공개 릴리즈됨.
+- 버전의 단일 출처는 `project.godot`의 `application/config/version`(현재 `0.0.76`). v0.0.1~v0.0.76은 공개 릴리즈됨.
 - **수정 작업을 완료할 때마다** 패치 버전을 하나 올리고(공개된 태그는 재사용 불가) 커밋 → `origin/main` 푸시 → `dist/release-notes-v<ver>.md` 작성 → `gh release create v<ver> --target main --title v<ver> --latest --notes-file <file>`로 **바로 public 릴리즈**(2026-10-07 사용자 지시: 드래프트 아님) → `.	oolsuild-release.ps1 -Upload`로 빌드 산출물 첨부. 마이너/메이저 버전은 사용자가 올리라고 할 때만.
 - 푸시: `gh auth setup-git`으로 github.com 자격 증명이 gh(80dots)로 고정되어 있어 `git push origin main`이 팝업 없이 동작한다. 그래도 자동 세션에서는 `GIT_TERMINAL_PROMPT=0`과 `timeout 90`으로 감싼다.
 - 릴리즈 노트는 **UTF-8 파일**(Write 도구로 작성, 이전 버전 노트를 아래에 이어 붙임)을 `--notes-file`로 넘긴다. Python/PowerShell 표준 출력을 파이프로 넘기면 Windows 콘솔 인코딩(cp949) 때문에 한글이 깨진다.

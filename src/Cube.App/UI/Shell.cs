@@ -522,6 +522,10 @@ public partial class Shell : Control
         Fill(BridgeShelf,
             new[] { ("bridge.blenderAll", "All → Blender", "bridge_blender_all"), ("bridge.blenderSelected", "Sel → Blender", "bridge_blender_sel"), ("bridge.rizom", "RizomUV", "bridge_rizom"), ("bridge.marmoset", "Marmoset", "bridge_marmoset"), ("bridge.cascadeur", "Cascadeur", "bridge_cascadeur"), ("bridge.tripo", "Tripo Editor", "bridge_tripo") },
             new[] { ("bridge.openFolder", "Folder", "bridge_folder") });
+        // Android(v0.0.76): 외부 데스크톱 앱(Blender/RizomUV/Marmoset/Cascadeur)·폴더 열기는 쓸 수 없으므로 Bridge에서 Tripo(HTTP)·설정만 남긴다
+        if (OS.HasFeature("android"))
+            foreach (var (b, id) in _shelfButtons)
+                if (id.StartsWith("bridge.", StringComparison.Ordinal) && id is not ("bridge.tripo" or "bridge.settings")) b.Visible = false;
         Fill(RigShelf,
             new[] { ("skeleton.jointTool", "Joint Tool", "rig_joint"), ("skeleton.insertJointTool", "Insert Joint", "rig_insert_joint"), ("skeleton.mirror", "Mirror Joint", "rig_mirror"), ("skeleton.orient", "Orient Joint", "rig_orient"), ("skeleton.orientApply", "Orient Now", "rig_orient") },
             new[] { ("skin.bind", "Bind Skin", "skin_bind"), ("skin.detach", "Detach Skin", "skin_detach"), ("skin.paintTool", "Paint Weights", "skin_paint"), ("skin.normalize", "Normalize", "skin_normalize"), ("skin.rebind", "Reset Weights", "skin_rebind") });

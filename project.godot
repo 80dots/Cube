@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Cube"
-config/version="0.0.75"
+config/version="0.0.76"
 run/main_scene="res://scenes/Shell.tscn"
 config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 config/icon="res://icon.png"
@@ -22,6 +22,8 @@ config/windows_native_icon="res://icon.ico"
 CubeApp="*res://src/Cube.App/App/CubeApp.cs"
 
 [display]
+
+window/handheld/orientation=4
 
 window/size/viewport_width=1600
 window/size/viewport_height=900
@@ -36,6 +38,9 @@ project/assembly_name="Cube"
 
 [rendering]
 
+renderer/rendering_method.mobile="mobile"
+rendering_device/fallback_to_opengl3=true
+textures/vram_compression/import_etc2_astc=true
 rendering_device/driver.windows="d3d12"
 rendering_device/vsync/frame_queue_size=1
 rendering_device/vsync/swapchain_image_count=2
