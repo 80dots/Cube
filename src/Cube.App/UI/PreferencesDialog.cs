@@ -23,6 +23,9 @@ public partial class PreferencesDialog : AcceptDialog
     private SpinBox _gridSpacing = null!, _rotateSnap = null!, _scaleSnap = null!;
     /// <summary>점 스냅 시 선택 요소 간 간격 유지(끄면 모두 스냅 점으로 모음).</summary>
     private CheckBox _retainSpacing = null!;
+    private CheckBox _autoSave = null!;
+    private SpinBox _autoSaveInterval = null!, _autoSaveLimit = null!;
+    private LineEdit _autoSaveFolder = null!;
 
     /// <summary>다이얼로그 내용을 만든다: 크기 조절 그립, SpinBox MMB 드래그, 2열 그리드(라벨 / 컨트롤), 안내 문구, Cancel 버튼.</summary>
     public override void _Ready()
@@ -94,6 +97,31 @@ public partial class PreferencesDialog : AcceptDialog
         _retainSpacing = new CheckBox { ButtonPressed = s.RetainComponentSpacing, TooltipText = "Point snap moves the selection as a whole (off: all selected points collapse onto the snap point)" };
         grid.AddChild(_retainSpacing);
 
+        // 자동 저장(Maya AutoSave): 켬/주기(분)/보관 개수/폴더. 헬프 라인 오른쪽 버튼이 남은 초를 보여 준다.
+        grid.AddChild(new Label { Text = "Auto Save" });
+        _autoSave = new CheckBox { ButtonPressed = s.AutoSave, TooltipText = "Periodically write a backup copy (<scene>.autosave.<time>.cube) when the scene has changed" };
+        grid.AddChild(_autoSave);
+        grid.AddChild(new Label { Text = "Auto Save Interval (min)" });
+        _autoSaveInterval = new SpinBox { MinValue = 0.05, MaxValue = 240, Step = 0.05, Value = s.AutoSaveIntervalMinutes, Suffix = "min", CustomMinimumSize = new Vector2(110 * k, 0), TooltipText = "Minutes between auto saves (0.05 = 3 seconds)" };
+        grid.AddChild(_autoSaveInterval);
+        grid.AddChild(new Label { Text = "Auto Save Files to Keep" });
+        _autoSaveLimit = new SpinBox { MinValue = 1, MaxValue = 1000, Step = 1, Value = s.AutoSaveLimit, CustomMinimumSize = new Vector2(110 * k, 0), TooltipText = "Older auto save files of the same scene are deleted beyond this count" };
+        grid.AddChild(_autoSaveLimit);
+        grid.AddChild(new Label { Text = "Auto Save Folder" });
+        var frow = new HBoxContainer();
+        _autoSaveFolder = new LineEdit { Text = s.AutoSaveFolder, PlaceholderText = ProjectSettings.GlobalizePath("user://autosave"), CustomMinimumSize = new Vector2(220 * k, 0), TooltipText = "Empty = user://autosave" };
+        frow.AddChild(_autoSaveFolder);
+        var fbrowse = new Button { Text = "Browse...", FocusMode = Control.FocusModeEnum.None };
+        fbrowse.Pressed += () =>
+        {
+            var fd = new FileDialog { FileMode = FileDialog.FileModeEnum.OpenDir, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Title = "Auto Save Folder" };
+            fd.DirSelected += d => { _autoSaveFolder.Text = d; fd.QueueFree(); };
+            fd.Canceled += fd.QueueFree;
+            AddChild(fd); fd.PopupCentered();
+        };
+        frow.AddChild(fbrowse);
+        grid.AddChild(frow);
+
         var box = new VBoxContainer();
         box.AddChild(grid);
         box.AddChild(new Label { Text = "UI Scale is applied by rebuilding the interface; the scene is kept.", Modulate = new Color(1, 1, 1, 0.7f) });
@@ -122,7 +150,12 @@ public partial class PreferencesDialog : AcceptDialog
         s.RotateSnapDegrees = (float)_rotateSnap.Value;
         s.ScaleSnapStep = (float)_scaleSnap.Value;
         s.RetainComponentSpacing = _retainSpacing.ButtonPressed;
+        s.AutoSave = _autoSave.ButtonPressed;
+        s.AutoSaveIntervalMinutes = (float)_autoSaveInterval.Value;
+        s.AutoSaveLimit = (int)_autoSaveLimit.Value;
+        s.AutoSaveFolder = _autoSaveFolder.Text.Trim();
         s.Save();
+        Shell.Instance.ResetAutoSaveTimer();
         // 배율 변경: 다음 프레임에 셸 전체를 다시 만든다(모든 픽셀 상수가 배율을 곱하므로).
         if (scaleChanged) app.CallDeferred(nameof(CubeApp.ReloadShell));
         else

@@ -129,7 +129,7 @@ public partial class Shell
         // --- 메시 편집
         RegisterSmartEdgeActions(); // Mesh Display → Smart Soften/Harden(ShellSmartEdges.cs) + 프리셋
         RegisterNonManifoldActions();
-        RegisterSymmetryActions(); RegisterUvSymmetryActions(); RegisterFreezeActions(); // Freeze/Reset Transformations(ShellFreeze.cs) // UV 편집기 Symmetry(ShellUvSymmetry.cs): uv.symmetryOff/U/V/toggle/centerSelection // Symmetry 모드(ShellSymmetry.cs): symmetry.off/objectX..worldZ/toggle // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
+        RegisterSymmetryActions(); RegisterUvSymmetryActions(); RegisterFreezeActions(); RegisterAutoSaveActions(); // Freeze/Reset Transformations(ShellFreeze.cs), 자동 저장(ShellAutoSave.cs) // UV 편집기 Symmetry(ShellUvSymmetry.cs): uv.symmetryOff/U/V/toggle/centerSelection // Symmetry 모드(ShellSymmetry.cs): symmetry.off/objectX..worldZ/toggle // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
         RegisterExtrudeActions(); // Blender식 Extrude 옵션(ShellExtrude.cs): mesh.extrude = 옵션 창, mesh.extrudeApply = 실행
@@ -711,7 +711,7 @@ public partial class Shell
         _recentMenu.IdPressed += id => { var p = _recentMenu.GetItemText((int)id); if (System.IO.File.Exists(p)) SceneFiles.OpenRecentWithConfirm(p); };
         fileMenu.AboutToPopup += RefreshRecentMenu;
         Menus.Build(fileMenu)
-            .Separator().Item("file.save").Item("file.saveAs").Separator()
+            .Separator().Item("file.save").Item("file.saveAs").Separator().Item("file.autoSaveToggle").Item("file.autoSaveNow").Item("file.openAutoSaveFolder").Separator()
             .Item("file.import").Item("file.exportSelection").Item("file.exportAll").Separator().Item("file.exit");
 
         // Maya 규약: "X"는 마지막 옵션으로 바로 실행(<id>Apply), "X Options..."는 옵션 창(<id>). Menu.Op가 둘을 함께 넣는다.

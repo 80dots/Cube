@@ -218,6 +218,14 @@ public sealed class Settings
     [JsonPropertyName("snapToPoints")] public bool SnapToPoints { get; set; }
     /// <summary>Maya Move Tool "Retain component spacing": 점 스냅 시 선택을 통째로 옮긴다(off면 모두 스냅 점으로 모은다).</summary>
     [JsonPropertyName("retainComponentSpacing")] public bool RetainComponentSpacing { get; set; } = true;
+    /// <summary>자동 저장 켬(기본 ON). Maya Preferences → Files/Projects → AutoSave.</summary>
+    [JsonPropertyName("autoSave")] public bool AutoSave { get; set; } = true;
+    /// <summary>자동 저장 주기(분, 기본 5).</summary>
+    [JsonPropertyName("autoSaveIntervalMinutes")] public float AutoSaveIntervalMinutes { get; set; } = 5f;
+    /// <summary>씬 이름별로 보관할 자동 저장 파일 수(기본 10).</summary>
+    [JsonPropertyName("autoSaveLimit")] public int AutoSaveLimit { get; set; } = 10;
+    /// <summary>자동 저장 폴더(비어 있으면 user://autosave).</summary>
+    [JsonPropertyName("autoSaveFolder")] public string AutoSaveFolder { get; set; } = "";
     /// <summary>Symmetry 모드(Maya Tool Settings): 0 Off, 1~3 Object X/Y/Z, 4~6 World X/Y/Z.</summary>
     [JsonPropertyName("symmetry")] public int Symmetry { get; set; }
     /// <summary>symmetry.toggle이 다시 켤 때 쓸 마지막 축(1~6).</summary>

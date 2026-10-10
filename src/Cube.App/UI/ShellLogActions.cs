@@ -23,6 +23,7 @@ public partial class Shell
         HelpLine.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         HelpLine.ClipText = true;
         row.AddChild(HelpLine);
+        BuildAutoSaveStatus(row, s); // 다음 자동 저장까지 남은 초(ShellAutoSave.cs)
         _logButton = new Button { Name = "LogButton", Text = "Log", Flat = true, TooltipText = "Show the log panel (messages, warnings and errors)", FocusMode = FocusModeEnum.None };
         _logButton.AddThemeFontSizeOverride("font_size", (int)(12 * s));
         _logButton.Pressed += () => Actions.Invoke("windows.log");

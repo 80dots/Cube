@@ -512,6 +512,15 @@ public partial class DebugDriver : Node
             case "save":
                 GD.Print($"[Drive] save: {UI.Shell.Instance.SceneFiles.Save(p[1])} title='{UI.Shell.Instance.SceneFiles.Title}'");
                 break;
+            case "autosave":   // autosave now | interval SEC | on | off: 자동 저장 즉시 실행 / 주기(초) 설정 / 켜기·끄기. 결과·남은 초를 찍는다
+                {
+                    var sh = UI.Shell.Instance; var st = CubeApp.Instance.Settings;
+                    string what = p.Length > 1 ? p[1] : "now";
+                    if (what == "now") GD.Print($"[Drive] autosave now: {sh.AutoSaveNow() ?? "failed"}");
+                    else if (what == "interval") { st.AutoSaveIntervalMinutes = float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture) / 60f; sh.ResetAutoSaveTimer(); GD.Print($"[Drive] autosave interval={p[2]}s"); }
+                    else { st.AutoSave = what == "on"; sh.ResetAutoSaveTimer(); GD.Print($"[Drive] autosave {what}"); }
+                    break;
+                }
             // open PATH: .cube 열기 후 창 제목 확인
             case "open":
                 GD.Print($"[Drive] open: {UI.Shell.Instance.SceneFiles.Open(p[1])} title='{UI.Shell.Instance.SceneFiles.Title}'");
@@ -713,6 +722,7 @@ public partial class DebugDriver : Node
             case "print":
                 {
                     var doc = CubeApp.Instance.Document;
+                    GD.Print($"[Drive] autosave={(CubeApp.Instance.Settings.AutoSave ? "on" : "off")} remaining={UI.Shell.Instance.AutoSaveRemaining:F1}s dirty={doc.IsDirty} serial={doc.ChangeSerial}");
                     GD.Print($"[Drive] nodes={doc.Nodes.Count} sel={doc.Selection.Mode} objs={doc.Selection.Objects.Count} undo={doc.Undo.UndoCount} tool={UI.Shell.Instance.Tools.Current?.Id} shading={UI.Shell.Instance.Viewport.Display.Mode} view={UI.Shell.Instance.Viewport.CameraController.Label} quad={UI.Shell.Instance.Layout.IsQuad} pie={UI.Shell.Instance.Viewport.Pie.IsOpen} cursor={DisplayServer.CursorGetShape()} vpSubs={UI.Shell.Instance.ToolContext.ViewportChangedSubscribers}");
                     GD.Print($"[Drive] {UI.Shell.Instance.ActionPopup.DebugSummary()} dialogs={UI.Shell.Instance.FindChildren("*", "ConfirmationDialog", true, false).Count(n => n is Window w && w.Visible)}");
                     if (doc.Animations.Count > 0)

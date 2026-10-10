@@ -127,6 +127,7 @@ public partial class Shell : Control
     {
         if (_polyCountDirty) { _polyCountDirty = false; PolyCount.Recompute(Document); }
         UpdateLog();
+        UpdateAutoSave(delta); // 자동 저장 타이머(ShellAutoSave.cs)
     }
     /// <summary>사용자 설정(user://settings.json). CubeApp 소유.</summary>
     public Settings Settings => CubeApp.Instance.Settings;
