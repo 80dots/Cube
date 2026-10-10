@@ -416,9 +416,34 @@ public partial class Shell : Control
             _axisButtons[axis] = b;
             ToolBox.AddChild(b);
         }
-        // 맨 아래: Undo / Redo
+        // 맨 아래: 패널 숏컷(2열, v0.0.74 사용자 지시: 새 패널을 여는 메뉴 전부) → Preferences → Undo / Redo
         var spacer = new Control { SizeFlagsVertical = SizeFlags.ExpandFill, MouseFilter = MouseFilterEnum.Ignore };
         ToolBox.AddChild(spacer);
+        ToolBox.AddChild(new HSeparator());
+        var panelGrid = new GridContainer { Columns = 2 };
+        panelGrid.AddThemeConstantOverride("h_separation", 0);
+        panelGrid.AddThemeConstantOverride("v_separation", 0);
+        int small = (int)(14 * s);
+        foreach (var (action, iconName) in new[]
+                 {
+                     ("windows.outliner", "panel_outliner"), ("windows.properties", "panel_properties"),
+                     ("windows.uvEditor", "mode_uv"), ("windows.materialEditor", "pie_material"),
+                     ("windows.renderSettings", "render_settings"), ("windows.animationData", "panel_anim"),
+                     ("edit.componentEditor", "panel_component"), ("uv.setEditor", "uv_sets"),
+                     ("windows.log", "panel_log"), ("bridge.tripo", "bridge_tripo"),
+                     ("bridge.settings", "panel_bridge"),
+                 })
+        {
+            var a = Actions.Get(action);
+            var b = Icons.IconButton(iconName, (a?.Label ?? action).TrimEnd('.'), small, toggle: true);
+            b.CustomMinimumSize = new Vector2(19 * s, 19 * s);
+            string id = action;
+            b.Pressed += () => Actions.Invoke(id);
+            ActionIcons.Register(action, iconName);
+            _shelfButtons.Add((b, action)); // RefreshShelf가 IsChecked(패널 열림)를 눌림 상태로 반영
+            panelGrid.AddChild(b);
+        }
+        ToolBox.AddChild(panelGrid);
         ToolBox.AddChild(new HSeparator());
         var prefs = Icons.IconButton("preferences", "Preferences (Ctrl+,)", icon);
         prefs.Pressed += () => Actions.Invoke("edit.preferences");
