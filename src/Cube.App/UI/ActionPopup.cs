@@ -480,6 +480,7 @@ public partial class ActionPopup : PanelContainer
             if (_command != null && _follow.Count > 0) { _baseCommand = _command; RedoFollowUps(0); }
             SnapshotHistoryCounts();
             if (_command == null) Hide();
+            else Rebuild(); // 액션이 다른 옵션 값도 바꿀 수 있다(Smart Soften/Harden 프리셋 → 모든 필드) — 전부 다시 읽는다
         }
         finally { _busy = false; }
     }

@@ -482,6 +482,7 @@ public partial class Shell : Control
             new[] { ("mesh.extrudeApply", "Extrude", "shelf_extrude"), ("mesh.mergeApply", "Merge", "shelf_merge"), ("mesh.combine", "Combine", "shelf_combine"), ("mesh.separate", "Separate", "shelf_separate"), ("mesh.bevelApply", "Bevel", "shelf_bevel"), ("mesh.bridge", "Bridge", "shelf_bridge") },
             new[] { ("mesh.addDivisionsApply", "Add Divisions", "shelf_adddiv"), ("mesh.connect", "Connect", "shelf_connect"), ("mesh.pokeApply", "Poke", "shelf_poke"), ("mesh.fillHole", "Fill Hole", "shelf_fillhole"), ("mesh.mirrorApply", "Mirror", "shelf_mirror"), ("mesh.arrayApply", "Array", "shelf_array") },
             new[] { ("mesh.booleanUnionApply", "Union", "shelf_bool_union"), ("mesh.booleanDifferenceApply", "Difference", "shelf_bool_difference"), ("mesh.booleanIntersectionApply", "Intersect", "shelf_bool_intersection") },
+            new[] { ("normals.smartSoftenHardenApply", "Smart Edges", "shelf_smart_edges") },
             new[] { ("mesh.multiCut", "Multi-Cut", "shelf_multicut"), ("mesh.targetWeld", "Target Weld", "shelf_targetweld"), ("mesh.insertLoop", "Insert Loop", "uv_cut"), ("mesh.creaseTool", "Crease", "shelf_crease") });
         Fill(UvShelf,
             new[] { ("windows.uvEditor", "UV Editor", "mode_uv") },

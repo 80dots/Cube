@@ -127,6 +127,7 @@ public partial class Shell
 
         // Extrude(옵션 쌍), 컴포넌트 삭제(Maya Delete Edge/Vertex), Combine/Separate, 하드/소프트 엣지, 면 뒤집기, Bridge, 엣지 루프/크리즈 툴
         // --- 메시 편집
+        RegisterSmartEdgeActions(); // Mesh Display → Smart Soften/Harden(ShellSmartEdges.cs) + 프리셋
         RegisterNonManifoldActions(); // Select → Non-Manifold(ShellNonManifold.cs): select.nonManifold = 옵션 창, select.nonManifoldApply = 실행
         RegisterBooleanActions(); // Maya Booleans(ShellBoolean.cs): mesh.booleanUnion/Difference/Intersection 옵션 쌍
         RegisterArrayActions(); // Blender식 Array(ShellArray.cs): mesh.array = 옵션 창, mesh.arrayApply = 실행
@@ -750,7 +751,8 @@ public partial class Shell
 
         Menus.Build(Add("Mesh Display"))
             .Item("normals.average").Item("normals.conform").Item("mesh.reverse", "Reverse").Item("normals.setToFace").Op("normals.setVertexNormal").Separator()
-            .Item("mesh.harden", "Harden Edge").Item("mesh.soften", "Soften Edge").Op("normals.softenHardenAngle").Separator()
+            .Item("mesh.harden", "Harden Edge").Item("mesh.soften", "Soften Edge").Op("normals.softenHardenAngle").Op("normals.smartSoftenHarden")
+            .Submenu("Smart Soften/Harden Presets", m => { for (int i = 1; i < SmartPresets.Length; i++) m.Item($"normals.smartPreset{i}"); }).Separator()
             .Item("normals.lock").Item("normals.unlock");
 
         Menus.Build(Add("UV"))
