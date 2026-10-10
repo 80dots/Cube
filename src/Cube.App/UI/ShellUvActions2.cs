@@ -352,6 +352,13 @@ public partial class Shell
         Actions.Register("uv.selectFrontFacing", "Select Front-Facing", () => SelectFaces(m => UvOps.BackFacingFaces(m, false)), canExecute: () => UvNodes().Any());
         Actions.Register("uv.selectOverlapping", "Select Overlapping", () => SelectFaces(UvOps.OverlappingFaces), canExecute: () => UvNodes().Any());
         Actions.Register("uv.selectNonOverlapping", "Select Non-Overlapping", () => SelectFaces(m => { var ov = new HashSet<int>(UvOps.OverlappingFaces(m)); return Enumerable.Range(0, m.FaceCount).Where(f => m.Faces[f].Alive && !ov.Contains(f)).ToList(); }), canExecute: () => UvNodes().Any());
+        // Select Identical / Similar Shells(v0.0.69): 선택 셸과 위상(+모양)이 같은 셸을 모두 선택(UvOps.Similar.cs).
+        RegisterOptionPair("uv.selectIdentical", "Select Identical Shells", new OptionSpec("Select Identical Shells Options", v => { v.Set("match", 0); v.Set("tolerance", 0.001f); },
+            new[] { OptionField.E("match", "Match", "Exact (same shape and orientation, any position)", "Congruent (also rotated or flipped)"), OptionField.F("tolerance", "Tolerance (UV)", 0.00001, 0.5, 0.0001) }, "Select"),
+            () => SelectMatchingShells(identical: true), () => HasUvPoints());
+        RegisterOptionPair("uv.selectSimilar", "Select Similar Shells", new OptionSpec("Select Similar Shells Options", v => v.Set("includeIdentical", 1f),
+            new[] { OptionField.B("includeIdentical", "Include identical shells", "Off: only shells with the same structure but a different shape") }, "Select"),
+            () => SelectMatchingShells(identical: false), () => HasUvPoints());
         Actions.Register("uv.selectUnmapped", "Select Unmapped Faces", () => SelectFaces(UvOps.UnmappedFaces), canExecute: () => UvNodes().Any());
         Actions.Register("uv.selectTextureBorders", "Select Texture Borders", () => RecordSelection(s =>
         {
@@ -451,6 +458,40 @@ public partial class Shell
     }
 
     /// <summary>노드마다 pick(메시)이 고른 면을 면 모드로 선택한다(첫 노드 교체, 이후 추가; Undo 가능).</summary>
+    /// <summary>
+    /// 선택 UV 점이 속한 셸(원본, 여럿 가능)마다 같은 위상(+ identical이면 같은 모양)의 셸을 찾아 원본과 함께 UV(Island) 모드로 선택한다.
+    /// </summary>
+    private void SelectMatchingShells(bool identical)
+    {
+        var oi = Options("uv.selectIdentical"); var os = Options("uv.selectSimilar");
+        var match = (ShellShapeMatch)oi.Int("match"); float tol = oi.Float("tolerance"); bool includeIdentical = os.Bool("includeIdentical");
+        int found = 0, sources = 0;
+        var result = new List<(SceneNode node, HashSet<int> points)>();
+        foreach (var n in UvNodes().ToList())
+        {
+            var topo = UvTopology.Build(n.Mesh!);
+            var srcShells = UvOps.ShellsOf(topo, UvPointSelection(n, topo)).ToList();
+            if (srcShells.Count == 0) continue;
+            var shells = new HashSet<int>(srcShells); sources += srcShells.Count;
+            foreach (int src in srcShells)
+            {
+                var hits = identical ? UvOps.FindIdenticalShells(n.Mesh!, topo, src, match, tol) : UvOps.FindSimilarShells(n.Mesh!, topo, src);
+                if (!identical && !includeIdentical) { var same = new HashSet<int>(UvOps.FindIdenticalShells(n.Mesh!, topo, src, ShellShapeMatch.Exact, tol)); hits = hits.Where(h => !same.Contains(h)).ToList(); }
+                foreach (int h in hits) if (shells.Add(h)) found++;
+            }
+            var pts = new HashSet<int>(); foreach (int sh in shells) foreach (int q in topo.PointsInShell(sh)) pts.Add(q);
+            result.Add((n, pts));
+        }
+        if (sources == 0) { HelpLine.Text = (identical ? "Select Identical Shells" : "Select Similar Shells") + ": select a source UV shell first."; return; }
+        RecordSelection(s =>
+        {
+            s.Mode = SelectMode.Uv; bool first = true;
+            foreach (var (n, pts) in result) { s.SelectComponents(n.Id, SelectMode.Uv, pts, replace: first); first = false; }
+        });
+        UvEditorWindow?.Canvas.SetIslandMode(true);
+        HelpLine.Text = $"{(identical ? "Select Identical Shells" : "Select Similar Shells")}: {found} matching shell(s) found for {sources} source shell(s).";
+    }
+
     private void SelectFaces(Func<PolyMesh, List<int>> pick)
     {
         RecordSelection(s =>

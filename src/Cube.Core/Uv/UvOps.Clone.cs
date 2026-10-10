@@ -69,33 +69,41 @@ public static partial class UvOps
     }
 
     /// <summary>
-    /// 두 셸의 하프에지 대응(src → dst)을 찾는다. 대응이 여럿이면 dst의 현재 UV(경계 상자 중심을 맞춘 뒤)와 가장 가까운 것.
+    /// 두 셸의 하프에지 대응(src → dst)을 찾는다. 대응이 여럿이면(대칭 셸) dst의 현재 UV(경계 상자 중심을 맞춘 뒤)와 가장 가까운 것.
     /// </summary>
     /// <returns>대응을 찾으면 src 하프에지 → dst 하프에지 사전, 아니면 null.</returns>
     public static Dictionary<int, int>? MatchShellTopology(PolyMesh m, UvTopology topo, int srcShell, int dstShell)
     {
-        var srcFaces = ShellFaces(m, topo, srcShell); var dstFaces = ShellFaces(m, topo, dstShell);
-        if (srcFaces.Count == 0 || srcFaces.Count != dstFaces.Count) return null;
-        if (ShellSignature(m, topo, srcShell, srcFaces) != ShellSignature(m, topo, dstShell, dstFaces)) return null;
-        var srcHes = new HashSet<int>(); foreach (int f in srcFaces) foreach (int he in FaceHalfEdges(m, f)) srcHes.Add(he);
-        var dstHes = new HashSet<int>(); foreach (int f in dstFaces) foreach (int he in FaceHalfEdges(m, f)) dstHes.Add(he);
-        // 시작 하프에지: 경계(셸 안 twin 없음)가 있으면 그중 하나(후보가 적다), 없으면 아무거나
-        int s0 = srcHes.FirstOrDefault(h => InnerTwin(m, topo, h) < 0, -1); if (s0 < 0) s0 = srcHes.First();
-        bool s0Boundary = InnerTwin(m, topo, s0) < 0; int s0Deg = FaceDegree(m, m.Hes[s0].Face);
+        Dictionary<int, int>? best = null; float bestScore = float.MaxValue;
         var (smn, smx) = ShellBounds(topo, srcShell); var (dmn, dmx) = ShellBounds(topo, dstShell);
         var offset = (dmn + dmx) * 0.5f - (smn + smx) * 0.5f;
-        Dictionary<int, int>? best = null; float bestScore = float.MaxValue;
-        foreach (int t0 in dstHes)
+        foreach (var map in AllShellMappings(m, topo, srcShell, dstShell))
         {
-            if ((InnerTwin(m, topo, t0) < 0) != s0Boundary || FaceDegree(m, m.Hes[t0].Face) != s0Deg) continue;
-            var map = TryMap(m, topo, srcHes, dstHes, s0, t0);
-            if (map == null) continue;
             // 점수: 대응 점끼리 (원본 UV + 중심 오프셋)과 대상 현재 UV의 거리 제곱 합
             float score = 0;
             foreach (var (s, t) in map) score += Vector2.DistanceSquared(topo.Points[topo.HeToPoint[s]].Uv + offset, topo.Points[topo.HeToPoint[t]].Uv);
             if (score < bestScore) { bestScore = score; best = map; }
         }
         return best;
+    }
+
+    /// <summary>두 셸 사이의 모든 하프에지 대응(위상 동형)을 열거한다. 대칭 셸은 대칭 차수만큼 나온다. 위상이 다르면 비어 있다.</summary>
+    public static IEnumerable<Dictionary<int, int>> AllShellMappings(PolyMesh m, UvTopology topo, int srcShell, int dstShell)
+    {
+        var srcFaces = ShellFaces(m, topo, srcShell); var dstFaces = ShellFaces(m, topo, dstShell);
+        if (srcFaces.Count == 0 || srcFaces.Count != dstFaces.Count) yield break;
+        if (ShellSignature(m, topo, srcShell, srcFaces) != ShellSignature(m, topo, dstShell, dstFaces)) yield break;
+        var srcHes = new HashSet<int>(); foreach (int f in srcFaces) foreach (int he in FaceHalfEdges(m, f)) srcHes.Add(he);
+        var dstHes = new HashSet<int>(); foreach (int f in dstFaces) foreach (int he in FaceHalfEdges(m, f)) dstHes.Add(he);
+        // 시작 하프에지: 경계(셸 안 twin 없음)가 있으면 그중 하나(후보가 적다), 없으면 아무거나
+        int s0 = srcHes.FirstOrDefault(h => InnerTwin(m, topo, h) < 0, -1); if (s0 < 0) s0 = srcHes.First();
+        bool s0Boundary = InnerTwin(m, topo, s0) < 0; int s0Deg = FaceDegree(m, m.Hes[s0].Face);
+        foreach (int t0 in dstHes)
+        {
+            if ((InnerTwin(m, topo, t0) < 0) != s0Boundary || FaceDegree(m, m.Hes[t0].Face) != s0Deg) continue;
+            var map = TryMap(m, topo, srcHes, dstHes, s0, t0);
+            if (map != null) yield return map;
+        }
     }
 
     private static int FaceDegree(PolyMesh m, int f) { int d = 0; foreach (var _ in FaceHalfEdges(m, f)) d++; return d; }

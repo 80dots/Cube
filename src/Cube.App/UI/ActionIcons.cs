@@ -15,7 +15,7 @@ public static class ActionIcons
         ["select.grow"] = "pie_grow", ["select.shrink"] = "pie_shrink", ["uv.growLoop"] = "pie_grow", ["uv.shrinkLoop"] = "pie_shrink",
         ["select.toVertices"] = "mode_vertex", ["select.toEdges"] = "mode_edge", ["select.toFaces"] = "mode_face", ["select.toUv"] = "mode_uv", ["select.toUvIsland"] = "pie_island",
         ["select.toBoundaryEdges"] = "pie_boundary", ["select.nonManifoldApply"] = "pie_nonmanifold", ["select.lights"] = "light_select",
-        ["uv.selectInverse"] = "pie_deselect", ["uv.selectBackFacing"] = "mode_face", ["uv.selectFrontFacing"] = "mode_face", ["uv.selectOverlapping"] = "pie_island", ["uv.selectNonOverlapping"] = "pie_island",
+        ["uv.selectInverse"] = "pie_deselect", ["uv.selectBackFacing"] = "mode_face", ["uv.selectFrontFacing"] = "mode_face", ["uv.selectOverlapping"] = "pie_island", ["uv.selectIdentical"] = "pie_island", ["uv.selectIdenticalApply"] = "pie_island", ["uv.selectSimilar"] = "pie_island", ["uv.selectSimilarApply"] = "pie_island", ["uv.selectNonOverlapping"] = "pie_island",
         ["uv.selectTextureBorders"] = "pie_boundary", ["uv.selectUnmapped"] = "mode_uv", ["uv.shortestPath"] = "mode_edge", ["uv.containedFaces"] = "mode_face", ["uv.connectedFaces"] = "mode_face",
         // 편집·오브젝트
         ["edit.delete"] = "pie_delete", ["mesh.deleteComponents"] = "pie_delete", ["uv.deleteUvs"] = "pie_delete", ["edit.duplicate"] = "pie_duplicate", ["edit.deleteHistory"] = "pie_history",

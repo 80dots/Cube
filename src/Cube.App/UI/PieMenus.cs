@@ -170,6 +170,8 @@ public static class PieMenus
         Item(shell, "uv.selectFrontFacing", "Front-Facing"),
         Item(shell, "uv.selectOverlapping", "Overlapping"),
         Item(shell, "uv.selectNonOverlapping", "Non-Overlapping"),
+        Item(shell, "uv.selectIdenticalApply", "Identical Shells"),
+        Item(shell, "uv.selectSimilarApply", "Similar Shells"),
         Item(shell, "uv.selectTextureBorders", "Texture Borders"),
         Item(shell, "uv.selectUnmapped", "Unmapped"),
         Item(shell, "uv.shortestPath", "Shortest Edge Path"),
