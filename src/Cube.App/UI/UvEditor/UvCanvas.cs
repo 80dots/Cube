@@ -1136,6 +1136,8 @@ public partial class UvCanvas : Control
                         if (_tool != UvCanvasTool.None && BeginToolPress(mb)) { AcceptEvent(); return; }
                         var part = HitGizmo(mb.Position);
                         if (part != Part.None && TryBeginTransform(mb.Position, part)) { AcceptEvent(); return; }
+                        // 더블클릭 = 집은 UV/엣지/면이 속한 섬(셸) 전체 선택(v0.0.70; 뷰포트의 더블클릭 루프/셸 선택과 같은 자리)
+                        if (mb.DoubleClick && _tool == UvCanvasTool.None && DoubleClickSelectIsland(mb)) { AcceptEvent(); return; }
                         _pressed = true; _marquee = false; _pressPos = mb.Position; _modifier = ModifierOf(mb);
                         AcceptEvent(); return;
                     }
@@ -1428,6 +1430,49 @@ public partial class UvCanvas : Control
         var topo = Topo(node);
         int shell = topo.Points[item.Component].Shell;
         foreach (int p in topo.PointsInShell(shell)) yield return new SelItem(item.Node, p);
+    }
+
+    /// <summary>
+    /// 더블클릭 섬 선택: 커서 아래 UV 점/엣지/면이 속한 UV 섬 전체(UV 모드 = 섬의 모든 UV 점, 엣지 모드 = 섬의 모든 엣지, 면 모드 = 섬의 모든 면)를
+    /// 선택한다. 첫 클릭이 이미 그 요소를 토글했으므로 Shift는 토글이 아니라 추가로, Ctrl은 제거, Ctrl+Shift는 추가로 적용한다(Maya 더블클릭 루프 선택과 같음).
+    /// </summary>
+    /// <returns>섬을 선택했으면 true(아무것도 집지 못했거나 오브젝트/Island 모드면 false → 일반 클릭 처리).</returns>
+    private bool DoubleClickSelectIsland(InputEventMouseButton mb)
+    {
+        var sel = _shell.Document.Selection;
+        if (sel.Mode is not (SelectMode.Uv or SelectMode.Edge or SelectMode.Face) || (sel.Mode == SelectMode.Uv && IslandMode)) return false;
+        var hit = Pick(mb.Position); if (hit == null || hit.Value.Component < 0) return false;
+        var node = _shell.Document.Find(hit.Value.Node); var m = node?.Mesh; if (node == null || m == null) return false;
+        var topo = Topo(node);
+        int shell = sel.Mode switch
+        {
+            SelectMode.Uv => topo.Points[hit.Value.Component].Shell,
+            SelectMode.Edge => topo.HeToPoint[m.Edges[hit.Value.Component].He0] is var p0 && p0 >= 0 ? topo.Points[p0].Shell : -1,
+            _ => topo.HeToPoint[m.Faces[hit.Value.Component].HalfEdge] is var p1 && p1 >= 0 ? topo.Points[p1].Shell : -1,
+        };
+        if (shell < 0) return false;
+        var items = new List<SelItem>();
+        switch (sel.Mode)
+        {
+            case SelectMode.Uv: foreach (int p in topo.PointsInShell(shell)) items.Add(new SelItem(node.Id, p)); break;
+            case SelectMode.Edge:
+                for (int e = 0; e < m.EdgeCount; e++)
+                {
+                    var ed = m.Edges[e]; if (!ed.Alive) continue;
+                    // 엣지의 어느 한 하프에지라도 이 섬의 점에 닿으면 섬의 엣지(심 엣지는 양쪽 섬에 모두 속한다)
+                    bool inShell = false;
+                    for (int k = 0; k < 2 && !inShell; k++) { int he = k == 0 ? ed.He0 : ed.He1; if (he < 0) continue; int p = topo.HeToPoint[he]; if (p >= 0 && topo.Points[p].Shell == shell) inShell = true; }
+                    if (inShell) items.Add(new SelItem(node.Id, e));
+                }
+                break;
+            default: foreach (int f in UvOps.ShellFaces(m, topo, shell)) items.Add(new SelItem(node.Id, f)); break;
+        }
+        var mod = ModifierOf(mb);
+        if (mod == SelectModifier.Toggle) mod = SelectModifier.Add;
+        _shell.RecordUvSelection(ss => ss.Apply(items, mod));
+        _pressed = false; _marquee = false;
+        QueueRedraw();
+        return true;
     }
 
     /// <summary>
