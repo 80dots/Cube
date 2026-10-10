@@ -63,6 +63,10 @@ public class SceneNode
     public LightShape? Light => Shape as LightShape;
     /// <summary>라이트 노드인지.</summary>
     public bool IsLight => Shape is LightShape;
+    /// <summary>이미지 플레인 셰이프(아니면 null).</summary>
+    public ImagePlaneShape? ImagePlane => Shape as ImagePlaneShape;
+    /// <summary>이미지 플레인 노드인지.</summary>
+    public bool IsImagePlane => Shape is ImagePlaneShape;
     /// <summary>할당된 머티리얼 ID(0 = 기본 lambert1).</summary>
     public int MaterialId { get; set; }
     /// <summary>메시의 skinCluster(없으면 null).</summary>

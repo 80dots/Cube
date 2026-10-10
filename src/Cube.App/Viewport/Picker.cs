@@ -185,7 +185,26 @@ public sealed class Picker
             SelectMode.Edge => RayPicker.PickEdge(targets, Projection(), p, cameraBased, RayPicker.EdgeThresholdPx * Scale),
             _ => RayPicker.Pick(targets, Projection(), p, mode, cameraBased),
         };
+        // 오브젝트 모드에서 메시를 못 집었으면 이미지 플레인(잠기지 않은 것)의 사각형 안인지 본다(지오메트리가 항상 우선)
+        if (hit == null && mode == SelectMode.Object) hit = PickImagePlane(p);
         AnimPerf.End("pick", t0);
+        return hit;
+    }
+
+    /// <summary>이미지 플레인 피킹: 이 패널에서 보이고 잠기지 않은 플레인의 사각형(네 꼭짓점 투영) 안을 클릭하면 가장 가까운 것.</summary>
+    public PickHit? PickImagePlane(NVec2 p)
+    {
+        var proj = Projection(); PickHit? hit = null; float best = float.MaxValue;
+        foreach (var (id, ipv) in _panel.Scene.ImagePlaneViews)
+        {
+            if (!ipv.ShownHere || ipv.Node.ImagePlane!.Locked) continue;
+            var poly = new List<NVec2>(); bool ok = true;
+            foreach (var c in ipv.CornersWorld()) { var sp = proj.Project(c.ToNumerics(), out _); if (sp == null) { ok = false; break; } poly.Add(sp.Value); }
+            if (!ok || !RayPicker.InsidePolygon(p, poly)) continue;
+            var w = ipv.GlobalPosition.ToNumerics();
+            proj.Project(w, out float depth);
+            if (depth < best) { best = depth; hit = new PickHit(id, -1, depth, w); }
+        }
         return hit;
     }
 
@@ -218,6 +237,12 @@ public sealed class Picker
                 var sp = proj.Project(lv.GlobalPosition.ToNumerics(), out _);
                 if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
             }
+            foreach (var (id, ipv) in _panel.Scene.ImagePlaneViews)
+            {
+                if (!ipv.ShownHere || ipv.Node.ImagePlane!.Locked) continue;
+                var sp = proj.Project(ipv.GlobalPosition.ToNumerics(), out _);
+                if (sp != null && RayPicker.Inside(sp.Value, min, max)) items.Add(new SelItem(id, -1));
+            }
         }
         return items;
     }
@@ -246,6 +271,12 @@ public sealed class Picker
             {
                 if (!lv.IsVisibleInTree()) continue;
                 var sp = proj.Project(lv.GlobalPosition.ToNumerics(), out _);
+                if (sp != null && RayPicker.InsidePolygon(sp.Value, poly)) items.Add(new SelItem(id, -1));
+            }
+            foreach (var (id, ipv) in _panel.Scene.ImagePlaneViews)
+            {
+                if (!ipv.ShownHere || ipv.Node.ImagePlane!.Locked) continue;
+                var sp = proj.Project(ipv.GlobalPosition.ToNumerics(), out _);
                 if (sp != null && RayPicker.InsidePolygon(sp.Value, poly)) items.Add(new SelItem(id, -1));
             }
         }

@@ -28,6 +28,7 @@ public static class NodeDuplicate
             {
                 MeshShape ms => new MeshShape(ms.Mesh.Clone()) { SmoothPreview = ms.SmoothPreview, SmoothPreviewLevels = ms.SmoothPreviewLevels },
                 LightShape ls => ls.Clone(),
+                ImagePlaneShape ip => ip.Clone(),
                 JointShape js => new JointShape { Radius = js.Radius },
                 _ => null,
             },

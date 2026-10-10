@@ -48,6 +48,13 @@ public partial class PropertiesPanel : VBoxContainer
     private Control _lightRangeRow = null!, _lightAngleRow = null!;
     /// <summary>Material 그룹 컨테이너(메시 노드일 때만 보임).</summary>
     private Control _materialGroup = null!;
+    /// <summary>Image Plane 그룹(이미지 플레인 노드일 때만 보임)과 그 칸들.</summary>
+    private Control _imagePlaneGroup = null!;
+    private LineEdit _ipPath = null!;
+    private SpinBox _ipWidth = null!, _ipHeight = null!, _ipOpacity = null!;
+    private OptionButton _ipView = null!;
+    private CheckBox _ipLocked = null!, _ipKeepAspect = null!;
+    private static readonly string[] ImagePlaneViews = { "All Views", "persp", "front", "side", "top", "back", "left", "bottom" };
     /// <summary>할당 머티리얼 드롭다운. 항목 ID = 머티리얼 ID(0 = 내장 lambert1).</summary>
     private OptionButton _materialPick = null!;
     /// <summary>할당된 머티리얼의 속성 편집기(Material Editor와 같은 컴포넌트).</summary>
@@ -84,7 +91,7 @@ public partial class PropertiesPanel : VBoxContainer
         doc.Selection.ModeChanged += Refresh;
         doc.Changed += c =>
         {
-            if (c.Kind is ChangeKind.TransformChanged or ChangeKind.NodeRenamed or ChangeKind.Reset or ChangeKind.NodeRemoved or ChangeKind.LightChanged or ChangeKind.MaterialChanged) Refresh();
+            if (c.Kind is ChangeKind.TransformChanged or ChangeKind.NodeRenamed or ChangeKind.Reset or ChangeKind.NodeRemoved or ChangeKind.LightChanged or ChangeKind.ImagePlaneChanged or ChangeKind.MaterialChanged) Refresh();
             else if (c.Kind is ChangeKind.MeshTopology or ChangeKind.HistoryChanged or ChangeKind.MeshGeometry) RefreshHistory();
         };
         Refresh();
@@ -158,6 +165,40 @@ public partial class PropertiesPanel : VBoxContainer
         // 음수 세기·범위, 1~179° 밖의 원뿔 각도는 받지 않는다(공통 Spin은 범위 밖 입력을 허용하므로 다시 막음)
         _lightGroup = lightBox;
         AddChild(lightBox);
+
+        // Image Plane 그룹(v0.0.71): 이미지 경로(Browse/제거), 크기(비율 유지 옵션), 불투명도, 표시 뷰, 잠금.
+        var ipBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        ipBox.AddChild(Header("Image Plane", s));
+        var pathRow = new HBoxContainer();
+        _ipPath = new LineEdit { Editable = false, SizeFlagsHorizontal = SizeFlags.ExpandFill, PlaceholderText = "(no image)" };
+        pathRow.AddChild(_ipPath);
+        var browse = new Button { Text = "Browse...", FocusMode = FocusModeEnum.None };
+        browse.Pressed += () => Shell.Instance.PickImageFile("Image Plane Image", path => CommitImagePlane(ip => { ip.ImagePath = path; var img = Image.LoadFromFile(path); if (_ipKeepAspect.ButtonPressed && img != null && img.GetWidth() > 0) ip.Height = ip.Width * img.GetHeight() / img.GetWidth(); }));
+        pathRow.AddChild(browse);
+        var clear = new Button { Text = "X", FocusMode = FocusModeEnum.None, TooltipText = "Remove image" };
+        clear.Pressed += () => CommitImagePlane(ip => ip.ImagePath = "");
+        pathRow.AddChild(clear);
+        ipBox.AddChild(LabeledRow("Image", pathRow, s));
+        _ipWidth = Spin(s); _ipWidth.MinValue = 0.001; _ipWidth.AllowLesser = false; _ipWidth.Step = 0.01;
+        _ipWidth.ValueChanged += v => CommitImagePlane(ip => { float aspect = ip.Width > 0 ? ip.Height / ip.Width : 1f; ip.Width = (float)v; if (_ipKeepAspect.ButtonPressed) ip.Height = ip.Width * aspect; });
+        ipBox.AddChild(LabeledRow("Width", _ipWidth, s));
+        _ipHeight = Spin(s); _ipHeight.MinValue = 0.001; _ipHeight.AllowLesser = false; _ipHeight.Step = 0.01;
+        _ipHeight.ValueChanged += v => CommitImagePlane(ip => { float aspect = ip.Height > 0 ? ip.Width / ip.Height : 1f; ip.Height = (float)v; if (_ipKeepAspect.ButtonPressed) ip.Width = ip.Height * aspect; });
+        ipBox.AddChild(LabeledRow("Height", _ipHeight, s));
+        _ipKeepAspect = new CheckBox { ButtonPressed = true, TooltipText = "Changing width or height keeps the image aspect ratio" };
+        ipBox.AddChild(LabeledRow("Keep Aspect", _ipKeepAspect, s));
+        _ipOpacity = Spin(s); _ipOpacity.MinValue = 0; _ipOpacity.MaxValue = 1; _ipOpacity.AllowLesser = false; _ipOpacity.AllowGreater = false; _ipOpacity.Step = 0.01;
+        _ipOpacity.ValueChanged += v => CommitImagePlane(ip => ip.Opacity = (float)v);
+        ipBox.AddChild(LabeledRow("Opacity", _ipOpacity, s));
+        _ipView = new OptionButton { FocusMode = FocusModeEnum.None, SizeFlagsHorizontal = SizeFlags.ExpandFill, TooltipText = "Show in all views or only in one preset view (Maya: Looking Through Camera)" };
+        foreach (var v in ImagePlaneViews) _ipView.AddItem(v);
+        _ipView.ItemSelected += i => CommitImagePlane(ip => ip.OnlyView = i == 0 ? null : ImagePlaneViews[(int)i]);
+        ipBox.AddChild(LabeledRow("Display In", _ipView, s));
+        _ipLocked = new CheckBox { TooltipText = "Locked: not selectable in the viewport (select it in the Outliner)" };
+        _ipLocked.Toggled += on => CommitImagePlane(ip => ip.Locked = on);
+        ipBox.AddChild(LabeledRow("Locked", _ipLocked, s));
+        _imagePlaneGroup = ipBox;
+        AddChild(ipBox);
 
         AddChild(Header("History", s));
         _historyEmpty = new Label { Text = "(no construction history)", Modulate = new Color(1, 1, 1, 0.6f) };
@@ -256,6 +297,31 @@ public partial class PropertiesPanel : VBoxContainer
         _lightAngleRow.Visible = l.Type == Core.Scene.LightType.Spot;
     }
 
+    /// <summary>Image Plane 그룹 갱신(이미지 플레인 노드만).</summary>
+    private void RefreshImagePlane(SceneNode? node)
+    {
+        var ip = node?.ImagePlane;
+        _imagePlaneGroup.Visible = ip != null;
+        if (ip == null) return;
+        _ipPath.Text = ip.ImagePath; _ipPath.TooltipText = ip.ImagePath;
+        _ipWidth.Value = ip.Width; _ipHeight.Value = ip.Height; _ipOpacity.Value = ip.Opacity;
+        int vi = ip.OnlyView == null ? 0 : Array.FindIndex(ImagePlaneViews, v => string.Equals(v, ip.OnlyView, StringComparison.OrdinalIgnoreCase));
+        _ipView.Selected = Math.Max(vi, 0);
+        _ipLocked.SetPressedNoSignal(ip.Locked);
+    }
+
+    /// <summary>이미지 플레인 속성 변경을 명령으로 넣는다(복제본을 바꿔 비교; MMB 드래그는 한 Undo 단계로 합침).</summary>
+    private void CommitImagePlane(Action<Core.Scene.ImagePlaneShape> change)
+    {
+        if (_updating || _node.IsNone) return;
+        var node = _doc.Find(_node); if (node?.ImagePlane == null) return;
+        UndoMergedDrag();
+        var after = node.ImagePlane.Clone(); change(after);
+        var cmd = new SetImagePlaneCommand(_node, after);
+        _doc.Undo.Push(cmd);
+        if (SpinDrag.ActiveDrag != 0) { _mergeDragId = SpinDrag.ActiveDrag; _mergeCmd = cmd; }
+    }
+
     /// <summary>표시 대상 노드: 오브젝트 모드면 활성 오브젝트, 컴포넌트 모드면 활성 오브젝트 또는 컴포넌트가 선택된 노드.</summary>
     private SceneNode? TargetNode()
     {
@@ -286,6 +352,7 @@ public partial class PropertiesPanel : VBoxContainer
             foreach (var f in _fields) { f.Editable = false; f.Value = 0; }
             RefreshMaterial(null);
             RefreshLight(null);
+            RefreshImagePlane(null);
         }
         else
         {
@@ -298,6 +365,7 @@ public partial class PropertiesPanel : VBoxContainer
             foreach (var f in _fields) f.Editable = editable;
             RefreshMaterial(node);
             RefreshLight(node);
+            RefreshImagePlane(node);
         }
         _updating = false;
         RefreshHistory();

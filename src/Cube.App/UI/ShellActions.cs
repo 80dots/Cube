@@ -206,7 +206,7 @@ public partial class Shell
         // 영역별 액션 등록(각 partial 파일). 순서는 메뉴/셸프가 참조하기 전이기만 하면 된다.
         RegisterUvActions();
         RegisterRigActions();
-        RegisterSceneActions();
+        RegisterSceneActions(); RegisterImagePlaneActions(); // 이미지 플레인(ShellImagePlane.cs)
         RegisterAnimActions();
         RegisterLogActions();
         RegisterComponentEditorActions();
@@ -728,7 +728,8 @@ public partial class Shell
 
         Menus.Build(Add("Create"))
             .Submenu("Polygon Primitives", m => m.Item("create.cube", "Cube").Item("create.sphere", "Sphere").Item("create.cylinder", "Cylinder").Item("create.cone", "Cone").Item("create.plane", "Plane").Item("create.torus", "Torus"))
-            .Submenu("Lights", m => m.Item("create.lightDirectional", "Directional Light").Item("create.lightPoint", "Point Light").Item("create.lightSpot", "Spot Light"));
+            .Submenu("Lights", m => m.Item("create.lightDirectional", "Directional Light").Item("create.lightPoint", "Point Light").Item("create.lightSpot", "Spot Light"))
+            .Submenu("Image Plane", m => m.Item("create.imagePlane", "Import Image...").Item("create.imagePlaneEmpty", "Empty Image Plane"));
 
         Menus.Build(Add("Select"))
             .Item("tool.select").Item("tool.lasso").Separator()

@@ -351,6 +351,14 @@ public partial class ViewportPanel : SubViewportContainer
     /// <summary>노드 자신의 셰이프(메시 렌더 점 / 조인트·라이트 위치)만의 월드 AABB. 셰이프가 없으면 null.</summary>
     private Aabb? ShapeAabb(NodeId id)
     {
+        // 이미지 플레인: 네 꼭짓점(이 패널에서 보일 때만)
+        if (Scene.ImagePlaneViews.TryGetValue(id, out var ipv))
+        {
+            if (!ipv.ShownHere) return null;
+            Aabb? pb = null;
+            foreach (var c in ipv.CornersWorld()) pb = pb == null ? new Aabb(c, Vector3.Zero) : pb.Value.Expand(c);
+            return pb;
+        }
         var mv = Scene.GetMeshView(id);
         if (mv != null)
         {

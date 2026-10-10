@@ -256,6 +256,13 @@ public partial class DebugDriver : Node
                     GD.Print($"[Drive] histedit {idx} {p[2]}={p[3]}");
                     break;
                 }
+            case "imgplane":   // imgplane [PATH]: 활성 뷰포트 기준으로 이미지 플레인을 만든다(경로 없으면 빈 플레인)
+                {
+                    var n = UI.Shell.Instance.CreateImagePlane(p.Length > 1 ? p[1] : "");
+                    var ip = n.ImagePlane!;
+                    GD.Print($"[Drive] imgplane {n.Name}: size={ip.Width:F3}x{ip.Height:F3} onlyView={ip.OnlyView ?? "all"} local=T{n.Local.Translation} R{n.Local.RotationDegrees}");
+                    break;
+                }
             case "matnew":   // matnew TYPE: 머티리얼을 만들어 선택 오브젝트에 할당
                 {
                     var doc = CubeApp.Instance.Document;

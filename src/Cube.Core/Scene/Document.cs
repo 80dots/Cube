@@ -32,6 +32,8 @@ public enum ChangeKind
     HistoryChanged,   // 구성 이력 목록 변경(메시는 그대로)
     /// <summary>라이트 변경.</summary>
     LightChanged,     // 라이트 속성 변경
+    /// <summary>이미지 플레인 변경.</summary>
+    ImagePlaneChanged, // 이미지 플레인 속성(이미지·크기·불투명도·표시 뷰·잠금) 변경
     /// <summary>머티리얼 변경.</summary>
     MaterialChanged,  // 머티리얼 라이브러리(Node=None) 또는 노드 할당/속성 변경
     /// <summary>표시 옵션 변경.</summary>

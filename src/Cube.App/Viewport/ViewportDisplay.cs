@@ -66,6 +66,13 @@ public sealed class ViewportDisplay
             bool active = sel != null && sel.ActiveObject == id;
             lv.SetColor(active ? LightView.IconActive : selected ? LightView.IconSelected : LightView.IconNormal);
         }
+        // 이미지 플레인 테두리: 활성 > 선택 > 기본
+        foreach (var (id, ipv) in _panel.Scene.ImagePlaneViews)
+        {
+            bool selected = sel != null && sel.IsObjectSelected(id);
+            bool active = sel != null && sel.ActiveObject == id;
+            ipv.SetColor(active ? ImagePlaneView.BorderActive : selected ? ImagePlaneView.BorderSelected : ImagePlaneView.BorderNormal);
+        }
     }
 
     /// <summary>문서에 연결한다(이전 문서의 선택 이벤트 해제 → 새 문서 선택/모드 변경 시 RefreshAll) 후 즉시 한 번 적용.</summary>

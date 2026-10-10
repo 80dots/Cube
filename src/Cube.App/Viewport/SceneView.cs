@@ -27,6 +27,9 @@ public partial class SceneView : Node3D
     private readonly Dictionary<NodeId, LightView> _lightViews = new();
     /// <summary>라이트 뷰 읽기 전용 목록(피킹·마키용).</summary>
     public IReadOnlyDictionary<NodeId, LightView> LightViews => _lightViews;
+    /// <summary>이미지 플레인 노드 ID → ImagePlaneView.</summary>
+    private readonly Dictionary<NodeId, ImagePlaneView> _imagePlaneViews = new();
+    public IReadOnlyDictionary<NodeId, ImagePlaneView> ImagePlaneViews => _imagePlaneViews;
 
     /// <summary>메시 뷰 읽기 전용 목록.</summary>
     public IReadOnlyDictionary<NodeId, MeshView> MeshViews => _meshViews;
@@ -77,6 +80,9 @@ public partial class SceneView : Node3D
                 break;
             case ChangeKind.LightChanged:
                 if (_lightViews.TryGetValue(c.Node, out var lv)) lv.Refresh();
+                break;
+            case ChangeKind.ImagePlaneChanged:
+                if (_imagePlaneViews.TryGetValue(c.Node, out var ipv)) ipv.Refresh();
                 break;
             // 머티리얼 변경: 노드가 None이면 머티리얼 정의 자체가 바뀐 것이라 모든 메시 스타일을 다시 적용
             case ChangeKind.MaterialChanged:
@@ -158,6 +164,12 @@ public partial class SceneView : Node3D
             _lightViews[n.Id] = lv;
             view = lv;
         }
+        else if (n.IsImagePlane)
+        {
+            var ipv = new ImagePlaneView(n);
+            _imagePlaneViews[n.Id] = ipv;
+            view = ipv;
+        }
         else view = new Node3D { Name = n.Name };
         // 초기 트랜스폼·가시성을 넣고 부모 뷰에 붙인다
         view.Transform = n.Evaluated.ToGodot();
@@ -174,8 +186,8 @@ public partial class SceneView : Node3D
         if (!_views.TryGetValue(id, out var v)) return;
         // 하위 뷰 사전도 정리
         foreach (var (k, child) in _views.ToArray())
-            if (k != id && IsDescendantOf(child, v)) { _views.Remove(k); _meshViews.Remove(k); _jointViews.Remove(k); _lightViews.Remove(k); }
-        _views.Remove(id); _meshViews.Remove(id); _jointViews.Remove(id); _lightViews.Remove(id);
+            if (k != id && IsDescendantOf(child, v)) { _views.Remove(k); _meshViews.Remove(k); _jointViews.Remove(k); _lightViews.Remove(k); _imagePlaneViews.Remove(k); }
+        _views.Remove(id); _meshViews.Remove(id); _jointViews.Remove(id); _lightViews.Remove(id); _imagePlaneViews.Remove(id);
         v.QueueFree();
     }
 
@@ -286,7 +298,7 @@ public partial class SceneView : Node3D
     private void RebuildAll()
     {
         foreach (var v in _views.Values) v.QueueFree();
-        _views.Clear(); _meshViews.Clear(); _jointViews.Clear(); _lightViews.Clear();
+        _views.Clear(); _meshViews.Clear(); _jointViews.Clear(); _lightViews.Clear(); _imagePlaneViews.Clear();
         if (_doc == null) return;
         foreach (var c in _doc.Root.Children) AddView(c);
         RefreshJoints(); UpdateSkins();

@@ -4,6 +4,26 @@ using Cube.Core.Selection;
 
 namespace Cube.Core.Commands;
 
+/// <summary>이미지 플레인 속성 변경(Properties의 Image Plane 그룹). 복사본 전체를 받아 덮어쓴다.</summary>
+public sealed class SetImagePlaneCommand : ICommand
+{
+    private readonly NodeId _node; private readonly ImagePlaneShape _after; private ImagePlaneShape? _before;
+    public string Name => "Set Image Plane";
+    public SetImagePlaneCommand(NodeId node, ImagePlaneShape after) { _node = node; _after = after.Clone(); }
+    public void Do(Document doc)
+    {
+        var ip = doc.Get(_node).Shape as ImagePlaneShape ?? throw new InvalidOperationException("not an image plane");
+        _before ??= ip.Clone();
+        Apply(doc, ip, _after);
+    }
+    public void Undo(Document doc) { if (_before != null && doc.Get(_node).Shape is ImagePlaneShape ip) Apply(doc, ip, _before); }
+    private void Apply(Document doc, ImagePlaneShape target, ImagePlaneShape src)
+    {
+        target.ImagePath = src.ImagePath; target.Width = src.Width; target.Height = src.Height; target.Opacity = src.Opacity; target.OnlyView = src.OnlyView; target.Locked = src.Locked;
+        doc.Notify(new DocChange(ChangeKind.ImagePlaneChanged, _node));
+    }
+}
+
 /// <summary>라이트 속성 변경.</summary>
 /// <remarks>Properties의 Light 그룹이 편집한 결과 전체(Type/Color/Intensity/Range/SpotAngle)를 복사본으로 받아 덮어쓴다.</remarks>
 public sealed class SetLightCommand : ICommand

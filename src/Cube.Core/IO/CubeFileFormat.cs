@@ -101,9 +101,22 @@ public static class CubeFileFormat
         [JsonPropertyName("jointRadius")] public float? JointRadius { get; set; }   // null이 아니면 조인트
         /// <summary>라이트 셰이프(라이트 노드일 때).</summary>
         [JsonPropertyName("light")] public LightDto? Light { get; set; }
+        /// <summary>이미지 플레인 셰이프(이미지 플레인 노드일 때).</summary>
+        [JsonPropertyName("imagePlane")] public ImagePlaneDto? ImagePlane { get; set; }
         [JsonPropertyName("material")] public int Material { get; set; }            // 0 = 기본
         /// <summary>스킨(메시 노드에 바인드된 경우). 모든 노드 인덱스가 정해진 뒤 채운다.</summary>
         [JsonPropertyName("skin")] public SkinDto? Skin { get; set; }
+    }
+
+    /// <summary>이미지 플레인 DTO.</summary>
+    private sealed class ImagePlaneDto
+    {
+        [JsonPropertyName("path")] public string Path { get; set; } = "";
+        [JsonPropertyName("width")] public float Width { get; set; } = 2;
+        [JsonPropertyName("height")] public float Height { get; set; } = 2;
+        [JsonPropertyName("opacity")] public float Opacity { get; set; } = 1;
+        [JsonPropertyName("onlyView")] public string? OnlyView { get; set; }
+        [JsonPropertyName("locked")] public bool Locked { get; set; }
     }
 
     /// <summary>라이트 셰이프 DTO. type은 <see cref="LightType"/> 이름의 소문자.</summary>
@@ -223,6 +236,7 @@ public static class CubeFileFormat
                 Mesh = n.Mesh != null ? ToDto(n.Mesh, out _) : null,
                 JointRadius = n.Joint?.Radius,
                 Light = n.Light is { } lt ? new LightDto { Type = lt.Type.ToString().ToLowerInvariant(), Color = V(lt.Color), Intensity = lt.Intensity, Range = lt.Range, SpotAngle = lt.SpotAngle } : null,
+                ImagePlane = n.ImagePlane is { } ipl ? new ImagePlaneDto { Path = ipl.ImagePath, Width = ipl.Width, Height = ipl.Height, Opacity = ipl.Opacity, OnlyView = ipl.OnlyView, Locked = ipl.Locked } : null,
                 Material = n.MaterialId,
             };
             index[n] = dto.Nodes.Count;
@@ -297,7 +311,8 @@ public static class CubeFileFormat
                 Local = new Transform3(V3(nd.Translation), V3(nd.Rotation), V3(nd.Scale, Vector3.One), V3(nd.Pivot)),
                 Visible = nd.Visible,
                 Shape = nd.Mesh != null ? new MeshShape(FromDto(nd.Mesh)) : nd.JointRadius is { } jr ? new JointShape { Radius = jr }
-                    : nd.Light is { } ld ? new LightShape { Type = Enum.TryParse<LightType>(ld.Type, true, out var lt) ? lt : LightType.Point, Color = V3(ld.Color, Vector3.One), Intensity = ld.Intensity, Range = ld.Range, SpotAngle = ld.SpotAngle } : null,
+                    : nd.Light is { } ld ? new LightShape { Type = Enum.TryParse<LightType>(ld.Type, true, out var lt) ? lt : LightType.Point, Color = V3(ld.Color, Vector3.One), Intensity = ld.Intensity, Range = ld.Range, SpotAngle = ld.SpotAngle }
+                    : nd.ImagePlane is { } ipd ? new ImagePlaneShape { ImagePath = ipd.Path, Width = ipd.Width, Height = ipd.Height, Opacity = ipd.Opacity, OnlyView = ipd.OnlyView, Locked = ipd.Locked } : null,
                 MaterialId = nd.Material,
             };
             nodes.Add(n);
