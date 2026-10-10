@@ -44,6 +44,22 @@ public enum BevelProfilePreset { Default, SupportLoops, CorniceMolding, CrownMol
 /// <summary>Weighted Normal용 면 세기(Blender Face Strength). Cube에는 Weighted Normal 모디파이어가 없으므로 그 결과(가중 노멀)를 코너 노멀로 바로 고정한다.</summary>
 public enum BevelFaceStrength { None, New, Affected, All }
 
+/// <summary>Clamp Overlap 방식: Global = 모든 이동을 같은 비율로(Blender), PerEdge = 베벨 엣지마다 따로(Smart, 기본).</summary>
+public enum BevelClampMode { Global, PerEdge }
+
+/// <summary>Smart Bevel 실행 결과 요약(전처리에서 제외·수정한 수).</summary>
+public sealed class BevelReport
+{
+    /// <summary>비매니폴드 정점 때문에 제외한 엣지/정점 수.</summary>
+    public int SkippedNonManifold;
+    /// <summary>전처리로 삼각화한 면 수.</summary>
+    public int FixedFaces;
+    /// <summary>엣지별 Clamp로 폭이 줄어든 베벨 엣지 수.</summary>
+    public int ClampedEdges;
+    /// <summary>줄어든 엣지 중 가장 작은 비율(1 = 안 줄어듦).</summary>
+    public float MinClamp = 1f;
+}
+
 /// <summary>Blender Bevel(Ctrl+B / Shift+Ctrl+B)의 모든 옵션.</summary>
 /// <remarks>
 /// 불변 record라 옵션 창/이력 파라미터에서 with 식으로 복사해 쓴다. 기본값은 Blender 기본값과 같다.
@@ -80,6 +96,19 @@ public sealed record BevelOptions
     public float Spread { get; init; } = 0.1f;
     /// <summary>베벨 엣지 3개 이상이 모이는 정점 캡의 채움 방식(세그먼트 2+에서만 의미).</summary>
     public BevelIntersection Intersection { get; init; } = BevelIntersection.GridFill;
+    /// <summary>Smart Bevel(v0.0.62) 옵션. Clamp 방식(전역/엣지별), 각도 기반 가변 폭, 전처리.</summary>
+    /// <remarks>
+    /// <see cref="ClampMode"/> PerEdge = 엣지마다 이웃 엣지 길이로 허용 폭을 따로 제한(Safe Bevel 방식; Global은 Blender처럼 모든 엣지를 같은 비율로 줄여 하나만 짧아도 전체가 줄어듦).
+    /// <see cref="AngleWidth"/> = 폭을 이면각의 함수로: 배율 = lerp(1, sin(θ/2)/sin(45°), AngleWidth) — 90°에서 1, 완만한 엣지는 얇게, 예각은 넓게(코너에서 띠 폭이 이어짐).
+    /// <see cref="SkipNonManifold"/> = 나비넥타이(꼬집힌)·고립 정점에 닿은 베벨 엣지를 제외. <see cref="FixBadFaces"/> = 베벨에 닿은 비평면·오목 n각형을 먼저 삼각화.
+    /// </remarks>
+    public BevelClampMode ClampMode { get; init; } = BevelClampMode.PerEdge;
+    /// <summary>각도 기반 가변 폭 가중(0 = 일정 폭, 1 = 완전 각도 비례).</summary>
+    public float AngleWidth { get; init; }
+    /// <summary>비매니폴드(나비넥타이·고립) 정점에 닿은 엣지/정점을 베벨에서 제외한다.</summary>
+    public bool SkipNonManifold { get; init; } = true;
+    /// <summary>베벨에 닿은 비평면·오목 n각형 면을 먼저 삼각화한다(전처리).</summary>
+    public bool FixBadFaces { get; init; }
     /// <summary>Weighted Normal 방식의 코너 노멀 고정 범위(<see cref="ApplyFaceStrength"/>).</summary>
     public BevelFaceStrength FaceStrength { get; init; } = BevelFaceStrength.None;
     /// <summary>프로파일 종류(초타원/Custom 프리셋).</summary>
@@ -136,11 +165,16 @@ public static partial class MeshOps
     }
 
     /// <summary>Bevel 실행. Affect = Edges면 ids는 엣지, Vertices면 정점 ID. 반환값은 새로 생긴 면 ID들.</summary>
-    public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o)
+    public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o) => Bevel(m, ids, o, out _);
+
+    /// <summary>Bevel + 결과 요약(<see cref="BevelReport"/>: 전처리로 제외·수정한 수, 엣지별 Clamp 통계).</summary>
+    public static List<int> Bevel(PolyMesh m, IEnumerable<int> ids, BevelOptions o, out BevelReport report)
     {
+        report = new BevelReport();
         // 폭 0(또는 음수)이면 Blender처럼 아무것도 하지 않는다(전에는 넓이 0인 면이 생겼다, v0.0.57)
         if (!(o.Width > 0f)) return new List<int>();
-        var info = new BevelInfo();
+        var info = new BevelInfo { Report = report };
+        ids = PreFix(m, ids, o, report);
         // 1) Affect에 따라 엣지/정점 베벨 핵심 처리
         var result = o.Affect == BevelAffect.Vertices ? BevelVerticesCore(m, ids, o, info) : BevelEdgesCore(m, ids, o, info);
         if (result.Count == 0) { RemoveIsolatedVertices(m); return result; }
@@ -164,10 +198,66 @@ public static partial class MeshOps
     /// <summary>Bevel 중간 정보(노멀 처리에 씀).</summary>
     private sealed class BevelInfo
     {
+        /// <summary>실행 통계(엣지별 Clamp 등)를 적는 보고서.</summary>
+        public BevelReport Report = new();
         /// <summary>새로 생긴 띠(베벨 쿼드) 면 ID들. 캡 면과 구별해 노멀 처리/스무딩에 쓴다.</summary>
         public readonly HashSet<int> Strips = new();
         /// <summary>띠 면 → (면 A 법선, 면 B 법선, 정점 → 프로파일 위치 0..1).</summary>
         public readonly Dictionary<int, (Vector3 nA, Vector3 nB, Dictionary<int, float> t)> StripProfiles = new();
+    }
+
+    /// <summary>
+    /// Smart Bevel 전처리(v0.0.62): ① <see cref="BevelOptions.SkipNonManifold"/>면 나비넥타이·고립 정점에 닿은 대상을 제외
+    /// ② <see cref="BevelOptions.FixBadFaces"/>면 대상 정점에 닿은 면 중 비평면(최적 평면에서 벗어난 거리 > 면 크기의 2%) 또는 오목 n각형을 삼각화한다.
+    /// 삼각화는 면을 다시 만들어 엣지 ID가 바뀔 수 있으므로 대상 엣지는 정점 쌍으로 기억했다가 다시 찾는다.
+    /// </summary>
+    private static IEnumerable<int> PreFix(PolyMesh m, IEnumerable<int> ids, BevelOptions o, BevelReport report)
+    {
+        var list = ids.ToList();
+        bool edges = o.Affect == BevelAffect.Edges;
+        if (o.SkipNonManifold)
+        {
+            bool Bad(int v) => v < 0 || v >= m.VertexCount || !m.Verts[v].Alive || m.VertexOutgoing(v).Length == 0 || Selection.NonManifold.IsBowtie(m, v, m.VertexOutgoing(v));
+            int before = list.Count;
+            if (edges) list.RemoveAll(e => e < 0 || e >= m.EdgeCount || !m.Edges[e].Alive || Bad(m.EdgeVertices(e).Item1) || Bad(m.EdgeVertices(e).Item2));
+            else list.RemoveAll(Bad);
+            report.SkippedNonManifold = before - list.Count;
+        }
+        if (o.FixBadFaces && list.Count > 0)
+        {
+            // 대상 정점에 닿은 면 중 나쁜 면
+            var verts = new HashSet<int>();
+            if (edges) foreach (int e in list) { var (a, b) = m.EdgeVertices(e); verts.Add(a); verts.Add(b); } else verts.UnionWith(list);
+            var faces = new HashSet<int>(); var tmp = new List<int>();
+            foreach (int v in verts) { m.GetVertexFaces(v, tmp); foreach (int f in tmp) if (m.FaceDegree(f) > 3 && IsBadFace(m, f)) faces.Add(f); }
+            if (faces.Count > 0)
+            {
+                var pairs = edges ? list.Select(e => m.EdgeVertices(e)).ToList() : null;
+                Triangulate(m, faces);
+                report.FixedFaces = faces.Count;
+                if (pairs != null) list = pairs.Select(pr => m.FindEdge(pr.Item1, pr.Item2)).Where(e => e >= 0).ToList();
+            }
+        }
+        return list;
+    }
+
+    /// <summary>면이 비평면(최적 평면에서 벗어난 거리 > 크기의 2%)이거나 오목(코너 외적이 법선과 반대)인지.</summary>
+    public static bool IsBadFace(PolyMesh m, int f)
+    {
+        var n = MeshNormals.FaceNormalUnnormalized(m, f);
+        if (n.LengthSquared() < 1e-20f) return false;
+        n = Vector3.Normalize(n);
+        var vs = new List<int>(); m.GetFaceVertices(f, vs);
+        var c = m.FaceCentroid(f);
+        float size = 0, dev = 0;
+        foreach (int v in vs) { var p = m.Verts[v].Position; size = MathF.Max(size, Vector3.Distance(p, c)); dev = MathF.Max(dev, MathF.Abs(Vector3.Dot(p - c, n))); }
+        if (dev > size * 0.02f) return true;
+        for (int i = 0; i < vs.Count; i++)
+        {
+            var a = m.Verts[vs[i]].Position; var b = m.Verts[vs[(i + 1) % vs.Count]].Position; var d = m.Verts[vs[(i + 2) % vs.Count]].Position;
+            if (Vector3.Dot(Vector3.Cross(b - a, d - b), n) < -1e-9f * size * size) return true;
+        }
+        return false;
     }
 
     // ================================================================ 프로파일
@@ -399,6 +489,17 @@ public static partial class MeshOps
         int OtherEnd(int e, int v) { var (a, b) = m.EdgeVertices(e); return a == v ? b : a; }
         float EdgeLen(int e) { var (a, b) = m.EdgeVertices(e); return Vector3.Distance(m.Verts[a].Position, m.Verts[b].Position); }
 
+        // 각도 기반 가변 폭(Smart, C): 베벨 엣지마다 폭 배율 = lerp(1, sin(θ/2)/sin(45°), AngleWidth), θ = 법선 사이 각(이면각). 90°에서 1.
+        float angleW = System.Math.Clamp(o.AngleWidth, 0f, 1f);
+        float WidthScale(int e)
+        {
+            if (angleW <= 0f || !facesOfSel.TryGetValue(e, out var ff)) return 1f;
+            float between = MathF.Acos(System.Math.Clamp(Vector3.Dot(faceNormal[ff.f0], faceNormal[ff.f1]), -1f, 1f));
+            float g = MathF.Sin(between / 2f) / MathF.Sin(MathF.PI / 4f);
+            return 1f + (System.Math.Clamp(g, 0.05f, 2f) - 1f) * angleW;
+        }
+        // 베벨 엣지 e의 폭(각도 배율 적용; Percent는 엣지 길이 비율)
+        float WidthOf(int e) => (o.WidthType == BevelWidthType.Percent ? EdgeLen(e) * width / 100f : width) * WidthScale(e);
         // 엣지별 면 위 수직 오프셋(Offset/Width/Depth를 오프셋으로 환산; 두 면 사이 내각 α 사용)
         float OffsetOf(int e)
         {
@@ -406,11 +507,12 @@ public static partial class MeshOps
             var n0 = faceNormal[ff.f0]; var n1 = faceNormal[ff.f1];
             float between = MathF.Acos(System.Math.Clamp(Vector3.Dot(n0, n1), -1f, 1f)); // 법선 사이 각
             float alpha = MathF.PI - between;                                               // 면 사이 내각
+            float w = width * WidthScale(e);
             return o.WidthType switch
             {
-                BevelWidthType.Width => width / MathF.Max(2f * MathF.Sin(alpha / 2f), 0.05f),
-                BevelWidthType.Depth => width / MathF.Max(MathF.Cos(alpha / 2f), 0.05f),
-                _ => width,
+                BevelWidthType.Width => w / MathF.Max(2f * MathF.Sin(alpha / 2f), 0.05f),
+                BevelWidthType.Depth => w / MathF.Max(MathF.Cos(alpha / 2f), 0.05f),
+                _ => w,
             };
         }
         // Absolute/Percent는 "엣지를 따라 잰 거리"라서 면 위 수직 오프셋 계산을 쓰지 않는다
@@ -434,9 +536,9 @@ public static partial class MeshOps
         float RawSlide(int v, int eu, int f)
         {
             float len = EdgeLen(eu);
-            if (o.WidthType == BevelWidthType.Absolute) return width;
-            if (o.WidthType == BevelWidthType.Percent) return len * width / 100f;
             int es = RelatedSel(v, eu, f);
+            if (o.WidthType == BevelWidthType.Absolute) return width * WidthScale(es);
+            if (o.WidthType == BevelWidthType.Percent) return len * width / 100f * WidthScale(es);
             float sin = Vector3.Cross(Dir(v, OtherEnd(eu, v)), Dir(v, OtherEnd(es, v))).Length();
             // 베벨 엣지와 거의 일직선으로 이어지는 엣지(차수 2 끝점 등): 오프셋 선이 그 엣지와 만나지 않으므로 물러나지 않는다(띠가 끝점에서 뾰족하게 끝남).
             // 예전에는 sin을 0.05로 잘라 이어진 엣지를 거의 끝까지(98%) 미끄러졌다.
@@ -444,9 +546,11 @@ public static partial class MeshOps
             return OffsetOf(es) / sin;
         }
 
-        // Clamp Overlap: 모든 이동 길이를 같은 비율로 줄여 이웃 엣지 끝을 넘지 않게(양끝이 모두 베벨이면 절반까지)
-        // clamp = 전역 축소 비율(1 = 그대로). 각 정점의 모든 엣지에 대해 이동 길이 L이 한계(엣지 길이의 98%, 반대쪽도 베벨이면 49%)를 넘으면 줄인다.
+        // Clamp Overlap: 이동 길이가 이웃 엣지 끝을 넘지 않게(양끝이 모두 베벨이면 절반까지).
+        // Global(Blender) = 모든 이동을 같은 비율 clamp로. PerEdge(Smart, v0.0.62) = 이동을 일으킨 베벨 엣지(RelatedSel)마다 비율 clampOf[e]를 따로 둔다 —
+        // 짧은 엣지·예각 하나가 전체 베벨을 줄이지 않고 그 엣지만 줄어든다(Safe Bevel 방식).
         float clamp = 1f;
+        var clampOf = selected.ToDictionary(e => e, _ => 1f);
         if (o.ClampOverlap && !o.LegacyPerEdgeClamp)
         {
             var ev = new List<int>();
@@ -457,22 +561,29 @@ public static partial class MeshOps
                 {
                     float len = EdgeLen(e); if (len < 1e-9f) continue;
                     bool otherBev = V.Contains(OtherEnd(e, v));
-                    float L = selected.Contains(e) ? (slideTypes ? (o.WidthType == BevelWidthType.Percent ? len * width / 100f : width) : OffsetOf(e)) : RawSlide(v, e, -1);
-                    if (selected.Contains(e) && selAt[v].Count < 2) continue; // 베벨 엣지 자체를 따라 물러나지 않는 끝
+                    bool isSel = selected.Contains(e);
+                    float L = isSel ? (slideTypes ? WidthOf(e) : OffsetOf(e)) : RawSlide(v, e, -1);
+                    if (isSel && selAt[v].Count < 2) continue; // 베벨 엣지 자체를 따라 물러나지 않는 끝
                     float limit = len * (otherBev ? 0.49f : 0.98f);
-                    if (L > limit) clamp = MathF.Min(clamp, limit / L);
+                    if (L <= limit) continue;
+                    float ratio = limit / L;
+                    clamp = MathF.Min(clamp, ratio);
+                    int key = isSel ? e : RelatedSel(v, e, -1);
+                    clampOf[key] = MathF.Min(clampOf[key], ratio);
                 }
             }
+            if (o.ClampMode == BevelClampMode.Global) foreach (int e in selected) clampOf[e] = clamp;
+            foreach (var kv in clampOf) if (kv.Value < 0.9999f) { info.Report.ClampedEdges++; info.Report.MinClamp = MathF.Min(info.Report.MinClamp, kv.Value); }
         }
         // 최종 이동 길이(클램프 적용, Legacy면 엣지별 45% 제한). 0이 되지 않도록 아주 작은 최소값.
         float Slide(int v, int eu, int f)
         {
-            float L = RawSlide(v, eu, f) * clamp;
+            float L = RawSlide(v, eu, f) * clampOf[RelatedSel(v, eu, f)];
             if (o.LegacyPerEdgeClamp) L = MathF.Min(L, EdgeLen(eu) * 0.45f);
             return MathF.Max(L, 1e-6f);
         }
         // 클램프가 적용된 면 위 오프셋 거리
-        float Off(int e) => OffsetOf(e) * clamp;
+        float Off(int e) => OffsetOf(e) * clampOf[e];
 
         // pOnEdge: (정점, 엣지) → 그 엣지 위 새 점(면 둘이 공유). qOnFace: (정점, 면) → 면 안쪽 교점.
         // uvOf: 새 정점의 대표 UV(캡 면 UV용). side: (면, 베벨 엣지, 정점) → 띠 가장자리 점과 UV.

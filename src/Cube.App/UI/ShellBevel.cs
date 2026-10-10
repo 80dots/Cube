@@ -45,6 +45,10 @@ public partial class Shell
         OptionField.I("material", "Material Index", -1, 99, "-1 = new faces use the materials of their neighbors"),
         OptionField.B("harden", "Harden Normals", "Lock the new faces' normals so they look smooth without affecting the rest of the mesh"),
         OptionField.B("clamp", "Clamp Overlap", "Prevent the bevel from overshooting past neighboring geometry"),
+        OptionField.E("clampMode", "Clamp Mode", "Per Edge (Smart)", "Global (Blender)"),
+        OptionField.F("angleWidth", "Angle-Based Width", 0, 1, 0.05, "0 = constant width; 1 = width scales with the edge angle (90° = 1×, shallow edges narrower, sharp edges wider) so strips meet cleanly at corners"),
+        OptionField.B("skipNonManifold", "Skip Non-Manifold", "Leave out edges/vertices touching bowtie (pinched) or isolated vertices instead of failing"),
+        OptionField.B("fixBadFaces", "Fix Non-Planar / Concave Faces", "Triangulate non-planar or concave n-gons next to the bevel before beveling"),
         OptionField.B("loopSlide", "Loop Slide", "Slide new vertices along the existing edges (off = new edges perpendicular to the beveled edge)"),
         OptionField.B("markSeams", "Mark Seams", "Continue UV seams through the bevel where two seam edges meet"),
         OptionField.B("markSharp", "Mark Sharp", "Continue hard (sharp) edges through the bevel where two hard edges meet"),
@@ -77,6 +81,10 @@ public partial class Shell
             MaterialIndex = I("material", d.MaterialIndex),
             HardenNormals = B("harden", d.HardenNormals),
             ClampOverlap = B("clamp", d.ClampOverlap),
+            ClampMode = I("clampMode", 0) == 1 ? BevelClampMode.Global : BevelClampMode.PerEdge,
+            AngleWidth = F("angleWidth", d.AngleWidth),
+            SkipNonManifold = B("skipNonManifold", d.SkipNonManifold),
+            FixBadFaces = B("fixBadFaces", d.FixBadFaces),
             LoopSlide = B("loopSlide", d.LoopSlide),
             MarkSeams = B("markSeams", d.MarkSeams),
             MarkSharp = B("markSharp", d.MarkSharp),
@@ -101,6 +109,8 @@ public partial class Shell
         v.Set("affect", (int)o.Affect); v.Set("widthType", (int)o.WidthType); v.Set("distance", o.Width); v.Set("segments", o.Segments);
         v.Set("shape", o.Shape); v.Set("material", o.MaterialIndex);
         v.Set("harden", o.HardenNormals ? 1 : 0); v.Set("clamp", o.ClampOverlap ? 1 : 0); v.Set("loopSlide", o.LoopSlide ? 1 : 0);
+        v.Set("clampMode", o.ClampMode == BevelClampMode.Global ? 1 : 0); v.Set("angleWidth", o.AngleWidth);
+        v.Set("skipNonManifold", o.SkipNonManifold ? 1 : 0); v.Set("fixBadFaces", o.FixBadFaces ? 1 : 0);
         v.Set("markSeams", o.MarkSeams ? 1 : 0); v.Set("markSharp", o.MarkSharp ? 1 : 0);
         v.Set("miterOuter", (int)o.MiterOuter); v.Set("miterInner", o.MiterInner == BevelMiter.Arc ? 1 : 0); v.Set("spread", o.Spread);
         v.Set("intersection", (int)o.Intersection); v.Set("faceStrength", (int)o.FaceStrength);
@@ -123,6 +133,9 @@ public partial class Shell
         HistoryParam.I("Width Type (0 Offset 1 Width 2 Depth 3 % 4 Abs)", (int)o.WidthType, 0, 4),
         HistoryParam.I("Material Index", o.MaterialIndex, -1, 99),
         HB("Harden Normals", o.HardenNormals), HB("Clamp Overlap", o.ClampOverlap), HB("Loop Slide", o.LoopSlide),
+        HistoryParam.I("Clamp Mode (0 Per Edge 1 Global)", o.ClampMode == BevelClampMode.Global ? 1 : 0, 0, 1),
+        HistoryParam.F("Angle-Based Width", o.AngleWidth, 0f, 1f, 0.05f),
+        HB("Skip Non-Manifold", o.SkipNonManifold), HB("Fix Bad Faces", o.FixBadFaces),
         HB("Mark Seams", o.MarkSeams), HB("Mark Sharp", o.MarkSharp),
         HistoryParam.I("Miter Outer (0 Sharp 1 Patch 2 Arc)", (int)o.MiterOuter, 0, 2),
         HistoryParam.I("Miter Inner (0 Sharp 1 Arc)", o.MiterInner == BevelMiter.Arc ? 1 : 0, 0, 1),
@@ -150,6 +163,10 @@ public partial class Shell
             Width = p.Float("Width"), Segments = Math.Max(1, p.Int("Segments")), Shape = p.Float("Profile Shape"),
             WidthType = (BevelWidthType)Math.Clamp(I("Width Type"), 0, 4), MaterialIndex = p.Int("Material Index"),
             HardenNormals = B("Harden Normals"), ClampOverlap = B("Clamp Overlap"), LoopSlide = B("Loop Slide"),
+            ClampMode = p.Items.Any(x => x.Name.StartsWith("Clamp Mode", StringComparison.Ordinal)) && I("Clamp Mode") == 1 ? BevelClampMode.Global : BevelClampMode.PerEdge,
+            AngleWidth = p.Items.Any(x => x.Name == "Angle-Based Width") ? p.Float("Angle-Based Width") : 0f,
+            SkipNonManifold = !p.Items.Any(x => x.Name == "Skip Non-Manifold") || B("Skip Non-Manifold"),
+            FixBadFaces = p.Items.Any(x => x.Name == "Fix Bad Faces") && B("Fix Bad Faces"),
             MarkSeams = B("Mark Seams"), MarkSharp = B("Mark Sharp"),
             MiterOuter = (BevelMiter)Math.Clamp(I("Miter Outer"), 0, 2), MiterInner = I("Miter Inner") == 1 ? BevelMiter.Arc : BevelMiter.Sharp,
             Spread = p.Float("Spread"),
@@ -207,8 +224,12 @@ public partial class Shell
     /// 명령은 이력 파라미터(BevelHistory)를 갖고 Replay 때 BevelFromHistory로 다시 계산하므로
     /// Properties History와 Action Popup에서 값을 바꿀 수 있다. 결과 면(새 띠·캡)을 면 모드로 선택한다.
     /// </summary>
+    /// <summary>마지막 Bevel 명령의 Smart Bevel 보고서(헬프 라인 요약용).</summary>
+    private BevelReport? _lastBevelReport;
+
     private void BevelSelection()
     {
+        _lastBevelReport = null;
         var o = BevelOptionsFrom(Options("mesh.bevel"));
         var targets = CollectBevelTargets(o.Affect);
         if (targets.Count == 0) { HelpLine.Text = "Bevel: select edges, faces or vertices first."; return; }
@@ -218,9 +239,11 @@ public partial class Shell
                 // 람다가 루프 변수를 공유하지 않도록 지역 변수로 캡처
                 var captured = ids; var affect = o.Affect;
                 Document.Undo.Push(new MeshOpCommand("Bevel", id, BevelHistory(o),
-                    (m, p) => { var faces = MeshOps.Bevel(m, captured, BevelFromHistory(p, affect)); return (faces.Count > 0, SelectMode.Face, faces); }));
+                    (m, p) => { var faces = MeshOps.Bevel(m, captured, BevelFromHistory(p, affect), out var rep); _lastBevelReport = rep; return (faces.Count > 0, SelectMode.Face, faces); }));
             }
-        HelpLine.Text = $"Bevel ({(o.Affect == BevelAffect.Vertices ? "vertices" : "edges")}): {BevelWidthTypes[(int)o.WidthType]} {o.Width:0.###}, {o.Segments} segment(s), shape {o.Shape:0.##}. Adjust in the Action Popup.";
+        var r = _lastBevelReport;
+        string smart = r == null ? "" : (r.SkippedNonManifold > 0 ? $" Skipped {r.SkippedNonManifold} non-manifold." : "") + (r.FixedFaces > 0 ? $" Fixed {r.FixedFaces} face(s)." : "") + (r.ClampedEdges > 0 ? $" Clamped {r.ClampedEdges} edge(s) (min {r.MinClamp:0.##}×)." : "");
+        HelpLine.Text = $"Bevel ({(o.Affect == BevelAffect.Vertices ? "vertices" : "edges")}): {BevelWidthTypes[(int)o.WidthType]} {o.Width:0.###}, {o.Segments} segment(s), shape {o.Shape:0.##}.{smart} Adjust in the Action Popup.";
     }
 
     /// <summary>
